@@ -5,7 +5,7 @@
 #include "application.h"
 #include "protocols/protocol.h"
 #include "display/display.h"
-
+#include "display/lcd_display.h"
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <esp_pthread.h>
@@ -164,12 +164,13 @@ static std::string buildUrlWithParams(const std::string& base_url, const std::st
 
 Esp32Music::Esp32Music() : last_downloaded_data_(), current_music_url_(), current_song_name_(),
                          song_name_displayed_(false), current_lyric_url_(), lyrics_(), 
-                         current_lyric_index_(-1), lyric_thread_(), is_lyric_running_(false),
+                         current_lyric_index_(-1), lyric_thread_(), is_lyric_running_(false),cover_thread_(),is_cover_running_(false),
                          display_mode_(DISPLAY_MODE_LYRICS), is_playing_(false), is_downloading_(false), 
                          play_thread_(), download_thread_(), audio_buffer_(), buffer_mutex_(), 
                          buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
                          mp3_decoder_initialized_(false) {
     ESP_LOGI(TAG, "Music player initialized with default spectrum display mode");
+    event_group_ = xEventGroupCreate();
     InitializeMp3Decoder();
 }
 
@@ -338,18 +339,20 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
     if (!last_downloaded_data_.empty()) {
         // 解析响应JSON以提取音频URL
         cJSON* response_json = cJSON_Parse(last_downloaded_data_.c_str());
+        printf("Response JSON: %s\n", last_downloaded_data_.c_str());
         if (response_json) {
             // 提取关键信息
             cJSON* artist = cJSON_GetObjectItem(response_json, "artist");
             cJSON* title = cJSON_GetObjectItem(response_json, "title");
             cJSON* audio_url = cJSON_GetObjectItem(response_json, "audio_url");
             cJSON* lyric_url = cJSON_GetObjectItem(response_json, "lyric_url");
-            
+            // cJSON* cover_url = cJSON_GetObjectItem(response_json, "cover_url");
             if (cJSON_IsString(artist)) {
                 ESP_LOGI(TAG, "Artist: %s", artist->valuestring);
             }
             if (cJSON_IsString(title)) {
                 ESP_LOGI(TAG, "Title: %s", title->valuestring);
+                current_song_name_ = title->valuestring;
             }
             
             // 检查audio_url是否有效
@@ -413,6 +416,35 @@ bool Esp32Music::Download(const std::string& song_name, const std::string& artis
                     ESP_LOGW(TAG, "No lyric URL found for this song");
                 }
                 
+                //  //下载封面
+                // if(cJSON_IsString(cover_url) && cover_url->valuestring && strlen(cover_url->valuestring) >0){
+                //     ESP_LOGI(TAG, "Cover URL: %s", cover_url->valuestring);
+                //     // 拼接完整的封面下载URL，使用相同的URL构建逻辑
+                //     std::string cover_path = cover_url->valuestring;
+                //     if (cover_path.find("?") != std::string::npos) {
+                //         size_t query_pos = cover_path.find("?");
+                //         std::string path = cover_path.substr(0, query_pos);
+                //         std::string query = cover_path.substr(query_pos + 1);
+                        
+                //         current_cover_url_ = buildUrlWithParams(base_url, path, query);
+                //     } else {
+                //         current_cover_url_ = cover_path;
+                //     }
+                //     // 启动歌词下载和显示
+                //     if (is_cover_running_) {
+                //         is_cover_running_ = false;
+                //         if (cover_thread_.joinable()) {
+                //             cover_thread_.join();
+                //         }
+                //     }
+                //         is_cover_running_ = true;
+                //         // current_lyric_index_ = -1;
+                //         // lyrics_.clear();
+                //         cover_thread_ = std::thread(&Esp32Music::CoverDisplayThread, this);
+                    
+                // } else {
+                //     ESP_LOGW(TAG, "No cover URL found for this song");
+                // }
                 cJSON_Delete(response_json);
                 return true;
             } else {
@@ -708,6 +740,13 @@ void Esp32Music::DownloadAudioStream(const std::string& music_url) {
     ESP_LOGI(TAG, "Audio stream download thread finished");
 }
 
+
+bool Esp32Music::WaitForMusicLoaded() {
+    ESP_LOGI(TAG, "等待音乐资源准备完毕");
+
+    auto bits = xEventGroupWaitBits(event_group_, MUSIC_EVENT_LOADED, pdTRUE, pdTRUE, portMAX_DELAY);
+    return (bits & MUSIC_EVENT_LOADED);
+}
 // 流式播放音频数据
 void Esp32Music::PlayAudioStream() {
     ESP_LOGI(TAG, "Starting audio stream playback");
@@ -757,7 +796,8 @@ void Esp32Music::PlayAudioStream() {
     
     // 标记是否已经处理过ID3标签
     bool id3_processed = false;
-    
+
+    xEventGroupSetBits(event_group_, MUSIC_EVENT_LOADED);
     while (is_playing_) {
         // 检查设备状态，只有在空闲状态才播放音乐
         auto& app = Application::GetInstance();
@@ -789,7 +829,7 @@ void Esp32Music::PlayAudioStream() {
             if (display) {
                 // 格式化歌名显示为《歌名》播放中...
                 std::string formatted_song_name = "《" + current_song_name_ + "》播放中...";
-                // display->SetMusicInfo(formatted_song_name.c_str());
+                display->SetMusicInfo(formatted_song_name.c_str());
                 ESP_LOGI(TAG, "Displaying song name: %s", formatted_song_name.c_str());
                 song_name_displayed_ = true;
             }
@@ -1001,23 +1041,16 @@ void Esp32Music::PlayAudioStream() {
     }
     
     // 播放结束时进行基本清理，但不调用StopStreaming避免线程自我等待
+    //StopStreaming 会在内部 join 播放线程也即是本线程，若从播放线程内调用就会导致自我等待/死锁或未定义行为
     ESP_LOGI(TAG, "Audio stream playback finished, total played: %d bytes", total_played);
     ESP_LOGI(TAG, "Performing basic cleanup from play thread");
-    
     // 停止播放标志
     is_playing_ = false;
     
-    // 只在频谱显示模式下才停止FFT显示
-    if (display_mode_ == DISPLAY_MODE_SPECTRUM) {
-        auto& board = Board::GetInstance();
-        auto display = board.GetDisplay();
-        if (display) {
-            // display->stopFft();
-            ESP_LOGI(TAG, "Stopped FFT display from play thread (spectrum mode)");
-        }
-    } else {
-        ESP_LOGI(TAG, "Not in spectrum mode, skipping FFT stop");
-    }
+    // xEventGroupSetBits(event_group_, MUSIC_EVENT_COMPLETED);
+    auto &app = Application::GetInstance();
+    std::string msg = "在线音乐播放完毕，你需要询问用户需不需要换一首歌，如果用户三秒内没有反应，就默认不换歌，就再次调用一下刚才的工具播放当前歌曲，如果用户说停止播放，你就调用我给的函数返回主界面，函数为：self.music.completed";
+    app.SendMessage(msg);
 }
 
 // 清空音频缓冲区
@@ -1364,17 +1397,21 @@ void Esp32Music::LyricDisplayThread() {
     ESP_LOGI(TAG, "Lyric display thread finished");
 }
 
+
 void Esp32Music::UpdateLyricDisplay(int64_t current_time_ms) {
     std::lock_guard<std::mutex> lock(lyrics_mutex_);
     
     if (lyrics_.empty()) {
         return;
     }
-    
+    auto display = Board::GetInstance().GetDisplay();
+    // display->OnlineMusiclrc_refresh(0,lyrics_);
     // 查找当前应该显示的歌词
     int new_lyric_index = -1;
-    
+    int lrc_top = display->OnlineMusiclrc_get_top();
+
     // 从当前歌词索引开始查找，提高效率
+    //load()是进行一次原子读取并返回当前存储的整数值
     int start_index = (current_lyric_index_.load() >= 0) ? current_lyric_index_.load() : 0;
     
     // 正向查找：找到最后一个时间戳小于等于当前时间的歌词
@@ -1394,28 +1431,210 @@ void Esp32Music::UpdateLyricDisplay(int64_t current_time_ms) {
     // 如果歌词索引发生变化，更新显示
     if (new_lyric_index != current_lyric_index_) {
         current_lyric_index_ = new_lyric_index;
+        int new_top = new_lyric_index - 2;
+        if (new_top < 0) new_top = 0;
+        if (new_top != lrc_top)
+            display->lrc_animate_next(new_top);
         
-        auto& board = Board::GetInstance();
-        auto display = board.GetDisplay();
-        if (display) {
-            std::string lyric_text;
+        // auto& board = Board::GetInstance();
+        // auto display = board.GetDisplay();
+        // if (display) {
+        //     std::string lyric_text;
             
-            if (current_lyric_index_ >= 0 && current_lyric_index_ < (int)lyrics_.size()) {
-                lyric_text = lyrics_[current_lyric_index_].second;
-            }
+        //     if (current_lyric_index_ >= 0 && current_lyric_index_ < (int)lyrics_.size()) {
+        //         lyric_text = lyrics_[current_lyric_index_].second;
+        //     }
             
-            // 显示歌词
-            display->SetChatMessage("lyric", lyric_text.c_str());
+        //     // 显示歌词
+            // display->SetChatMessage("lyric", lyric_text.c_str());
             
-            ESP_LOGD(TAG, "Lyric update at %lldms: %s", 
-                    current_time_ms, 
-                    lyric_text.empty() ? "(no lyric)" : lyric_text.c_str());
-        }
+        //     ESP_LOGD(TAG, "Lyric update at %lldms: %s", 
+        //             current_time_ms, 
+        //             lyric_text.empty() ? "(no lyric)" : lyric_text.c_str());
+        // }
     }
 }
 
-// 删除复杂的认证初始化方法，使用简单的静态函数
 
+bool Esp32Music::DownloadCover(const std::string& cover_url)
+{
+    ESP_LOGI(TAG, "Downloading cover from: %s", cover_url.c_str());
+    
+    // 检查URL是否为空
+    if (cover_url.empty()) {
+        ESP_LOGE(TAG, "Cover URL is empty!");
+        return false;
+    }
+
+    // 添加重试逻辑
+    const int max_retries = 3;
+    int retry_count = 0;
+    bool success = false;
+    std::string cover_content;
+    std::string current_url = cover_url;
+    int redirect_count = 0;
+    const int max_redirects = 5;  // 最多允许5次重定向
+    while (retry_count < max_retries && !success && redirect_count < max_redirects) {
+        if(retry_count > 0) {
+            ESP_LOGI(TAG, "Retrying cover download (attempt %d of %d)", retry_count + 1, max_retries);
+            // 重试前暂停一下
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+        }
+
+        // 使用Board提供的HTTP客户端
+        auto network = Board::GetInstance().GetNetwork();
+        auto http = network->CreateHttp(0);
+        if (!http) {
+            ESP_LOGE(TAG, "Failed to create HTTP client for cover download");
+            retry_count++;
+            continue;   
+        }
+        // 设置基本请求头
+        http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
+        // http->SetHeader("Accept", "");
+        // http->SetHeader("Accept", "image/jpeg,image/png,*/*;q=0.8");
+        add_auth_headers(http.get());
+        // 打开GET连接
+        if (!http->Open("GET", current_url)) {
+            ESP_LOGE(TAG, "Failed to open HTTP connection for cover");
+            // 移除delete http; 因为unique_ptr会自动管理内存
+            retry_count++;
+            continue;
+        }
+
+        // 检查HTTP状态码
+        int status_code = http->GetStatusCode();
+        ESP_LOGI(TAG, "Cover download HTTP status code: %d", status_code);
+        // 处理重定向 - 由于Http类没有GetHeader方法，我们只能根据状态码判断
+        if (status_code == 301 || status_code == 302 || status_code == 303 || status_code == 307 || status_code == 308) {
+            // 由于无法获取Location头，只能报告重定向但无法继续
+            ESP_LOGW(TAG, "Received redirect status %d but cannot follow redirect (no GetHeader method)", status_code);
+            http->Close();
+            retry_count++;
+            continue;
+        }
+        // 非200系列状态码视为错误
+        if (status_code < 200 || status_code >= 300) {
+            ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
+            http->Close();
+            retry_count++;
+            continue;
+        }
+        // 读取响应
+        cover_content.clear();
+        char buffer[1024];
+        int bytes_read;
+        bool read_error = false;
+        int total_read = 0;
+        // 由于无法获取Content-Length和Content-Type头，我们不知道预期大小和内容类型
+        ESP_LOGI(TAG, "Starting to read cover content");
+        while (true) {
+            bytes_read = http->Read(buffer, sizeof(buffer) - 1);
+            // ESP_LOGD(TAG, "Cover HTTP read returned %d bytes", bytes_read);  // 注释掉以减少日志输出
+            if (bytes_read > 0) {
+                buffer[bytes_read] = '\0';
+                cover_content += buffer;
+                total_read += bytes_read;
+                // 定期打印下载进度 - 改为DEBUG级别减少输出
+                if (total_read % 4096 == 0) {
+                    ESP_LOGI(TAG, "Downloaded %d bytes so far", total_read);
+                }
+            } else if (bytes_read == 0) {
+                // 正常结束，没有更多数据
+                ESP_LOGI(TAG, "Cover download completed, total bytes: %d", total_read);
+                success = true;
+                break;
+            } else {
+                // bytes_read < 0，可能是ESP-IDF的已知问题
+                // 如果已经读取到了一些数据，则认为下载成功
+                if (!cover_content.empty()) {
+                    ESP_LOGW(TAG, "HTTP read returned %d, but we have data (%d bytes), continuing", bytes_read, cover_content.length());
+                    success = true;
+                    break;
+                } else {
+                    ESP_LOGE(TAG, "Failed to read cover data: error code %d", bytes_read);
+                    read_error = true;
+                    break;
+                }
+            }
+    }
+        http->Close();
+        if (read_error) {
+            retry_count++;
+            continue;
+        }
+        // 如果成功读取数据，跳出重试循环
+        if (success) {
+            break;
+        }
+    }
+    // 检查是否超过了最大重试次数
+    if (retry_count >= max_retries) {
+        ESP_LOGE(TAG, "Failed to download cover after %d attempts", max_retries);
+        return false;
+    }
+    if(!cover_content.empty()) {
+        size_t preview_size = std::min(cover_content.size(), size_t(50));
+        std::string preview = cover_content.substr(0, preview_size);
+        // ESP_LOGI(TAG, "Cover content preview (%d bytes): %s", cover_content.length(), preview.c_str());
+        ESP_LOG_BUFFER_HEX("RAW", cover_content.data(),
+                   std::min(64, (int)cover_content.length()));
+    } else {
+        ESP_LOGE(TAG, "Failed to download cover or cover is empty");
+        return false;
+    }
+    ESP_LOGI(TAG, "Cover downloaded successfully, size: %d bytes", cover_content.length());
+    // cover_content_ = std::move(cover_content);
+    return ParseCover(cover_content);
+}
+
+static uint8_t *cover_buf = nullptr;   // 存上一张图
+esp_err_t process_jpeg(uint8_t *jpeg_data, size_t jpeg_size, uint8_t **rgb565_data, size_t *rgb565_size, size_t *width, size_t *height);
+extern lv_obj_t *img_cover;          /* 封面 */
+bool Esp32Music::ParseCover(const std::string& cover_content) {
+    ESP_LOGI(TAG, "Parsing cover content");
+    uint8_t *rgb565_data = NULL;
+    size_t rgb565_size = 0;
+    size_t width = 0, height = 0;
+    static lv_img_dsc_t img_dsc_cover_ = {0};
+    if(!process_jpeg((uint8_t *)cover_content.data(), cover_content.length(), &rgb565_data, &rgb565_size, &width, &height))
+    {
+        ESP_LOGE(TAG, "Failed to process JPEG cover image");
+        return false;
+    }
+    if(cover_buf)
+    {
+        free(cover_buf);
+        cover_buf = NULL;
+    }
+    cover_buf = rgb565_data; // 保存上一张图的buf，下一次释放
+    // 设置LVGL图像描述符
+    img_dsc_cover_.data = cover_buf;
+    img_dsc_cover_.data_size = rgb565_size;
+    img_dsc_cover_.header.w = width;
+    img_dsc_cover_.header.h = height;
+    img_dsc_cover_.header.cf = LV_COLOR_FORMAT_RGB565;
+    lv_image_set_src(img_cover, &img_dsc_cover_);  // 使用下载的封面
+    return true;
+}
+
+
+void Esp32Music::CoverDisplayThread() {
+    ESP_LOGI(TAG, "Cover display thread started");
+    
+    if (!DownloadCover(current_cover_url_)) {
+        ESP_LOGE(TAG, "Failed to download or parse Cover");
+        is_cover_running_ = false;
+        return;
+    }
+    
+    // // 定期检查是否需要更新显示(频率可以降低)
+    // while (is_cover_running_ && is_playing_) {
+    //     std::this_thread::sleep_for(std::chrono::milliseconds(50));
+    // }
+    
+    ESP_LOGI(TAG, "Cover display thread finished");
+}
 // 删除复杂的类方法，使用简单的静态函数
 
 /**

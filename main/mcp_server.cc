@@ -94,18 +94,18 @@ void McpServer::AddCommonTools() {
                 return true;
             });
             auto display = board.GetDisplay();
-    AddTool("self.music.open",
-            "打开音乐播放器,当用户想要播放音乐或者打开音乐播放器的时候调用此工具",
-            PropertyList(),
-            [display](const PropertyList& properties) -> ReturnValue {
-                if(display->music_screen_ == nullptr) {
-                    display->MusicUI();
-                }
+    // AddTool("self.music.open",
+    //         "打开音乐播放器,当用户想要播放音乐或者打开音乐播放器的时候调用此工具",
+    //         PropertyList(),
+    //         [display](const PropertyList& properties) -> ReturnValue {
+    //             if(display->music_screen_ == nullptr) {
+    //                 display->MusicUI();
+    //             }
                 
-                lv_obj_add_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(display->music_screen_, LV_OBJ_FLAG_HIDDEN);
-                return true;
-            });
+    //             lv_obj_add_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
+    //             lv_obj_clear_flag(display->music_screen_, LV_OBJ_FLAG_HIDDEN);
+    //             return true;
+    //         });
 #ifdef HAVE_LVGL
     // auto display = board.GetDisplay();
     if (display && display->GetTheme() != nullptr) {
@@ -162,7 +162,7 @@ void McpServer::AddCommonTools() {
                     Property("song_name", kPropertyTypeString),//歌曲名称（必需）
                     Property("artist_name", kPropertyTypeString, "")//艺术家名称（可选，默认为空字符串）
                 }),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,display](const PropertyList& properties) -> ReturnValue {
                 auto song_name = properties["song_name"].value<std::string>();
                 auto artist_name = properties["artist_name"].value<std::string>();
                  if (!music->Download(song_name, artist_name)) {
@@ -170,9 +170,41 @@ void McpServer::AddCommonTools() {
                 }
                 auto download_result = music->GetDownloadResult();
                 ESP_LOGI(TAG, "Music details result: %s", download_result.c_str());
+                if(music->WaitForMusicLoaded())
+                {
+                    // 切换到在线音乐界面
+                    if(display->onlinemusic_screen_ == nullptr) {
+                        display->OnlineMusicUI();
+                    }
+                    if(display->current_screen_ != display->onlinemusic_screen_) {
+                        lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
+                        lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+                    }
+                } else {
+                    return "{\"success\": false, \"message\": \"音乐加载超时\"}";
+                }
                 return "{\"success\": true, \"message\": \"音乐开始播放\"}";
             });
-
+        AddTool("self.music.stop",
+                "停止当前正在播放的音乐。当用户要求停止音乐播放时使用此工具。",
+                PropertyList(),
+                [music](const PropertyList& properties) -> ReturnValue {
+                    if(!music->StopStreaming()) {
+                        return "{\"success\": false, \"message\": \"音乐暂停失败\"}";
+                    } else {
+                        return "{\"success\": true, \"message\": \"音乐暂停播放\"}";
+                }
+            });
+        AddTool("self.music.completed",
+                "在线音乐播放完成。",
+                PropertyList(),
+                [display](const PropertyList& properties) -> ReturnValue {
+                    if(display->current_screen_ == display->onlinemusic_screen_) {
+                        lv_obj_add_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+                        lv_obj_clear_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
+                    }
+                    return true;
+            });
     }
 
 

@@ -40,13 +40,23 @@ public:
     virtual void UpdateStatusBar(bool update_all = false);
     virtual void SetPowerSaveMode(bool on);
     virtual void SetMusicInfo(const char* song_name);
-    virtual void MusicUI();
+    virtual void OfflineMusicUI();
+    virtual void OfflineMusicUI_Deinit();
+    virtual void OfflineMusicUI_Recover();
+    virtual void OfflineUpdatePlayTime(int64_t current_time_ms);
+
+    virtual void OnlineMusicUI(void);
+    virtual void OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, std::string>> lyrics);
+    virtual int OnlineMusiclrc_get_top();
+    virtual void lrc_animate_next(int new_top);
+
     inline int width() const { return width_; }
     inline int height() const { return height_; }
 
     lv_obj_t *current_screen_ = nullptr;
     lv_obj_t *main_screen_ = nullptr;
-    lv_obj_t *music_screen_ = nullptr;
+    lv_obj_t *offlinemusic_screen_ = nullptr;
+    lv_obj_t *onlinemusic_screen_ = nullptr;
 protected:
     int width_ = 0;
     int height_ = 0;

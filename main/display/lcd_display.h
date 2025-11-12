@@ -27,7 +27,6 @@ protected:
     lv_obj_t* preview_image_ = nullptr;
     lv_obj_t* emoji_label_ = nullptr;
     lv_obj_t* emoji_image_ = nullptr;
-    
     // lv_obj_t* background = nullptr;
     // lv_obj_t* label = nullptr;
 
@@ -39,9 +38,14 @@ protected:
     esp_timer_handle_t preview_timer_ = nullptr;
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
 
+    lv_obj_t *label_musicname_ = nullptr;
+    lv_obj_t * lrc_lines[5] = {nullptr};  /* 歌词行对象数组 */
+    int lrc_cent = 2;    /* 中间行索引 = 2 */
+    int lrc_top = 0;     /* 当前“顶行”对应歌词下标 */
+    lv_obj_t *lyrics_area = nullptr;
     void InitializeLcdThemes();
     void SetupUI();
-    void MusicUI() override;
+    
     virtual bool Lock(int timeout_ms = 0) override;
     virtual void Unlock() override;
 
@@ -50,6 +54,7 @@ protected:
     LcdDisplay(esp_lcd_panel_io_handle_t panel_io, esp_lcd_panel_handle_t panel, int width, int height);
     
 public:
+
     ~LcdDisplay();
     virtual void SetEmotion(const char* emotion) override;
     virtual void SetChatMessage(const char* role, const char* content) override; 
@@ -57,6 +62,15 @@ public:
     virtual void SetMusicInfo(const char* song_name) override;
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;
+    void OfflineMusicUI() override;
+    void OfflineMusicUI_Deinit()override;
+    void OfflineMusicUI_Recover()override;
+    void OfflineUpdatePlayTime(int64_t current_time_ms)override;
+
+    void OnlineMusicUI(void)override;
+    int OnlineMusiclrc_get_top()override { return lrc_top; };
+    void OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, std::string>> lyrics)override;
+    void lrc_animate_next(int new_top)override;
 };
 
 // SPI LCD显示器

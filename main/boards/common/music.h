@@ -16,6 +16,8 @@ public:
     virtual size_t GetBufferSize() const = 0;
     virtual bool IsDownloading() const = 0;
     virtual int16_t* GetAudioData() = 0;
+    virtual std::vector<std::pair<int, std::string>> GetLyrics() const = 0;  // 获取歌词
+    virtual bool WaitForMusicLoaded() = 0;
 };
 
 #endif // MUSIC_H 

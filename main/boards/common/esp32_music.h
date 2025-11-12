@@ -8,13 +8,20 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
-
+#include "lvgl.h"
 #include "music.h"
-
+#include <esp_lvgl_port.h>
 // MP3解码器支持
 extern "C" {
 #include "mp3dec.h"
 }
+
+
+
+#define MUSIC_EVENT_LOADED (1 << 0)
+#define MUSIC_EVENT_COMPLETED (1 << 1)
+
+
 
 // 音频数据块结构
 struct AudioChunk {
@@ -29,16 +36,21 @@ class Esp32Music : public Music {
 public:
     // 显示模式控制 - 移动到public区域
     enum DisplayMode {
-        DISPLAY_MODE_SPECTRUM = 0,  // 默认显示频谱
-        DISPLAY_MODE_LYRICS = 1     // 显示歌词
+        DISPLAY_MODE_SPECTRUM = 1,  // 默认显示频谱
+        DISPLAY_MODE_LYRICS = 0     // 显示歌词
     };
-
+    
 private:
+    EventGroupHandle_t event_group_ = nullptr; 
+
     std::string last_downloaded_data_;
     std::string current_music_url_;
     std::string current_song_name_;
     bool song_name_displayed_;
     
+    std::string current_cover_url_;
+    // std::string cover_content_;
+
     // 歌词相关
     std::string current_lyric_url_;
     std::vector<std::pair<int, std::string>> lyrics_;  // 时间戳和歌词文本
@@ -47,6 +59,9 @@ private:
     std::thread lyric_thread_;
     std::atomic<bool> is_lyric_running_;
     
+    std::thread cover_thread_;
+    std::atomic<bool> is_cover_running_;
+
     std::atomic<DisplayMode> display_mode_;
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_downloading_;
@@ -83,6 +98,9 @@ private:
     void LyricDisplayThread();
     void UpdateLyricDisplay(int64_t current_time_ms);
     
+    bool DownloadCover(const std::string& cover_url);
+    bool ParseCover(const std::string& cover_content);
+    void CoverDisplayThread();
     // ID3标签处理
     size_t SkipId3Tag(uint8_t* data, size_t size);
 
@@ -92,6 +110,7 @@ public:
     Esp32Music();
     ~Esp32Music();
 
+    
     virtual bool Download(const std::string& song_name, const std::string& artist_name) override;
   
     virtual std::string GetDownloadResult() override;
@@ -102,10 +121,11 @@ public:
     virtual size_t GetBufferSize() const override { return buffer_size_; }
     virtual bool IsDownloading() const override { return is_downloading_; }
     virtual int16_t* GetAudioData() override { return final_pcm_data_fft; }
-    
+    virtual std::vector<std::pair<int, std::string>> GetLyrics() const override { return lyrics_; };  // 获取歌词
     // 显示模式控制方法
     void SetDisplayMode(DisplayMode mode);
     DisplayMode GetDisplayMode() const { return display_mode_.load(); }
+    virtual bool WaitForMusicLoaded()override;
 };
 
 #endif // ESP32_MUSIC_H

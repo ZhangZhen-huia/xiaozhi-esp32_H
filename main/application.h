@@ -65,6 +65,7 @@ public:
     AudioService& GetAudioService() { return audio_service_; }
     // 新增：接收外部音频数据（如音乐播放）
     void AddAudioData(AudioStreamPacket&& packet);
+    void SendMessage(std::string &message);
 private:
     Application();
     ~Application();

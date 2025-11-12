@@ -13,6 +13,7 @@
 #include "camera.h"
 #include "assets.h"
 #include "music.h"
+#include "qmi8658.h"
 
 void* create_board();
 class AudioCodec;
@@ -46,6 +47,7 @@ public:
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();
     virtual Music* GetMusic();
+    virtual QMI8658* GetImu();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
     virtual const char* GetNetworkStateIcon() = 0;

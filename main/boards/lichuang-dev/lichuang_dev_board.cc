@@ -19,7 +19,7 @@
 #include "driver/sdmmc_host.h"
 #include <lvgl.h>
 #include <cmath>
-
+#include "qmi8658.h"
 #define TAG "LichuangDevBoard"
 
 
@@ -37,76 +37,6 @@ public:
     }
 };
 
-class ImuSensor : public I2cDevice {
-    private:
-    // 倾角结构体
-    typedef struct{
-        int16_t acc_x;
-        int16_t acc_y;
-        int16_t acc_z;
-        int16_t gyr_x;
-        int16_t gyr_y;
-        int16_t gyr_z;
-        float AngleX;
-        float AngleY;
-        float AngleZ;
-    }t_sQMI8658;
-
-    t_sQMI8658 *imu = nullptr;
-    uint8_t IMU_UUID = 0;
-    public:
-    ImuSensor(i2c_master_bus_handle_t i2c_bus, uint8_t addr) : I2cDevice(i2c_bus, addr) {
-        IMU_UUID = ReadReg(0x0);
-        while(IMU_UUID != 0x05)
-        {
-            vTaskDelay(10 / portTICK_PERIOD_MS);
-            IMU_UUID = ReadReg(0x0);
-        }
-        ESP_LOGI(TAG, "QMI8658 OK!");  // 打印信息
-        WriteReg(QMI8658_RESET, 0xb0);  // 复位  
-        vTaskDelay(10 / portTICK_PERIOD_MS);  // 延时10ms
-        WriteReg(QMI8658_CTRL1, 0x40); // CTRL1 设置地址自动增加
-        WriteReg(QMI8658_CTRL7, 0x03); // CTRL7 允许加速度和陀螺仪
-        WriteReg(QMI8658_CTRL2, 0x95); // CTRL2 设置ACC 4g 250Hz
-        WriteReg(QMI8658_CTRL3, 0xd5); // CTRL3 设置GRY 512dps 250Hz 
-    }
-
-    // 读取加速度和陀螺仪寄存器值
-    void qmi8658_Read_AccAndGry(void)
-    {
-        uint8_t status, data_ready=0;
-        int16_t buf[6];
-
-        status = ReadReg(QMI8658_STATUS0); // 读状态寄存器 
-        if (status & 0x03) // 判断加速度和陀螺仪数据是否可读
-            data_ready = 1;
-        if (data_ready == 1){  // 如果数据可读
-            data_ready = 0;
-            ReadRegs(QMI8658_AX_L, (uint8_t *)buf, 12); // 读加速度和陀螺仪值
-            imu->acc_x = buf[0];
-            imu->acc_y = buf[1];
-            imu->acc_z = buf[2];
-            imu->gyr_x = buf[3];
-            imu->gyr_y = buf[4];
-            imu->gyr_z = buf[5];
-        }
-    }
-
-// 获取XYZ轴的倾角值
-    void qmi8658_fetch_angleFromAcc(void)
-    {
-        float temp;
-
-        qmi8658_Read_AccAndGry(); // 读取加速度和陀螺仪的寄存器值
-        // 根据寄存器值 计算倾角值 并把弧度转换成角度
-        temp = (float)imu->acc_x / sqrt( ((float)imu->acc_y * (float)imu->acc_y + (float)imu->acc_z * (float)imu->acc_z) );
-        imu->AngleX = atan(temp)*57.29578f; // 180/π=57.29578
-        temp = (float)imu->acc_y / sqrt( ((float)imu->acc_x * (float)imu->acc_x + (float)imu->acc_z * (float)imu->acc_z) );
-        imu->AngleY = atan(temp)*57.29578f; // 180/π=57.29578
-        temp = sqrt( ((float)imu->acc_x * (float)imu->acc_x + (float)imu->acc_y * (float)imu->acc_y) ) / (float)imu->acc_z;
-        imu->AngleZ = atan(temp)*57.29578f; // 180/π=57.29578
-    }
-};
 
 class CustomAudioCodec : public BoxAudioCodec {
 private:
@@ -147,7 +77,7 @@ private:
     LcdDisplay* display_;
     Pca9557* pca9557_;
     Esp32Camera* camera_;
-
+    QMI8658 *imu_;
     void InitializeI2c() {
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -166,6 +96,7 @@ private:
 
         // Initialize PCA9557
         pca9557_ = new Pca9557(i2c_bus_, 0x19);
+        imu_ = new QMI8658(i2c_bus_,0x6A);
     }
 
     void InitializeSpi() {
@@ -187,21 +118,7 @@ private:
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
             }
-            if(display->current_screen_ == display->main_screen_) {
-                if(display->music_screen_ == nullptr) {
-                    display->MusicUI();
-                }
-                lv_obj_add_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(display->music_screen_, LV_OBJ_FLAG_HIDDEN);
-                display->current_screen_ = display->music_screen_;
-                // app.ToggleChatState();
-            }
-            else if(display->current_screen_ == display->music_screen_) {
-                lv_obj_add_flag(display->music_screen_, LV_OBJ_FLAG_HIDDEN);
-                lv_obj_clear_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
-                display->current_screen_ = display->main_screen_;
-            }
-           
+           app.ToggleChatState();
         });
 
 #if CONFIG_USE_DEVICE_AEC
@@ -386,6 +303,9 @@ public:
 
     virtual Camera* GetCamera() override {
         return camera_;
+    }
+    virtual QMI8658* GetImu() override{
+        return imu_;
     }
 };
 

@@ -43,7 +43,7 @@ void LcdDisplay::InitializeLcdThemes() {
 
     // dark theme
     auto dark_theme = new LvglTheme("dark");
-    dark_theme->set_background_color(lv_color_hex(0x000000));           //rgb(0, 0, 0)
+    dark_theme->set_background_color(lv_color_hex(0x000000));           //rgba(0, 0, 0, 0)
     dark_theme->set_text_color(lv_color_hex(0xFFFFFF));                 //rgb(255, 255, 255)
     dark_theme->set_chat_background_color(lv_color_hex(0x1F1F1F));      //rgb(31, 31, 31)
     dark_theme->set_user_bubble_color(lv_color_hex(0x00FF00));          //rgb(0, 128, 0)
@@ -51,7 +51,7 @@ void LcdDisplay::InitializeLcdThemes() {
     dark_theme->set_system_bubble_color(lv_color_hex(0x000000));        //rgb(0, 0, 0)
     dark_theme->set_system_text_color(lv_color_hex(0xFFFFFF));          //rgb(255, 255, 255)
     dark_theme->set_border_color(lv_color_hex(0xFFFFFF));               //rgb(255, 255, 255)
-    dark_theme->set_low_battery_color(lv_color_hex(0xFF0000));          //rgb(255, 0, 0)
+    dark_theme->set_low_battery_color(lv_color_hex(0xFF0000));          //rgba(137, 111, 111, 1)
     dark_theme->set_text_font(text_font);
     dark_theme->set_icon_font(icon_font);
     dark_theme->set_large_icon_font(large_icon_font);
@@ -918,18 +918,19 @@ void LcdDisplay::SetChatMessage(const char* role, const char* content) {
 }
 #endif
 
+//修改，在线播放音乐的时候把音乐信息显示在状态栏上
 void LcdDisplay::SetMusicInfo(const char* song_name) {
-    // 默认实现：对于非微信模式，将歌名显示在聊天消息标签中
+    
     DisplayLockGuard lock(this);
-    if (chat_message_label_ == nullptr) {
+    if (label_musicname_ == nullptr) {
         return;
     }
     if (song_name != nullptr && strlen(song_name) > 0) {
         std::string music_text = "";
         music_text += song_name;
-        lv_label_set_text(chat_message_label_, music_text.c_str());
+        lv_label_set_text(label_musicname_, music_text.c_str());
     } else {
-        lv_label_set_text(chat_message_label_, "");
+        lv_label_set_text(label_musicname_, "");
     }
 }
 

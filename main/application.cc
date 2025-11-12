@@ -16,6 +16,7 @@
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
+#include "qmi8658.h"
 
 #define TAG "Application"
 
@@ -644,6 +645,14 @@ void Application::MainEventLoop() {
                 // SystemInfo::PrintTaskList();
                 SystemInfo::PrintHeapStats();
             }
+            auto& board = Board::GetInstance();
+            QMI8658* imu = board.GetImu();
+            t_sQMI8658 imu_data;
+            if (imu)
+            {
+                imu->qmi8658_application(&imu_data);
+            }
+            
         }
     }
 }
@@ -767,6 +776,43 @@ void Application::SetDeviceState(DeviceState state) {
     }
 }
 
+
+void Application ::SendMessage(std::string &message) {
+    if (protocol_ == nullptr) {
+        ESP_LOGE(TAG," Protocol not initialized");
+        return;
+    }
+    ESP_LOGI(TAG, "Sending message: %s", message.c_str());
+    //去除一些cjson中不能被识别的字符
+    message.erase(std::remove(message.begin(), message.end(), '\n'), message.end());
+    message.erase(std::remove(message.begin(), message.end(), '\r'), message.end());
+    message.erase(std::remove(message.begin(), message.end(), '\"'), message.end());
+
+    //空闲状态直接向服务器发送用户消息
+    if(device_state_ == kDeviceStateIdle)
+    {
+        ToggleChatState();
+        Schedule([this, message = std::move(message)]() {
+        protocol_->SendMcpMessage(message);
+        });
+    }
+    else if(device_state_ == kDeviceStateSpeaking)
+    {
+        //正在说话状态下，先中止当前的说话，然后发送用户消息
+        Schedule([this, message = std::move(message)]() {
+        AbortSpeaking(kAbortReasonNone);
+        protocol_->SendMcpMessage(message);
+        });
+    }
+    else if (device_state_ == kDeviceStateListening)
+    {
+        //正在听取状态下，直接发送用户消息
+        Schedule([this, message = std::move(message)]() {
+        protocol_->SendMcpMessage(message);
+        });
+    }
+    
+}
 void Application::Reboot() {
     ESP_LOGI(TAG, "Rebooting...");
     // Disconnect the audio channel
