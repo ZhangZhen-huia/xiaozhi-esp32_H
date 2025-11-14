@@ -9,9 +9,7 @@
 #include "esp_jpeg_dec.h"
 #include "boards/common/esp32_music.h"
 
-// LV_FONT_DECLARE(font_puhui_14_1);
 LV_FONT_DECLARE(font_puhui_16_4);
-// LV_FONT_DECLARE(font_puhui_20_4);
 void LcdDisplay::OnlineMusicUI(void){
 
     DisplayLockGuard lock(this);
@@ -71,6 +69,7 @@ void LcdDisplay::OnlineMusicUI(void){
 
 void LcdDisplay:: OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, std::string>> lyrics)
 {
+    DisplayLockGuard lock(this);
     if (top_idx < 0) top_idx = 0;
     if (top_idx < 0) top_idx = 0;
 
@@ -82,16 +81,22 @@ void LcdDisplay:: OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, 
                           : "";
         lv_label_set_text(lrc_lines[i], txt);
 
-        /* 离中心越远越小 */
+        //中心加粗
         int dist = abs(i - lrc_cent);
-        // if(dist == 0)
-        //     lv_obj_set_style_text_font(lrc_lines[i], &font_puhui_20_4, 0);
-        // else if(dist == 1)
-        //     lv_obj_set_style_text_font(lrc_lines[i], &font_puhui_16_4, 0);
-        // else
-        //     lv_obj_set_style_text_font(lrc_lines[i], &font_puhui_14_1, 0);
-        
-        /* 中心高亮 */
+        if(dist == 0)
+            {
+                static lv_style_t bold_style;
+                // 第一次初始化
+                if (bold_style.prop_cnt == 0) {          
+                    lv_style_init(&bold_style);
+                    lv_style_set_text_decor(&bold_style, LV_TEXT_DECOR_NONE);
+                    //上下左右各 1 px 描边
+                    lv_style_set_text_color(&bold_style, lv_color_hex(0x330000)); //深色边
+                    lv_style_set_text_opa(&bold_style, LV_OPA_70);
+                }
+                lv_obj_add_style(lrc_lines[i], &bold_style, LV_PART_MAIN);
+            }
+        //中心高亮
         lv_color_t color = (dist == 0) ? lv_color_hex(0x00FF45)
                                         : lv_color_hex(0xAAAAAA);
         lv_obj_set_style_text_color(lrc_lines[i], color, 0);
@@ -102,6 +107,7 @@ void LcdDisplay:: OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, 
 //把容器往下移一行高度 → 再重新填充 → 再动画移回 0
 void LcdDisplay:: lrc_animate_next(int new_top)
 {
+    DisplayLockGuard lock(this);
     if (new_top == lrc_top) return;
 
     //设置行高

@@ -20,11 +20,9 @@
 #include <thread>   // 为线程ID比较
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
-
 #define TAG "Esp32Music"
 
 // ========== 简单的ESP32认证函数 ==========
-
 /**
  * @brief 获取设备MAC地址
  * @return MAC地址字符串
@@ -758,7 +756,11 @@ void Esp32Music::PlayAudioStream() {
     
     auto codec = Board::GetInstance().GetAudioCodec();
     if (!codec || !codec->output_enabled()) {
-        ESP_LOGE(TAG, "Audio codec not available or not enabled");
+        if(!codec){
+            ESP_LOGE(TAG, "Audio codec instance is null");
+        } else{
+            ESP_LOGE(TAG, "Audio codec output not enabled");
+        }
         is_playing_ = false;
         return;
     }
@@ -796,13 +798,13 @@ void Esp32Music::PlayAudioStream() {
     
     // 标记是否已经处理过ID3标签
     bool id3_processed = false;
-
+    // UpdateLyricDisplay(0);
     xEventGroupSetBits(event_group_, MUSIC_EVENT_LOADED);
     while (is_playing_) {
         // 检查设备状态，只有在空闲状态才播放音乐
         auto& app = Application::GetInstance();
         DeviceState current_state = app.GetDeviceState();
-        
+
         // 等小智把话说完了，变成聆听状态之后，马上转成待机状态，进入音乐播放
         if (current_state == kDeviceStateListening || current_state == kDeviceStateSpeaking) {
             if (current_state == kDeviceStateSpeaking) {
@@ -1046,11 +1048,31 @@ void Esp32Music::PlayAudioStream() {
     ESP_LOGI(TAG, "Performing basic cleanup from play thread");
     // 停止播放标志
     is_playing_ = false;
-    
-    // xEventGroupSetBits(event_group_, MUSIC_EVENT_COMPLETED);
     auto &app = Application::GetInstance();
-    std::string msg = "在线音乐播放完毕，你需要询问用户需不需要换一首歌，如果用户三秒内没有反应，就默认不换歌，就再次调用一下刚才的工具播放当前歌曲，如果用户说停止播放，你就调用我给的函数返回主界面，函数为：self.music.completed";
-    app.SendMessage(msg);
+    // xEventGroupSetBits(event_group_, MUSIC_EVENT_COMPLETED);
+    if(playback_mode_ == PLAYBACK_MODE_LOOP){
+        ESP_LOGI(TAG, "Loop playback mode active, restarting playback");
+        std::string msg = "静默调用工具Loop_playback";   
+        app.SendMessage(msg);
+    }
+    else if(playback_mode_ == PLAYBACK_MODE_RANDOM){
+        ESP_LOGI(TAG, "Random playback mode active, selecting next random track");
+        std::string msg = "静默调用工具Random_playback"; 
+        app.SendMessage(msg);  
+    }
+    else if(playback_mode_ == PLAYBACK_MODE_ONCE){
+        ESP_LOGI(TAG, "Once playback mode active, stopping playback");
+        //等待线程自动结束，不用做任何处理
+        std::string msg = "再见,你不需要回应"; 
+        app.SendMessage(msg);
+        // 静默调用工具停止音乐
+        // std::string msg = "静默调用工具self.music.stop";   
+    }
+    //顺序播放模式
+    else{
+        ESP_LOGI(TAG, "Order playback mode active, selecting next order track");
+    }
+    
 }
 
 // 清空音频缓冲区
@@ -1660,3 +1682,241 @@ void Esp32Music::SetDisplayMode(DisplayMode mode) {
             (old_mode == DISPLAY_MODE_SPECTRUM) ? "SPECTRUM" : "LYRICS",
             (mode == DISPLAY_MODE_SPECTRUM) ? "SPECTRUM" : "LYRICS");
 }
+
+
+
+// ========== SD卡相关函数 ==========
+
+/**
+ * @brief 检查文件是否存在
+ */
+static bool file_exists(const std::string& filename) {
+    struct stat st;
+    return (stat(filename.c_str(), &st) == 0);
+}
+
+/**
+ * @brief 获取文件大小
+ */
+static size_t get_file_size(const std::string& filename) {
+    struct stat st;
+    if (stat(filename.c_str(), &st) == 0) {
+        return st.st_size;
+    }
+    return 0;
+}
+
+/**
+ * @brief 获取文件扩展名
+ */
+static std::string get_file_extension(const std::string& filename) {
+    size_t dot_pos = filename.find_last_of('.');
+    if (dot_pos != std::string::npos) {
+        return filename.substr(dot_pos + 1);
+    }
+    return "";
+}
+
+/**
+ * @brief 检查是否是目录
+ */
+static bool is_directory(const std::string& path) {
+    struct stat st;
+    if (stat(path.c_str(), &st) == 0) {
+        return S_ISDIR(st.st_mode);
+    }
+    return false;
+}
+// ========== 新增的SD卡播放功能 ==========
+
+
+void Esp32Music::SetLoopMode(bool loop) {
+    playback_mode_ = loop ? PLAYBACK_MODE_LOOP : PLAYBACK_MODE_ORDER;
+}
+void Esp32Music::SetRandomMode(bool random) {
+    playback_mode_ = random ? PLAYBACK_MODE_RANDOM : PLAYBACK_MODE_ORDER;
+}
+void Esp32Music::SetOnceMode(bool once) {
+    playback_mode_ = once ? PLAYBACK_MODE_ONCE : PLAYBACK_MODE_ORDER;
+}
+
+/**
+ * @brief 从SD卡播放音乐文件
+ * @param file_path SD卡上的音乐文件路径
+ * @param song_name 歌曲名称（用于显示）
+ * @return 是否成功开始播放
+ */
+bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& song_name) {
+    ESP_LOGI(TAG, "Starting to play music from SD card: %s", file_path.c_str());
+    
+    // 检查文件是否存在
+    if (!file_exists(file_path)) {
+        ESP_LOGE(TAG, "File does not exist: %s", file_path.c_str());
+        return false;
+    }
+    
+    // 获取文件大小
+    size_t file_size = get_file_size(file_path);
+    if (file_size == 0) {
+        ESP_LOGE(TAG, "File is empty: %s", file_path.c_str());
+        return false;
+    }
+    
+    ESP_LOGI(TAG, "SD card file size: %d bytes", file_size);
+    
+    // 保存歌名用于显示
+    current_song_name_ = song_name.empty() ? file_path : song_name;
+    
+    // 停止之前的播放
+    StopStreaming();
+    
+    // 清空之前的下载数据
+    last_downloaded_data_.clear();
+    
+    // 开始SD卡流式播放
+    song_name_displayed_ = false;
+    return StartSDCardStreaming(file_path);
+}
+
+/**
+ * @brief 开始SD卡流式播放
+ * @param file_path SD卡文件路径
+ * @return 是否成功
+ */
+bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
+    if (file_path.empty()) {
+        ESP_LOGE(TAG, "File path is empty");
+        return false;
+    }
+    
+    ESP_LOGD(TAG, "Starting SD card streaming for: %s", file_path.c_str());
+    
+    // 停止之前的播放
+    is_downloading_ = false;
+    is_playing_ = false;
+    
+    // 等待之前的线程完全结束
+    if (download_thread_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.notify_all();
+        }
+        download_thread_.join();
+    }
+    if (play_thread_.joinable()) {
+        {
+            std::lock_guard<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.notify_all();
+        }
+        play_thread_.join();
+    }
+    
+    // 清空缓冲区
+    ClearAudioBuffer();
+    
+    // 配置线程栈大小
+    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
+    cfg.stack_size = 8192;
+    cfg.prio = 5;
+    cfg.thread_name = "sd_card_stream";
+    esp_pthread_set_cfg(&cfg);
+    
+    // 开始SD卡读取线程
+    is_downloading_ = true;
+    download_thread_ = std::thread(&Esp32Music::ReadFromSDCard, this, file_path);
+    
+    // 开始播放线程
+    is_playing_ = true;
+    play_thread_ = std::thread(&Esp32Music::PlayAudioStream, this);
+    
+    ESP_LOGI(TAG, "SD card streaming threads started successfully");
+    return true;
+}
+
+/**
+ * @brief 从SD卡读取音频数据
+ * @param file_path SD卡文件路径
+ */
+void Esp32Music::ReadFromSDCard(const std::string& file_path) {
+
+    ESP_LOGD(TAG, "Starting audio stream reading from SD card: %s", file_path.c_str());
+    
+    FILE* file = fopen(file_path.c_str(), "rb");
+    if (!file) {
+        ESP_LOGE(TAG, "Failed to open file: %s", file_path.c_str());
+        is_downloading_ = false;
+        return;
+    }
+    
+    ESP_LOGI(TAG, "Started reading audio stream from SD card");
+    
+    // 分块读取音频数据
+    const size_t chunk_size = 4096;
+    uint8_t* buffer = (uint8_t*)heap_caps_malloc(chunk_size, MALLOC_CAP_SPIRAM);
+    if (!buffer) {
+        ESP_LOGE(TAG, "Failed to allocate read buffer");
+        fclose(file);
+        is_downloading_ = false;
+        return;
+    }
+    
+    size_t total_read = 0;
+    
+    while (is_downloading_ && is_playing_) {
+        size_t bytes_read = fread(buffer, 1, chunk_size, file);
+        if (bytes_read == 0) {
+            if (feof(file)) {
+                ESP_LOGI(TAG, "SD card file read completed, total: %d bytes", total_read);
+            } else {
+                ESP_LOGE(TAG, "Failed to read from file");
+            }
+            break;
+        }
+        
+        // 创建音频数据块
+        uint8_t* chunk_data = (uint8_t*)heap_caps_malloc(bytes_read, MALLOC_CAP_SPIRAM);
+        if (!chunk_data) {
+            ESP_LOGE(TAG, "Failed to allocate memory for audio chunk");
+            break;
+        }
+        memcpy(chunk_data, buffer, bytes_read);
+        
+        // 等待缓冲区有空间
+        {
+            std::unique_lock<std::mutex> lock(buffer_mutex_);
+            buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_; });
+            
+            if (is_downloading_) {
+                audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
+                buffer_size_ += bytes_read;
+                total_read += bytes_read;
+                
+                // 通知播放线程有新数据
+                buffer_cv_.notify_one();
+                
+                if (total_read % (256 * 1024) == 0) {
+                    ESP_LOGI(TAG, "Read %d bytes from SD, buffer size: %d", total_read, buffer_size_);
+                }
+            } else {
+                heap_caps_free(chunk_data);
+                break;
+            }
+        }
+    }
+    
+    heap_caps_free(buffer);
+    fclose(file);
+    is_downloading_ = false;
+    
+    // 通知播放线程读取完成
+    {
+        std::lock_guard<std::mutex> lock(buffer_mutex_);
+        buffer_cv_.notify_all();
+    }
+    
+    ESP_LOGI(TAG, "SD card read thread finished");
+}
+
+
+
+

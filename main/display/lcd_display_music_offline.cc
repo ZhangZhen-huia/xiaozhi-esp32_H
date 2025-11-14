@@ -12,6 +12,7 @@ esp_err_t process_jpeg(uint8_t *jpeg_data, size_t jpeg_size, uint8_t **rgb565_da
 
 
 #define TAG "LcdDisplay_music"
+
 LV_IMG_DECLARE(img3);
 int32_t g_img_angle;   // 0.1° 单位
 lv_timer_t * hide_timer;     /* 一次性定时器 */
@@ -27,13 +28,12 @@ lv_obj_t *song_list_btn;
 bool is_playing = false;
 lv_anim_t anim_cover;
 lv_obj_t *time_label;
-static bool list_visible = false;  /* 当前状态 */
+static bool list_visible = false;//当前状态 
 
 
 static void rotate_cover(void *img, int32_t angle) {
     lv_image_set_rotation((lv_obj_t *)img, angle);     // 9.x 单位仍是 0.1°
     g_img_angle = angle;
-    // vTaskDelay(10 / portTICK_PERIOD_MS); /* 让出 CPU，给音频 10 ms */
 }
 
 //隐藏滑条的重启函数
@@ -45,7 +45,7 @@ static void restart_hide_timer(void)
     //新建一次性 2000 ms 定时器
     hide_timer = lv_timer_create([](lv_timer_t * t){
         lv_obj_add_flag(slider_vol, LV_OBJ_FLAG_HIDDEN);
-        lv_timer_del(hide_timer);       /* 用完即毁 */
+        lv_timer_del(hide_timer);       // 用完即毁
         hide_timer = NULL;
     }, 2000, NULL);
     lv_timer_set_repeat_count(hide_timer, 1);   //只跑一次
@@ -71,11 +71,11 @@ static void list_show(bool show)
         lv_obj_set_x((lv_obj_t *)obj, x);
     });
     lv_anim_set_values(&a, start, end);
-    lv_anim_set_time(&a, 300);                     /* 300 ms */
+    lv_anim_set_time(&a, 300);                     //300 ms
     lv_anim_set_path_cb(&a, lv_anim_path_ease_out);
     lv_anim_set_completed_cb(&a, [](lv_anim_t * a){
         if(!list_visible) {
-        lv_obj_add_flag(list_song, LV_OBJ_FLAG_HIDDEN);  // 动画结束再隐藏
+        lv_obj_add_flag(list_song, LV_OBJ_FLAG_HIDDEN);//动画结束再隐藏
     }
     });
     lv_anim_start(&a);

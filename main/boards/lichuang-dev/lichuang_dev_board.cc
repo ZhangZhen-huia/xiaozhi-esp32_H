@@ -6,7 +6,8 @@
 #include "config.h"
 #include "i2c_device.h"
 #include "esp32_camera.h"
-
+#include <dirent.h>
+#include <stdio.h>
 #include <esp_log.h>
 #include <esp_lcd_panel_vendor.h>
 #include <driver/i2c_master.h>
@@ -113,7 +114,7 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
-            auto display = Board::GetInstance().GetDisplay();
+            // auto display = Board::GetInstance().GetDisplay();
         
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
@@ -199,10 +200,6 @@ private:
 
         lvgl_port_add_touch(&touch_cfg);
     }
-    void InitializeImu()
-    {
-
-    }
     void InitializeSdcard() {
             esp_vfs_fat_sdmmc_mount_config_t mount_config = {
             .format_if_mount_failed = true,   // 如果挂载不成功是否需要格式化SD卡
@@ -236,6 +233,7 @@ private:
         }
         ESP_LOGI(TAG, "Filesystem mounted"); // 提示挂载成功
         sdmmc_card_print_info(stdout, card); // 终端打印SD卡的一些信息
+        
     }
     void InitializeCamera() {
         // Open camera power

@@ -793,7 +793,7 @@ void Application ::SendMessage(std::string &message) {
     {
         ToggleChatState();
         Schedule([this, message = std::move(message)]() {
-        protocol_->SendMcpMessage(message);
+        protocol_->SendWakeWordDetected(message);
         });
     }
     else if(device_state_ == kDeviceStateSpeaking)
@@ -801,14 +801,14 @@ void Application ::SendMessage(std::string &message) {
         //正在说话状态下，先中止当前的说话，然后发送用户消息
         Schedule([this, message = std::move(message)]() {
         AbortSpeaking(kAbortReasonNone);
-        protocol_->SendMcpMessage(message);
+        protocol_->SendWakeWordDetected(message);
         });
     }
     else if (device_state_ == kDeviceStateListening)
     {
         //正在听取状态下，直接发送用户消息
         Schedule([this, message = std::move(message)]() {
-        protocol_->SendMcpMessage(message);
+        protocol_->SendWakeWordDetected(message);
         });
     }
     

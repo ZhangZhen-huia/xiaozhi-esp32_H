@@ -18,6 +18,10 @@ public:
     virtual int16_t* GetAudioData() = 0;
     virtual std::vector<std::pair<int, std::string>> GetLyrics() const = 0;  // 获取歌词
     virtual bool WaitForMusicLoaded() = 0;
+    virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "") = 0;
+    virtual void SetLoopMode(bool loop) = 0;
+    virtual void SetRandomMode(bool random) = 0;
+    virtual void SetOnceMode(bool once) = 0;
 };
 
 #endif // MUSIC_H 

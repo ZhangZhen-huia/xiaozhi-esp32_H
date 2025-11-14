@@ -32,6 +32,19 @@ struct AudioChunk {
     AudioChunk(uint8_t* d, size_t s) : data(d), size(s) {}
 };
 
+struct MusicFileInfo {
+    std::string file_path;
+    std::string file_name;
+    std::string song_name;
+    std::string artist;
+    std::string album;
+    size_t file_size;
+    int duration; // 秒
+    
+    MusicFileInfo() : file_size(0), duration(0) {}
+};
+
+
 class Esp32Music : public Music {
 public:
     // 显示模式控制 - 移动到public区域
@@ -39,7 +52,12 @@ public:
         DISPLAY_MODE_SPECTRUM = 1,  // 默认显示频谱
         DISPLAY_MODE_LYRICS = 0     // 显示歌词
     };
-    
+    enum PlaybackMode {
+        PLAYBACK_MODE_ONCE = 0,     // 播放一次
+        PLAYBACK_MODE_LOOP = 1,      // 循环播放
+        PLAYBACK_MODE_RANDOM = 2,     // 随机播放
+        PLAYBACK_MODE_ORDER = 3       // 顺序播放
+    };
 private:
     EventGroupHandle_t event_group_ = nullptr; 
 
@@ -63,6 +81,7 @@ private:
     std::atomic<bool> is_cover_running_;
 
     std::atomic<DisplayMode> display_mode_;
+    std::atomic<PlaybackMode> playback_mode_ = PLAYBACK_MODE_ORDER;
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_downloading_;
     std::thread play_thread_;
@@ -106,6 +125,12 @@ private:
 
     int16_t* final_pcm_data_fft = nullptr;
 
+    std::vector<MusicFileInfo> music_library_;
+    
+    // SD卡读取线程
+    void ReadFromSDCard(const std::string& file_path);
+    bool StartSDCardStreaming(const std::string& file_path);
+
 public:
     Esp32Music();
     ~Esp32Music();
@@ -126,6 +151,10 @@ public:
     void SetDisplayMode(DisplayMode mode);
     DisplayMode GetDisplayMode() const { return display_mode_.load(); }
     virtual bool WaitForMusicLoaded()override;
+    virtual void SetLoopMode(bool loop)override;
+    virtual void SetRandomMode(bool random)override;
+    virtual void SetOnceMode(bool once)override;
+    virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
 };
 
 #endif // ESP32_MUSIC_H

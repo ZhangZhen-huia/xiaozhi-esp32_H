@@ -175,6 +175,8 @@ void McpServer::AddCommonTools() {
                     // 切换到在线音乐界面
                     if(display->onlinemusic_screen_ == nullptr) {
                         display->OnlineMusicUI();
+                        lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+                        
                     }
                     if(display->current_screen_ != display->onlinemusic_screen_) {
                         lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
@@ -195,6 +197,65 @@ void McpServer::AddCommonTools() {
                         return "{\"success\": true, \"message\": \"音乐暂停播放\"}";
                 }
             });
+        AddTool("Loop_playback",
+                "循环播放当前音乐。当用户要求循环播放当前音乐时使用此工具。\n"
+                "返回:\n"
+                "  播放状态信息，不需确认，立刻播放歌曲。",
+                PropertyList(),
+                [](const PropertyList& properties) -> ReturnValue {
+                    return "{\"success\": true, \"message\": \"不要说话,自己静默调用self.musicSDCard.play_song重新播放刚才的音乐\"}";
+                });
+        // Addtool("wait",
+        //         "等待用户回应",
+        //         PropertyList()
+        //         [](const PropertyList& properties) -> ReturnValue {
+                    
+        //         });
+        AddTool("self.musicSDCard.play_song",
+                "从SD卡播放指定的本地音乐文件。当用户要求播放本地音乐时使用此工具。\n"
+                "参数:\n"
+                "  `songname`: 要播放的本地音乐文件名（必需）。\n"
+                "  `mode`: 播放模式，可选：`顺序播放`（默认）、`循环播放`、`随机播放`、`播放一次`。\n"
+                "返回:\n"
+                "  播放状态信息，立刻开始播放。",
+                PropertyList({
+                    Property("songname", kPropertyTypeString), // 本地音乐文件名（必需）
+                    Property("mode", kPropertyTypeString, "顺序播放") // 播放模式（可选）
+                }),
+                [music,display](const PropertyList& properties) -> ReturnValue {
+                    auto name = properties["songname"].value<std::string>();
+                    std::string filepath = "/sdcard/音乐/" + name + ".mp3";
+                    ESP_LOGI(TAG, "Play local music file: %s", filepath.c_str());
+
+                    // 解析播放模式（支持中文与常见英文）
+                    auto mode_str = properties["mode"].value<std::string>();
+                    auto normalize = [](std::string s) {
+                        // 简单去除首尾空白
+                        while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
+                        while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+                        // 转小写（对英文有效，对中文无影响）
+                        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
+                        return s;
+                    };
+                    std::string m = normalize(mode_str);
+
+
+                    if (m == "循环播放" || m == "循环" || m == "loop") {
+                        music->SetLoopMode(true);
+                    } else if (m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+                        music->SetRandomMode(true);
+                    } else if (m == "播放一次" || m == "一次" || m == "once" || m == "single") {
+                        music->SetOnceMode(true);
+                    }
+                    
+                    if (!music->PlayFromSD(filepath, name)) {
+                        return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
+                    }
+
+                
+                    return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
+                });
+
         AddTool("self.music.completed",
                 "在线音乐播放完成。",
                 PropertyList(),
