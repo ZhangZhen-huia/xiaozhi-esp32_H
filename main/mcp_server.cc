@@ -255,7 +255,25 @@ void McpServer::AddCommonTools() {
                 
                     return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
                 });
+        AddTool("playlist",
+                "播放预设的播放列表。当用户要求播放特定类型的音乐时使用此工具。\n"
+                "参数:\n"
+                "  `playlist_name`: 要播放的播放列表名称,非必须,默认为默认列表。\n"
+                "返回:\n"
+                "  播放状态信息，立刻开始播放。",
+                PropertyList({
+                    Property("playlist_name", kPropertyTypeString,"DefaultMusicList") // 播放列表名称（必需）
+                }),
+                [music,display](const PropertyList& properties) -> ReturnValue {
+                    auto playlist_name = properties["playlist_name"].value<std::string>();
+                    ESP_LOGI(TAG, "Play playlist: %s", playlist_name.c_str());
 
+                    if (!music->PlayPlaylist(playlist_name)) {
+                        return "{\"success\": false, \"message\": \"播放列表失败\"}";
+                    }
+
+                    return "{\"success\": true, \"message\": \"播放列表开始播放\"}";
+                });
         AddTool("self.music.completed",
                 "在线音乐播放完成。",
                 PropertyList(),

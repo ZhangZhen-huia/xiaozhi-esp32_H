@@ -16,12 +16,8 @@ extern "C" {
 #include "mp3dec.h"
 }
 
-
-
 #define MUSIC_EVENT_LOADED (1 << 0)
 #define MUSIC_EVENT_COMPLETED (1 << 1)
-
-
 
 // 音频数据块结构
 struct AudioChunk {
@@ -32,18 +28,13 @@ struct AudioChunk {
     AudioChunk(uint8_t* d, size_t s) : data(d), size(s) {}
 };
 
-struct MusicFileInfo {
-    std::string file_path;
-    std::string file_name;
-    std::string song_name;
-    std::string artist;
-    std::string album;
-    size_t file_size;
-    int duration; // 秒
+// 播放列表结构
+struct Playlist {
+    std::string name;
+    std::vector<std::string> file_paths;
     
-    MusicFileInfo() : file_size(0), duration(0) {}
+    Playlist(const std::string& n = "") : name(n) {}
 };
-
 
 class Esp32Music : public Music {
 public:
@@ -67,7 +58,6 @@ private:
     bool song_name_displayed_;
     
     std::string current_cover_url_;
-    // std::string cover_content_;
 
     // 歌词相关
     std::string current_lyric_url_;
@@ -95,8 +85,8 @@ private:
     std::mutex buffer_mutex_;
     std::condition_variable buffer_cv_;
     size_t buffer_size_;
-    static constexpr size_t MAX_BUFFER_SIZE = 256 * 1024;  // 256KB缓冲区（降低以减少brownout风险）
-    static constexpr size_t MIN_BUFFER_SIZE = 32 * 1024;   // 32KB最小播放缓冲（降低以减少brownout风险）
+    static constexpr size_t MAX_BUFFER_SIZE = 256 * 1024;  // 256KB缓冲区
+    static constexpr size_t MIN_BUFFER_SIZE = 32 * 1024;   // 32KB最小播放缓冲
     
     // MP3解码器相关
     HMP3Decoder mp3_decoder_;
@@ -126,10 +116,25 @@ private:
     int16_t* final_pcm_data_fft = nullptr;
 
     std::vector<MusicFileInfo> music_library_;
+    mutable std::mutex music_library_mutex_;
+    std::atomic<bool> music_library_scanned_;
+    const std::string default_musiclist = "DefaultMusicList";
+    std::vector<Playlist> playlists_;  // 使用简单的容器数组替代map
     
     // SD卡读取线程
     void ReadFromSDCard(const std::string& file_path);
     bool StartSDCardStreaming(const std::string& file_path);
+
+    void ScanDirectoryRecursive(const std::string& path);
+    bool IsMusicFile(const std::string& file_path) const;
+    MusicFileInfo ExtractMusicInfo(const std::string& file_path) const;
+    std::string ExtractSongNameFromFileName(const std::string& file_name) const;
+    std::vector<MusicFileInfo> SearchMusic(const std::string& keyword) const;
+    std::vector<std::string> GetPlaylistNames() const;
+    std::vector<MusicFileInfo> GetPlaylist(const std::string& playlist_name) const;
+    
+    // 播放列表辅助方法
+    int FindPlaylistIndex(const std::string& name) const;
 
 public:
     Esp32Music();
@@ -155,6 +160,14 @@ public:
     virtual void SetRandomMode(bool random)override;
     virtual void SetOnceMode(bool once)override;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
+
+    virtual bool ScanMusicLibrary(const std::string& music_folder)override;
+    virtual size_t GetMusicCount() const override{ return music_library_.size(); }
+    virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
+    virtual std::vector<MusicFileInfo> GetMusicLibrary() const override;
+    virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) override;
+    virtual bool PlayPlaylist(const std::string& playlist_name) override;
+    virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files)override;
 };
 
 #endif // ESP32_MUSIC_H

@@ -3,6 +3,19 @@
 
 #include <string>
 
+struct MusicFileInfo {
+    std::string file_path;
+    std::string file_name;
+    std::string song_name;
+    std::string artist;
+    std::string album;
+    size_t file_size;
+    int duration; // 秒
+    
+    MusicFileInfo() : file_size(0), duration(0) {}
+};
+
+
 class Music {
 public:
     virtual ~Music() = default;  // 添加虚析构函数
@@ -22,6 +35,14 @@ public:
     virtual void SetLoopMode(bool loop) = 0;
     virtual void SetRandomMode(bool random) = 0;
     virtual void SetOnceMode(bool once) = 0;
+
+    virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
+    virtual size_t GetMusicCount() const = 0;
+    virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const = 0;
+    virtual std::vector<MusicFileInfo> GetMusicLibrary() const = 0;
+    virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) = 0;
+    virtual bool PlayPlaylist(const std::string& playlist_name) = 0;
+    virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files) = 0;
 };
 
 #endif // MUSIC_H 

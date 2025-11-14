@@ -12,6 +12,8 @@
 #include <esp_timer.h>
 #include <mbedtls/sha256.h>
 #include <cJSON.h>
+#include "dirent.h"
+#include "stdio.h"
 #include <cstring>
 #include <chrono>
 #include <sstream>
@@ -1071,6 +1073,8 @@ void Esp32Music::PlayAudioStream() {
     //顺序播放模式
     else{
         ESP_LOGI(TAG, "Order playback mode active, selecting next order track");
+        std::string msg = "静默调用工具playlist";
+        app.SendMessage(msg);
     }
     
 }
@@ -1762,6 +1766,15 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
         return false;
     }
     
+        // 检查文件格式
+    std::string extension = get_file_extension(file_path);
+    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+    
+    if (extension != "mp3" && extension != "MP3") {
+        ESP_LOGW(TAG, "File format may not be supported: %s", extension.c_str());
+        // 继续尝试播放，让解码器处理
+    }
+
     ESP_LOGI(TAG, "SD card file size: %d bytes", file_size);
     
     // 保存歌名用于显示
@@ -1919,4 +1932,336 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
 
 
 
+// ========== SD卡音乐库扫描功能 ==========
 
+bool Esp32Music::ScanMusicLibrary(const std::string& music_folder) {
+    ESP_LOGI(TAG, "Scanning music library from: %s", music_folder.c_str());
+    
+    // 检查目录是否存在
+    if (!file_exists(music_folder)) {
+        ESP_LOGE(TAG, "Music folder does not exist: %s", music_folder.c_str());
+        return false;
+    }
+    
+    if (!is_directory(music_folder)) {
+        ESP_LOGE(TAG, "Path is not a directory: %s", music_folder.c_str());
+        return false;
+    }
+    
+    // 清空现有音乐库
+    {
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        music_library_.clear();
+        music_library_scanned_ = false;
+    }
+    
+    // 递归扫描目录
+    ScanDirectoryRecursive(music_folder);
+    
+    // 更新扫描状态
+    {
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        music_library_scanned_ = true;
+    }
+    
+    ESP_LOGI(TAG, "Music library scan completed, found %d music files", music_library_.size());
+    return true;
+}
+
+
+void Esp32Music::ScanDirectoryRecursive(const std::string& path) {
+    DIR* dir = opendir(path.c_str());
+    if (!dir) {
+        ESP_LOGE(TAG, "Failed to open directory: %s", path.c_str());
+        return;
+    }
+    
+    struct dirent* entry;
+    int file_count = 0;
+    int dir_count = 0;
+    
+    while ((entry = readdir(dir)) != nullptr) {
+        // 跳过 "." 和 ".."
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
+            continue;
+        }
+        
+        std::string full_path = path + "/" + entry->d_name;
+        
+        //如果是目录，递归扫描
+        if (entry->d_type == DT_DIR) {
+            // 递归扫描子目录
+            ESP_LOGD(TAG, "Scanning subdirectory: %s", full_path.c_str());
+            ScanDirectoryRecursive(full_path);
+            dir_count++;
+        } 
+        //如果是文件，检查是否是音乐文件
+        else if (entry->d_type == DT_REG) {
+            // 检查是否是音乐文件
+            if (IsMusicFile(full_path)) {
+                MusicFileInfo music_info = ExtractMusicInfo(full_path);
+                
+                std::lock_guard<std::mutex> lock(music_library_mutex_);
+                music_library_.push_back(music_info);
+                
+                file_count++;
+                
+                // 每扫描10个文件打印一次进度
+                if (file_count % 10 == 0) {
+                    ESP_LOGI(TAG, "Scanned %d music files...", file_count);
+                }
+                
+                ESP_LOGD(TAG, "Found music file: %s (%d bytes)", 
+                        music_info.file_name.c_str(), music_info.file_size);
+            }
+        }
+    }
+    
+    closedir(dir);
+    
+    ESP_LOGD(TAG, "Scanned directory %s: %d files, %d subdirectories", 
+             path.c_str(), file_count, dir_count);
+}
+
+
+bool Esp32Music::IsMusicFile(const std::string& file_path) const {
+    std::string extension = get_file_extension(file_path);
+    std::transform(extension.begin(), extension.end(), extension.begin(), ::tolower);
+    
+    // 支持的音乐文件格式
+    const char* music_extensions[] = {
+        "mp3", "wav", "flac", "aac", "m4a", "ogg", "wma", nullptr
+    };
+    
+    for (int i = 0; music_extensions[i] != nullptr; i++) {
+        if (extension == music_extensions[i]) {
+            return true;
+        }
+    }
+    
+    return false;
+}
+
+
+MusicFileInfo Esp32Music::ExtractMusicInfo(const std::string& file_path) const {
+    MusicFileInfo info;
+    info.file_path = file_path;
+    
+    // 从文件路径提取文件名
+    size_t last_slash = file_path.find_last_of('/');
+    if (last_slash != std::string::npos) {
+        info.file_name = file_path.substr(last_slash + 1);
+    } else {
+        info.file_name = file_path;
+    }
+    
+    // 从文件名提取歌曲名（去除扩展名）
+    size_t last_dot = info.file_name.find_last_of('.');
+    if (last_dot != std::string::npos) {
+        info.song_name = info.file_name.substr(0, last_dot);
+    } else {
+        info.song_name = info.file_name;
+    }
+    
+    // 进一步清理歌曲名（去除常见的前缀和后缀）
+    info.song_name = ExtractSongNameFromFileName(info.song_name);
+    
+    // 获取文件大小
+    info.file_size = get_file_size(file_path);
+    
+    // 这里可以添加ID3标签解析来获取更准确的元数据
+    // 目前先使用文件名作为歌曲名
+    
+    ESP_LOGD(TAG, "Extracted music info: %s -> %s (%d bytes)", 
+             info.file_name.c_str(), info.song_name.c_str(), info.file_size);
+    
+    return info;
+}
+
+
+std::string Esp32Music::ExtractSongNameFromFileName(const std::string& file_name) const {
+    std::string song_name = file_name;
+    
+    // 去除常见的数字前缀 (如 "01 - ", "001.", etc.)
+    size_t dash_pos = song_name.find(" - ");
+    if (dash_pos != std::string::npos && dash_pos < 10) {
+        // 检查前缀是否是数字
+        bool is_numeric_prefix = true;
+        for (size_t i = 0; i < dash_pos; i++) {
+            if (!isdigit(song_name[i]) && song_name[i] != ' ' && song_name[i] != '.') {
+                is_numeric_prefix = false;
+                break;
+            }
+        }
+        if (is_numeric_prefix) {
+            song_name = song_name.substr(dash_pos + 3);
+        }
+    }
+    
+    // 去除文件扩展名和路径相关的后缀
+    const char* suffixes[] = {
+        ".mp3", ".wav", ".flac", ".aac", ".m4a", ".ogg", ".wma",
+        " (Official Video)", " [Official Audio]", " (Audio)", 
+        " [Lyrics]", " (Lyrics)", " - Official", nullptr
+    };
+    
+    for (int i = 0; suffixes[i] != nullptr; i++) {
+        size_t pos = song_name.find(suffixes[i]);
+        if (pos != std::string::npos) {
+            song_name = song_name.substr(0, pos);
+        }
+    }
+    
+    // 去除首尾空格
+    size_t start = song_name.find_first_not_of(" \t\n\r");
+    size_t end = song_name.find_last_not_of(" \t\n\r");
+    if (start != std::string::npos && end != std::string::npos) {
+        song_name = song_name.substr(start, end - start + 1);
+    }
+    
+    return song_name;
+}
+
+
+MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
+    for (const auto& music_info : music_library_) {
+        if (music_info.file_path == file_path) {
+            return music_info;
+        }
+    }
+    
+    // 如果没有找到，返回一个空的MusicFileInfo
+    return MusicFileInfo();
+}
+
+
+std::vector<MusicFileInfo> Esp32Music::SearchMusic(const std::string& keyword) const {
+    std::vector<MusicFileInfo> results;
+    std::string lower_keyword = keyword;
+    std::transform(lower_keyword.begin(), lower_keyword.end(), lower_keyword.begin(), ::tolower);
+    
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
+    for (const auto& music_info : music_library_) {
+        std::string lower_song_name = music_info.song_name;
+        std::transform(lower_song_name.begin(), lower_song_name.end(), lower_song_name.begin(), ::tolower);
+        
+        std::string lower_file_name = music_info.file_name;
+        std::transform(lower_file_name.begin(), lower_file_name.end(), lower_file_name.begin(), ::tolower);
+        
+        if (lower_song_name.find(lower_keyword) != std::string::npos ||
+            lower_file_name.find(lower_keyword) != std::string::npos) {
+            results.push_back(music_info);
+        }
+    }
+    
+    ESP_LOGI(TAG, "Search for '%s' found %d results", keyword.c_str(), results.size());
+    return results;
+}
+
+std::vector<MusicFileInfo> Esp32Music::GetMusicLibrary() const {
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    return music_library_;
+}
+
+
+
+// ========== 播放列表功能实现 ==========
+
+int Esp32Music::FindPlaylistIndex(const std::string& name) const {
+    for (size_t i = 0; i < playlists_.size(); i++) {
+        if (playlists_[i].name == name) {
+            return i;
+        }
+    }
+    return -1;
+}
+
+bool Esp32Music::CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) {
+    if (playlist_name.empty()) {
+        ESP_LOGE(TAG, "Playlist name cannot be empty");
+        return false;
+    }
+
+    // 检查文件是否存在
+    for (const auto& file_path : file_paths) {
+        if (!file_exists(file_path)) {
+            ESP_LOGW(TAG, "File does not exist: %s", file_path.c_str());
+        }
+    }
+
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
+    // 检查播放列表是否已存在
+    if (FindPlaylistIndex(playlist_name) != -1) {
+        ESP_LOGE(TAG, "Playlist already exists: %s", playlist_name.c_str());
+        return false;
+    }
+    
+    // 创建新播放列表
+    Playlist new_playlist(playlist_name);
+    new_playlist.file_paths = file_paths;
+    
+    playlists_.push_back(new_playlist);
+    
+    ESP_LOGI(TAG, "Created playlist '%s' with %d songs", playlist_name.c_str(), file_paths.size());
+    return true;
+}
+
+bool Esp32Music::PlayPlaylist(const std::string& playlist_name) {
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    static int play_count = 0;
+    int index = FindPlaylistIndex(playlist_name);
+    if (index == -1) {
+        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
+        return false;
+    }
+    
+    const auto& playlist = playlists_[index];
+    if (playlist.file_paths.empty()) {
+        ESP_LOGE(TAG, "Playlist is empty: %s", playlist_name.c_str());
+        return false;
+    }
+
+    bool result = PlayFromSD(playlist.file_paths[play_count]);
+    play_count++;
+    return result;
+}
+
+std::vector<std::string> Esp32Music::GetPlaylistNames() const {
+    std::vector<std::string> names;
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
+    for (const auto& playlist : playlists_) {
+        names.push_back(playlist.name);
+    }
+    
+    return names;
+}
+
+std::vector<MusicFileInfo> Esp32Music::GetPlaylist(const std::string& playlist_name) const {
+    std::vector<MusicFileInfo> playlist_info;
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
+    int index = FindPlaylistIndex(playlist_name);
+    if (index == -1) {
+        return playlist_info;
+    }
+    
+    const auto& playlist = playlists_[index];
+    for (const auto& file_path : playlist.file_paths) {
+        MusicFileInfo info = GetMusicInfo(file_path);
+        if (!info.file_path.empty()) {
+            playlist_info.push_back(info);
+        }
+    }
+    
+    return playlist_info;
+}
+
+void Esp32Music::AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files) {
+    ESP_LOGI(TAG, "Adding music to default playlists");
+    CreatePlaylist(default_musiclist, default_music_files);
+}
