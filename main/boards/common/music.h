@@ -15,6 +15,12 @@ struct MusicFileInfo {
     MusicFileInfo() : file_size(0), duration(0) {}
 };
 
+enum PlaybackMode {
+    PLAYBACK_MODE_ONCE = 0,     // 播放一次
+    PLAYBACK_MODE_LOOP = 1,      // 循环播放
+    PLAYBACK_MODE_RANDOM = 2,     // 随机播放
+    PLAYBACK_MODE_ORDER = 3       // 顺序播放
+};
 
 class Music {
 public:
@@ -35,14 +41,24 @@ public:
     virtual void SetLoopMode(bool loop) = 0;
     virtual void SetRandomMode(bool random) = 0;
     virtual void SetOnceMode(bool once) = 0;
-
+    virtual void SetOrderMode(bool order) = 0;
     virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
     virtual size_t GetMusicCount() const = 0;
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const = 0;
     virtual std::vector<MusicFileInfo> GetMusicLibrary() const = 0;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) = 0;
-    virtual bool PlayPlaylist(const std::string& playlist_name) = 0;
+    virtual bool PlayPlaylist(std::string& playlist_name) = 0;
     virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files) = 0;
+    virtual int SearchMusicIndexFromlist(std::string name, const std::string& playlist_name) const = 0;
+    virtual void SetPlayIndex(std::string& playlist_name, int index) = 0;
+    virtual void NextPlayIndexOrder(std::string& playlist_name) = 0;
+    virtual void NextPlayIndexRandom(std::string& playlist_name) = 0;
+    virtual std::string GetCurrentPlayList(void) = 0;
+    virtual PlaybackMode GetPlaybackMode()  = 0;
+    virtual int GetLastPlayIndex(std::string& playlist_name) = 0;
+    virtual void AddMusicToPlaylist(const std::string& playlist_name, std::vector<std::string> music_files) = 0;
+    virtual bool CreatePlaylist(const std::string& playlist_name) = 0;
+    virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const = 0;
 };
 
 #endif // MUSIC_H 

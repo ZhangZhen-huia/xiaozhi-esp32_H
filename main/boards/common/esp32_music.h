@@ -32,7 +32,8 @@ struct AudioChunk {
 struct Playlist {
     std::string name;
     std::vector<std::string> file_paths;
-    
+    int play_index = 0;
+    int last_play_index = 0;
     Playlist(const std::string& n = "") : name(n) {}
 };
 
@@ -43,12 +44,7 @@ public:
         DISPLAY_MODE_SPECTRUM = 1,  // 默认显示频谱
         DISPLAY_MODE_LYRICS = 0     // 显示歌词
     };
-    enum PlaybackMode {
-        PLAYBACK_MODE_ONCE = 0,     // 播放一次
-        PLAYBACK_MODE_LOOP = 1,      // 循环播放
-        PLAYBACK_MODE_RANDOM = 2,     // 随机播放
-        PLAYBACK_MODE_ORDER = 3       // 顺序播放
-    };
+
 private:
     EventGroupHandle_t event_group_ = nullptr; 
 
@@ -119,7 +115,9 @@ private:
     mutable std::mutex music_library_mutex_;
     std::atomic<bool> music_library_scanned_;
     const std::string default_musiclist = "DefaultMusicList";
-    std::vector<Playlist> playlists_;  // 使用简单的容器数组替代map
+    std::vector<Playlist> playlists_;  // 使用简单的容器数组存储歌单
+    std::string current_playlist_name_;
+    // int play_index_ = 0;
     
     // SD卡读取线程
     void ReadFromSDCard(const std::string& file_path);
@@ -159,6 +157,7 @@ public:
     virtual void SetLoopMode(bool loop)override;
     virtual void SetRandomMode(bool random)override;
     virtual void SetOnceMode(bool once)override;
+    virtual void SetOrderMode(bool order)override;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
 
     virtual bool ScanMusicLibrary(const std::string& music_folder)override;
@@ -166,8 +165,19 @@ public:
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
     virtual std::vector<MusicFileInfo> GetMusicLibrary() const override;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) override;
-    virtual bool PlayPlaylist(const std::string& playlist_name) override;
+    virtual bool CreatePlaylist(const std::string& playlist_name)override;
+    virtual bool PlayPlaylist(std::string& playlist_name) override;
     virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files)override;
+    virtual int SearchMusicIndexFromlist(std::string name, const std::string& playlist_name) const override;
+
+    virtual void SetPlayIndex(std::string& playlist_name, int index)override;
+    virtual void NextPlayIndexOrder(std::string& playlist_name)override;
+    virtual void NextPlayIndexRandom(std::string& playlist_name)override;
+    virtual std::string GetCurrentPlayList(void)override;
+    virtual PlaybackMode GetPlaybackMode() override;
+    virtual int GetLastPlayIndex(std::string& playlist_name)override;
+    virtual void AddMusicToPlaylist(const std::string& playlist_name, std::vector<std::string> music_files)override;
+    virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const override;
 };
 
 #endif // ESP32_MUSIC_H

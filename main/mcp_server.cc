@@ -151,52 +151,42 @@ void McpServer::AddCommonTools() {
 #endif
     auto music = board.GetMusic();
     if (music) {
-        AddTool("self.music.play_song",
-                "播放指定的歌曲。当用户要求播放音乐时使用此工具，会自动获取歌曲详情并开始流式播放。\n"
-                "参数:\n"
-                "  `song_name`: 要播放的歌曲名称（必需）。\n"
-                "  `artist_name`: 要播放的歌曲艺术家名称（可选，默认为空字符串）。\n"
-                "返回:\n"
-                "  播放状态信息，不需确认，立刻播放歌曲。",
-                PropertyList({
-                    Property("song_name", kPropertyTypeString),//歌曲名称（必需）
-                    Property("artist_name", kPropertyTypeString, "")//艺术家名称（可选，默认为空字符串）
-                }),
-                [music,display](const PropertyList& properties) -> ReturnValue {
-                auto song_name = properties["song_name"].value<std::string>();
-                auto artist_name = properties["artist_name"].value<std::string>();
-                 if (!music->Download(song_name, artist_name)) {
-                    return "{\"success\": false, \"message\": \"获取音乐资源失败\"}";
-                }
-                auto download_result = music->GetDownloadResult();
-                ESP_LOGI(TAG, "Music details result: %s", download_result.c_str());
-                if(music->WaitForMusicLoaded())
-                {
-                    // 切换到在线音乐界面
-                    if(display->onlinemusic_screen_ == nullptr) {
-                        display->OnlineMusicUI();
-                        lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+        // AddTool("self.music.play_song",
+        //         "播放指定的歌曲。当用户要求播放音乐时使用此工具，会自动获取歌曲详情并开始流式播放。\n"
+        //         "参数:\n"
+        //         "  `song_name`: 要播放的歌曲名称（必需）。\n"
+        //         "  `artist_name`: 要播放的歌曲艺术家名称（可选，默认为空字符串）。\n"
+        //         "返回:\n"
+        //         "  播放状态信息，不需确认，立刻播放歌曲。",
+        //         PropertyList({
+        //             Property("song_name", kPropertyTypeString),//歌曲名称（必需）
+        //             Property("artist_name", kPropertyTypeString, "")//艺术家名称（可选，默认为空字符串）
+        //         }),
+        //         [music,display](const PropertyList& properties) -> ReturnValue {
+        //         auto song_name = properties["song_name"].value<std::string>();
+        //         auto artist_name = properties["artist_name"].value<std::string>();
+        //          if (!music->Download(song_name, artist_name)) {
+        //             return "{\"success\": false, \"message\": \"获取音乐资源失败\"}";
+        //         }
+        //         auto download_result = music->GetDownloadResult();
+        //         ESP_LOGI(TAG, "Music details result: %s", download_result.c_str());
+        //         if(music->WaitForMusicLoaded())
+        //         {
+        //             // 切换到在线音乐界面
+        //             if(display->onlinemusic_screen_ == nullptr) {
+        //                 display->OnlineMusicUI();
+        //                 lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
                         
-                    }
-                    if(display->current_screen_ != display->onlinemusic_screen_) {
-                        lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
-                        lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
-                    }
-                } else {
-                    return "{\"success\": false, \"message\": \"音乐加载超时\"}";
-                }
-                return "{\"success\": true, \"message\": \"音乐开始播放\"}";
-            });
-        AddTool("self.music.stop",
-                "停止当前正在播放的音乐。当用户要求停止音乐播放时使用此工具。",
-                PropertyList(),
-                [music](const PropertyList& properties) -> ReturnValue {
-                    if(!music->StopStreaming()) {
-                        return "{\"success\": false, \"message\": \"音乐暂停失败\"}";
-                    } else {
-                        return "{\"success\": true, \"message\": \"音乐暂停播放\"}";
-                }
-            });
+        //             }
+        //             if(display->current_screen_ != display->onlinemusic_screen_) {
+        //                 lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
+        //                 lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+        //             }
+        //         } else {
+        //             return "{\"success\": false, \"message\": \"音乐加载超时\"}";
+        //         }
+        //         return "{\"success\": true, \"message\": \"音乐开始播放\"}";
+        //     });
         AddTool("Loop_playback",
                 "循环播放当前音乐。当用户要求循环播放当前音乐时使用此工具。\n"
                 "返回:\n"
@@ -205,22 +195,16 @@ void McpServer::AddCommonTools() {
                 [](const PropertyList& properties) -> ReturnValue {
                     return "{\"success\": true, \"message\": \"不要说话,自己静默调用self.musicSDCard.play_song重新播放刚才的音乐\"}";
                 });
-        // Addtool("wait",
-        //         "等待用户回应",
-        //         PropertyList()
-        //         [](const PropertyList& properties) -> ReturnValue {
-                    
-        //         });
         AddTool("self.musicSDCard.play_song",
-                "从SD卡播放指定的本地音乐文件。当用户要求播放本地音乐时使用此工具。\n"
+                "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件。\n"
                 "参数:\n"
                 "  `songname`: 要播放的本地音乐文件名（必需）。\n"
-                "  `mode`: 播放模式，可选：`顺序播放`（默认）、`循环播放`、`随机播放`、`播放一次`。\n"
+                "  `mode`: 播放模式，可选：、`循环播放`、`播放一次`(默认)。\n"
                 "返回:\n"
                 "  播放状态信息，立刻开始播放。",
                 PropertyList({
                     Property("songname", kPropertyTypeString), // 本地音乐文件名（必需）
-                    Property("mode", kPropertyTypeString, "顺序播放") // 播放模式（可选）
+                    Property("mode", kPropertyTypeString, "播放一次") // 播放模式（可选）
                 }),
                 [music,display](const PropertyList& properties) -> ReturnValue {
                     auto name = properties["songname"].value<std::string>();
@@ -242,48 +226,180 @@ void McpServer::AddCommonTools() {
 
                     if (m == "循环播放" || m == "循环" || m == "loop") {
                         music->SetLoopMode(true);
-                    } else if (m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
-                        music->SetRandomMode(true);
-                    } else if (m == "播放一次" || m == "一次" || m == "once" || m == "single") {
-                        music->SetOnceMode(true);
+                        if (!music->PlayFromSD(filepath, name)) {
+                            return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
+                        }
                     }
-                    
-                    if (!music->PlayFromSD(filepath, name)) {
-                        return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
+                    else if(m=="播放一次" || m=="一次" || m=="once" || m=="single") 
+                    {
+                        if (!music->PlayFromSD(filepath, name)) {
+                            return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
+                        }
                     }
-
-                
                     return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
                 });
         AddTool("playlist",
-                "播放预设的播放列表。当用户要求播放特定类型的音乐时使用此工具。\n"
+                "当用户没有指定播放歌曲时或者想要播放某个音乐歌单或者从哪个歌曲开始播放时调用此工具\n"
                 "参数:\n"
-                "  `playlist_name`: 要播放的播放列表名称,非必须,默认为默认列表。\n"
+                "  `playlist_name`: 要播放的播放列表名称,非必须,默认为默认歌单。\n"
+                "  `start_song`: 从播放列表中的哪首歌开始播放,非必须,默认为空字符串，从第一首开始播放。\n"
+                "  `mode`: 播放模式，可选：`顺序播放`、`随机播放`\n"
                 "返回:\n"
                 "  播放状态信息，立刻开始播放。",
                 PropertyList({
-                    Property("playlist_name", kPropertyTypeString,"DefaultMusicList") // 播放列表名称（必需）
+                    Property("playlist_name", kPropertyTypeString,"DefaultMusicList"), // 播放列表名称（可选）
+                    Property("start_song", kPropertyTypeString,""), // 从播放列表中的哪首歌开始播放（可选）
+                    Property("mode", kPropertyTypeString,"顺序播放") // 播放模式（可选）
                 }),
                 [music,display](const PropertyList& properties) -> ReturnValue {
                     auto playlist_name = properties["playlist_name"].value<std::string>();
+                    auto start_song = properties["start_song"].value<std::string>();
+
                     ESP_LOGI(TAG, "Play playlist: %s", playlist_name.c_str());
-
-                    if (!music->PlayPlaylist(playlist_name)) {
-                        return "{\"success\": false, \"message\": \"播放列表失败\"}";
+                    
+                    // 解析播放模式（支持中文与常见英文）
+                    auto mode_str = properties["mode"].value<std::string>();
+                    auto normalize = [](std::string s) {
+                        // 简单去除首尾空白
+                        while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
+                        while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+                        // 转小写（对英文有效，对中文无影响）
+                        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
+                        return s;
+                    };
+                    int index = 0;
+                    std::string m = normalize(mode_str);
+                    if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+                        music->SetRandomMode(true);
                     }
-
+                    else {//默认顺序播放
+                        music->SetOrderMode(true);
+                    }
+                    //从指定音乐开始播放
+                    if(!start_song.empty()) {
+                            ESP_LOGI(TAG, "Start from song: %s", start_song.c_str());
+                            auto index = music->SearchMusicIndexFromlist(start_song, playlist_name);
+                            if(index >=0 ) {
+                                music->SetPlayIndex(playlist_name, index);
+                                if(!music->PlayPlaylist(playlist_name) )
+                                    return "{\"success\": false, \"message\": \"播放列表失败\"}";
+                            }
+                    }
+                    //这里就是从上次播放的音乐开始播放
+                    else {
+                            if(!music->PlayPlaylist(playlist_name) )
+                                    return "{\"success\": false, \"message\": \"播放列表失败\"}";
+                        }
                     return "{\"success\": true, \"message\": \"播放列表开始播放\"}";
                 });
-        AddTool("self.music.completed",
-                "在线音乐播放完成。",
+        // AddTool("listtool",
+        //         "歌单播放工具\n"
+        //         "返回:\n"
+        //         "直接播放，不需要确认。",
+        //         PropertyList(),
+        //         [music](const PropertyList& properties) -> ReturnValue {
+        //             auto list = music->GetCurrentPlayList();
+        //             if(music->PlayPlaylist(list))
+        //             {
+        //                 return "{\"success\": true, \"message\": \"播放成功\"}";
+        //             }
+        //             return "{\"success\": false, \"message\": \"播放失败\"}";
+        //     });
+        AddTool("nextmusic",
+                "下一首音乐播放工具\n"
+                "返回:\n"
+                "直接播放，不需要确认。",
                 PropertyList(),
-                [display](const PropertyList& properties) -> ReturnValue {
-                    if(display->current_screen_ == display->onlinemusic_screen_) {
-                        lv_obj_add_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
-                        lv_obj_clear_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
+                [music](const PropertyList& properties) -> ReturnValue {
+                    auto list = music->GetCurrentPlayList();
+                    auto mode = music->GetPlaybackMode();
+                    if(mode == PLAYBACK_MODE_ORDER)
+                        music->NextPlayIndexOrder(list);
+                    else if(mode == PLAYBACK_MODE_RANDOM)
+                        music->NextPlayIndexRandom(list);
+                    else if(mode == PLAYBACK_MODE_LOOP)
+                    {
+                        // 在循环模式下，保持当前索引不变即可
                     }
-                    return true;
+                    if(music->PlayPlaylist(list))
+                    {
+                        return "{\"success\": true, \"message\": \"下一首播放成功\"}";
+                    }
+                    return "{\"success\": false, \"message\": \"下一首播放失败\"}";
             });
+        AddTool("previousmusic",
+                "上一首音乐播放工具\n"
+                "返回:\n"
+                "直接播放，不需要确认。",
+                PropertyList(),
+                [music](const PropertyList& properties) -> ReturnValue {
+                    auto list = music->GetCurrentPlayList();
+                    auto mode = music->GetPlaybackMode();
+                    int index = music->GetLastPlayIndex(list);
+                    if(index >0)
+                        music->SetPlayIndex(list, index);
+                    else
+                        music->SetPlayIndex(list, 0);
+
+                    if(music->PlayPlaylist(list))
+                    {
+                        return "{\"success\": true, \"message\": \"上一首播放成功\"}";
+                    }
+                    return "{\"success\": false, \"message\": \"上一首播放失败\"}";
+            });
+        AddTool("addmusictolist",
+                "把某个音乐加入某个歌单时调用\n"
+                "参数:\n"
+                "  `playlist_name`: 要添加到的播放列表名称,默认为默认歌单。(非必须)\n"
+                "  `songname`: 要添加的本地音乐文件名，支持多个，用逗号分隔（非必需）。\n"
+                "返回:\n"
+                "  添加状态信息，立刻添加。",
+                PropertyList({
+                    Property("playlist_name", kPropertyTypeString,"DefaultMusicList"), // 播放列表名称（可选）
+                    Property("songname", kPropertyTypeString,"") // 要添加的本地音乐文件名（必需）
+                }),
+                [music](const PropertyList& properties) -> ReturnValue {
+                    auto playlist_name = properties["playlist_name"].value<std::string>();
+                    
+                    auto song_name = properties["songname"].value<std::string>();
+                    ESP_LOGI(TAG, "Add song to playlist: %s", playlist_name.c_str());
+                    
+                    if(!song_name.empty()) {
+                        std::vector<std::string> filepaths;
+                        std::stringstream ss(song_name);
+                        std::string item;
+                        while (std::getline(ss, item, ',')) {
+                            //确保歌曲存在于音乐库中
+                            if(music->SearchMusicPathFromlist(item, "DefaultMusicList") != "")
+                            {
+                                filepaths.push_back(music->SearchMusicPathFromlist(item, "DefaultMusicList"));
+                            }
+                        }
+                        music->AddMusicToPlaylist(playlist_name, filepaths);
+                        return "{\"success\": true, \"message\": \"添加音乐到歌单成功\"}";
+                    }
+                    else {
+                        // 仅创建歌单
+                        if(music->CreatePlaylist(playlist_name)) {
+                            return "{\"success\": true, \"message\": \"创建歌单成功\"}";
+                        } else {
+                            return "{\"success\": false, \"message\": \"创建歌单失败\"}";
+                        }
+                    }
+
+                });
+
+
+        // AddTool("self.music.completed",
+        //         "在线音乐播放完成。",
+        //         PropertyList(),
+        //         [display](const PropertyList& properties) -> ReturnValue {
+        //             if(display->current_screen_ == display->onlinemusic_screen_) {
+        //                 lv_obj_add_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+        //                 lv_obj_clear_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
+        //             }
+        //             return true;
+        //     });
     }
 
 
