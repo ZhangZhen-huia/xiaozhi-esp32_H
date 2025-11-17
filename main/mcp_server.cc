@@ -187,124 +187,135 @@ void McpServer::AddCommonTools() {
         //         }
         //         return "{\"success\": true, \"message\": \"音乐开始播放\"}";
         //     });
-        AddTool("Loop_playback",
-                "循环播放当前音乐。当用户要求循环播放当前音乐时使用此工具。\n"
-                "返回:\n"
-                "  播放状态信息，不需确认，立刻播放歌曲。",
-                PropertyList(),
-                [](const PropertyList& properties) -> ReturnValue {
-                    return "{\"success\": true, \"message\": \"不要说话,自己静默调用self.musicSDCard.play_song重新播放刚才的音乐\"}";
-                });
-        AddTool("self.musicSDCard.play_song",
-                "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件。\n"
-                "参数:\n"
-                "  `songname`: 要播放的本地音乐文件名（必需）。\n"
-                "  `mode`: 播放模式，可选：、`循环播放`、`播放一次`(默认)。\n"
-                "返回:\n"
-                "  播放状态信息，立刻开始播放。",
-                PropertyList({
-                    Property("songname", kPropertyTypeString), // 本地音乐文件名（必需）
-                    Property("mode", kPropertyTypeString, "播放一次") // 播放模式（可选）
-                }),
-                [music,display](const PropertyList& properties) -> ReturnValue {
-                    auto name = properties["songname"].value<std::string>();
-                    std::string filepath = "/sdcard/音乐/" + name + ".mp3";
-                    ESP_LOGI(TAG, "Play local music file: %s", filepath.c_str());
+        // AddTool("self.musicSDCard.play_song",
+        //         "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件。\n"
+        //         "参数:\n"
+        //         "  `songname`: 要播放的本地音乐文件名（必需）。\n"
+        //         "  `mode`: 播放模式，可选：、`循环播放`、`播放一次`(默认)。\n"
+        //         "返回:\n"
+        //         "  播放状态信息，立刻开始播放。",
+        //         PropertyList({
+        //             Property("songname", kPropertyTypeString), // 本地音乐文件名（必需）
+        //             Property("mode", kPropertyTypeString, "播放一次") // 播放模式（可选）
+        //         }),
+        //         [music,display](const PropertyList& properties) -> ReturnValue {
+        //             auto name = properties["songname"].value<std::string>();
+        //             std::string filepath = "/sdcard/音乐/" + name + ".mp3";
+        //             ESP_LOGI(TAG, "Play local music file: %s", filepath.c_str());
 
-                    // 解析播放模式（支持中文与常见英文）
-                    auto mode_str = properties["mode"].value<std::string>();
-                    auto normalize = [](std::string s) {
-                        // 简单去除首尾空白
-                        while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
-                        while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
-                        // 转小写（对英文有效，对中文无影响）
-                        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
-                        return s;
-                    };
-                    std::string m = normalize(mode_str);
-
-
-                    if (m == "循环播放" || m == "循环" || m == "loop") {
-                        music->SetLoopMode(true);
-                        if (!music->PlayFromSD(filepath, name)) {
-                            return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
-                        }
-                    }
-                    else if(m=="播放一次" || m=="一次" || m=="once" || m=="single") 
-                    {
-                        if (!music->PlayFromSD(filepath, name)) {
-                            return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
-                        }
-                    }
-                    return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
-                });
+        //             // 解析播放模式（支持中文与常见英文）
+        //             auto mode_str = properties["mode"].value<std::string>();
+        //             auto normalize = [](std::string s) {
+        //                 // 简单去除首尾空白
+        //                 while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
+        //                 while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+        //                 // 转小写（对英文有效，对中文无影响）
+        //                 std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
+        //                 return s;
+        //             };
+        //             std::string m = normalize(mode_str);
+        //             if (m == "循环播放" || m == "循环" || m == "loop") {
+        //                 music->SetLoopMode(true);
+        //                 if (!music->PlayFromSD(filepath, name)) {
+        //                     return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
+        //                 }
+        //             }
+        //             else if(m=="播放一次" || m=="一次" || m=="once" || m=="single") 
+        //             {
+        //                 if (!music->PlayFromSD(filepath, name)) {
+        //                     return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
+        //                 }
+        //             }
+        //             return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
+        //         });
         AddTool("playlist",
                 "当用户没有指定播放歌曲时或者想要播放某个音乐歌单或者从哪个歌曲开始播放时调用此工具\n"
                 "参数:\n"
                 "  `playlist_name`: 要播放的播放列表名称,非必须,默认为默认歌单。\n"
                 "  `start_song`: 从播放列表中的哪首歌开始播放,非必须,默认为空字符串，从第一首开始播放。\n"
-                "  `mode`: 播放模式，可选：`顺序播放`、`随机播放`\n"
+                "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` `单曲播放` `循环播放`\n"
                 "返回:\n"
                 "  播放状态信息，立刻开始播放。",
                 PropertyList({
-                    Property("playlist_name", kPropertyTypeString,"DefaultMusicList"), // 播放列表名称（可选）
+                    Property("playlist_name", kPropertyTypeString,""), // 播放列表名称（可选）
                     Property("start_song", kPropertyTypeString,""), // 从播放列表中的哪首歌开始播放（可选）
                     Property("mode", kPropertyTypeString,"顺序播放") // 播放模式（可选）
                 }),
                 [music,display](const PropertyList& properties) -> ReturnValue {
-                    auto playlist_name = properties["playlist_name"].value<std::string>();
-                    auto start_song = properties["start_song"].value<std::string>();
+                    static int first_call = 1;
+                    if(first_call && (properties["playlist_name"].value<std::string>().empty() &&
+                       properties["start_song"].value<std::string>().empty())) {
 
-                    ESP_LOGI(TAG, "Play playlist: %s", playlist_name.c_str());
-                    
-                    // 解析播放模式（支持中文与常见英文）
-                    auto mode_str = properties["mode"].value<std::string>();
-                    auto normalize = [](std::string s) {
-                        // 简单去除首尾空白
-                        while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
-                        while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
-                        // 转小写（对英文有效，对中文无影响）
-                        std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
-                        return s;
-                    };
-                    int index = 0;
-                    std::string m = normalize(mode_str);
-                    if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
-                        music->SetRandomMode(true);
+                        ESP_LOGI(TAG, "Play Last Playlist and Index");
+                        first_call = 0;
+                        Settings settings("music", true); // 可写命名空间 "music"
+                        auto last_playlist = settings.GetString("last_playlist", "DefaultMusicList");
+                        music->SetPlayIndex(last_playlist, settings.GetInt("last_play_index", 0));
+                        if(!music->PlayPlaylist(last_playlist))
+                            return "{\"success\": false, \"message\": \"播放失败\"}";
+                        music->SetCurrentPlayList(last_playlist);
+                        return "{\"success\": true, \"message\": \"播放成功\"}";
                     }
-                    else {//默认顺序播放
-                        music->SetOrderMode(true);
-                    }
-                    //从指定音乐开始播放
-                    if(!start_song.empty()) {
-                            ESP_LOGI(TAG, "Start from song: %s", start_song.c_str());
-                            auto index = music->SearchMusicIndexFromlist(start_song, playlist_name);
-                            if(index >=0 ) {
-                                music->SetPlayIndex(playlist_name, index);
-                                if(!music->PlayPlaylist(playlist_name) )
-                                    return "{\"success\": false, \"message\": \"播放列表失败\"}";
-                            }
-                    }
-                    //这里就是从上次播放的音乐开始播放
                     else {
-                            if(!music->PlayPlaylist(playlist_name) )
-                                    return "{\"success\": false, \"message\": \"播放列表失败\"}";
+                        auto playlist_name = properties["playlist_name"].value<std::string>();
+                        auto start_song = properties["start_song"].value<std::string>();
+                        first_call = 0;
+                        if(playlist_name.empty())
+                            {
+                                playlist_name = music->GetCurrentPlayList();
+                                if(playlist_name.empty())
+                                    playlist_name = "DefaultMusicList";
+                            }
+                        ESP_LOGI(TAG, "Play playlist: %s", playlist_name.c_str());
+                        music->SetCurrentPlayList(playlist_name);
+                        // 解析播放模式（支持中文与常见英文）
+                        auto mode_str = properties["mode"].value<std::string>();
+                        auto normalize = [](std::string s) {
+                            // 简单去除首尾空白
+                            while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
+                            while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+                            // 转小写（对英文有效，对中文无影响）
+                            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
+                            return s;
+                        };
+                        int index = 0;
+                        std::string m = normalize(mode_str);
+                        if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+                            music->SetRandomMode(true);
+                            ESP_LOGI(TAG, "Set Random Play Mode");
                         }
-                    return "{\"success\": true, \"message\": \"播放列表开始播放\"}";
+                        else if (m == "循环播放" || m== "循环" || m == "loop") {
+                            music->SetLoopMode(true);
+                            ESP_LOGI(TAG, "Set Loop Play Mode");
+                        }
+                        else if( m=="播放一次" || m=="一次" || m=="once" || m=="single" || m== "单曲播放") 
+                        {
+                            music->SetOnceMode(true);
+                            ESP_LOGI(TAG, "Set Once Play Mode");
+                        }
+                        else {//默认顺序播放
+                            music->SetOrderMode(true);
+                            ESP_LOGI(TAG, "Set Order Play Mode");
+                        }
+                        //从指定音乐开始播放
+                        if(!start_song.empty()) {
+                                ESP_LOGI(TAG, "Start from song: %s", start_song.c_str());
+                                auto index = music->SearchMusicIndexFromlist(start_song, playlist_name);
+                                if(index >=0 ) {
+                                    music->SetPlayIndex(playlist_name, index);
+                                    if(!music->PlayPlaylist(playlist_name) )
+                                        return "{\"success\": false, \"message\": \"播放失败\"}";
+                                }
+                        }
+                        //这里就是从上次播放的音乐开始播放
+                        else {
+                                if(!music->PlayPlaylist(playlist_name) )
+                                        return "{\"success\": false, \"message\": \"播放失败\"}";
+                            }
+                        return "{\"success\": true, \"message\": \"播放成功\"}";
+
+                    }
                 });
-        // AddTool("listtool",
-        //         "歌单播放工具\n"
-        //         "返回:\n"
-        //         "直接播放，不需要确认。",
-        //         PropertyList(),
-        //         [music](const PropertyList& properties) -> ReturnValue {
-        //             auto list = music->GetCurrentPlayList();
-        //             if(music->PlayPlaylist(list))
-        //             {
-        //                 return "{\"success\": true, \"message\": \"播放成功\"}";
-        //             }
-        //             return "{\"success\": false, \"message\": \"播放失败\"}";
-        //     });
         AddTool("nextmusic",
                 "下一首音乐播放工具\n"
                 "返回:\n"
@@ -361,18 +372,27 @@ void McpServer::AddCommonTools() {
                 [music](const PropertyList& properties) -> ReturnValue {
                     auto playlist_name = properties["playlist_name"].value<std::string>();
                     
-                    auto song_name = properties["songname"].value<std::string>();
-                    ESP_LOGI(TAG, "Add song to playlist: %s", playlist_name.c_str());
-                    
+                    auto song_name = music->ExtractSongNameFromFileName(properties["songname"].value<std::string>());                    
                     if(!song_name.empty()) {
                         std::vector<std::string> filepaths;
                         std::stringstream ss(song_name);
                         std::string item;
                         while (std::getline(ss, item, ',')) {
+                            if(music->FindPlaylistIndex(playlist_name) == -1) {
+                                // 歌单不存在，创建歌单
+                                if(!music->CreatePlaylist(playlist_name)) {
+                                    return "{\"success\": false, \"message\": \"创建歌单失败\"}";
+                                }
+                            }
+                            auto name = music->SearchMusicPathFromlist(item, "DefaultMusicList");
                             //确保歌曲存在于音乐库中
-                            if(music->SearchMusicPathFromlist(item, "DefaultMusicList") != "")
+                            if(name!= "")
                             {
-                                filepaths.push_back(music->SearchMusicPathFromlist(item, "DefaultMusicList"));
+                                filepaths.push_back(name);
+                            }
+                            else {
+                                ESP_LOGW(TAG, "Music file %s not found in music library", item.c_str());
+                                return "{\"success\": false, \"message\": \"音乐文件 " + item + " 不存在于音乐库中\"}";
                             }
                         }
                         music->AddMusicToPlaylist(playlist_name, filepaths);
@@ -389,7 +409,42 @@ void McpServer::AddCommonTools() {
 
                 });
 
-
+                // AddTool("SetPlayMode",
+                //         "当需要更改或设置播放模式时调用此工具\n"
+                //         "参数:\n"
+                //         "  `mode`: 播放模式，可选：`顺序播放`、`随机播放`、`循环播放`、`播放一次`\n"
+                //         "返回:\n"
+                //         "  设置状态信息，立刻生效。",
+                //         PropertyList({
+                //             Property("mode", kPropertyTypeString,"顺序播放") // 播放模式（可选）
+                //         }),
+                //         [music](const PropertyList& properties) -> ReturnValue {
+                //             // 解析播放模式（支持中文与常见英文）
+                //             auto mode_str = properties["mode"].value<std::string>();
+                //             auto normalize = [](std::string s) {
+                //                 // 简单去除首尾空白
+                //                 while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
+                //                 while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
+                //                 // 转小写（对英文有效，对中文无影响）
+                //                 std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
+                //                 return s;
+                //             };
+                //             std::string m = normalize(mode_str);
+                //             if(m == "顺序播放" || m == "顺序" || m == "order") {
+                //                 music->SetOrderMode(true);
+                //             }
+                //             else if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+                //                 music->SetRandomMode(true);
+                //             }
+                //             else if (m == "循环播放" || m == "循环" || m == "loop") {
+                //                 music->SetLoopMode(true);
+                //             }
+                //             else if(m=="播放一次" || m=="一次" || m=="once" || m=="single") 
+                //             {
+                //                 music->SetOnceMode(true);
+                //             }
+                //             return "{\"success\": true, \"message\": \"设置成功\"}";
+                //     });
         // AddTool("self.music.completed",
         //         "在线音乐播放完成。",
         //         PropertyList(),

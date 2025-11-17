@@ -117,7 +117,6 @@ private:
     const std::string default_musiclist = "DefaultMusicList";
     std::vector<Playlist> playlists_;  // 使用简单的容器数组存储歌单
     std::string current_playlist_name_;
-    // int play_index_ = 0;
     
     // SD卡读取线程
     void ReadFromSDCard(const std::string& file_path);
@@ -126,13 +125,11 @@ private:
     void ScanDirectoryRecursive(const std::string& path);
     bool IsMusicFile(const std::string& file_path) const;
     MusicFileInfo ExtractMusicInfo(const std::string& file_path) const;
-    std::string ExtractSongNameFromFileName(const std::string& file_name) const;
     std::vector<MusicFileInfo> SearchMusic(const std::string& keyword) const;
     std::vector<std::string> GetPlaylistNames() const;
     std::vector<MusicFileInfo> GetPlaylist(const std::string& playlist_name) const;
-    
-    // 播放列表辅助方法
-    int FindPlaylistIndex(const std::string& name) const;
+
+
 
 public:
     Esp32Music();
@@ -178,6 +175,12 @@ public:
     virtual int GetLastPlayIndex(std::string& playlist_name)override;
     virtual void AddMusicToPlaylist(const std::string& playlist_name, std::vector<std::string> music_files)override;
     virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const override;
+    virtual void SetCurrentPlayList(const std::string& playlist_name)override;
+    virtual std::string ExtractSongNameFromFileName(const std::string& file_name) const override;
+    virtual int FindPlaylistIndex(const std::string& name) const override;
+    virtual void SavePlaylistsToNVS()override;
+    virtual bool LoadPlaylistsFromNVS()override;
+    virtual void InitializeDefaultPlaylists()override;
 };
 
 #endif // ESP32_MUSIC_H

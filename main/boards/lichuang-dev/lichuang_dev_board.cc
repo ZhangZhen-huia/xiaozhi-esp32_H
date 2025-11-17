@@ -209,8 +209,8 @@ private:
         
         sdmmc_card_t *card;
         const char mount_point[] = MOUNT_POINT;
-        ESP_LOGI(TAG, "Initializing SD card");
-        ESP_LOGI(TAG, "Using SDMMC peripheral");
+        // ESP_LOGI(TAG, "Initializing SD card");
+        // ESP_LOGI(TAG, "Using SDMMC peripheral");
     
         sdmmc_host_t host = SDMMC_HOST_DEFAULT(); // SDMMC主机接口配置
         sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT(); // SDMMC插槽配置
@@ -220,7 +220,7 @@ private:
         slot_config.d0 = BSP_SD_D0;
         slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP; // 打开内部上拉电阻
     
-        ESP_LOGI(TAG, "Mounting filesystem");
+        // ESP_LOGI(TAG, "Mounting filesystem");
         esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card); // 挂载SD卡
     
         if (ret != ESP_OK) {  // 如果没有挂载成功

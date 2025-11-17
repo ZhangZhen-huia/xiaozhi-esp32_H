@@ -2,7 +2,7 @@
 #define MUSIC_H
 
 #include <string>
-
+#include <vector>
 struct MusicFileInfo {
     std::string file_path;
     std::string file_name;
@@ -11,7 +11,6 @@ struct MusicFileInfo {
     std::string album;
     size_t file_size;
     int duration; // 秒
-    
     MusicFileInfo() : file_size(0), duration(0) {}
 };
 
@@ -59,6 +58,12 @@ public:
     virtual void AddMusicToPlaylist(const std::string& playlist_name, std::vector<std::string> music_files) = 0;
     virtual bool CreatePlaylist(const std::string& playlist_name) = 0;
     virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const = 0;
+    virtual void SetCurrentPlayList(const std::string& playlist_name) = 0;
+    virtual std::string ExtractSongNameFromFileName(const std::string& file_name) const = 0;
+    virtual int FindPlaylistIndex(const std::string& name) const = 0;
+    virtual void SavePlaylistsToNVS() = 0;
+    virtual bool LoadPlaylistsFromNVS() = 0;
+    virtual void InitializeDefaultPlaylists() = 0;
 };
 
 #endif // MUSIC_H 
