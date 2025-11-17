@@ -151,42 +151,42 @@ void McpServer::AddCommonTools() {
 #endif
     auto music = board.GetMusic();
     if (music) {
-        // AddTool("self.music.play_song",
-        //         "播放指定的歌曲。当用户要求播放音乐时使用此工具，会自动获取歌曲详情并开始流式播放。\n"
-        //         "参数:\n"
-        //         "  `song_name`: 要播放的歌曲名称（必需）。\n"
-        //         "  `artist_name`: 要播放的歌曲艺术家名称（可选，默认为空字符串）。\n"
-        //         "返回:\n"
-        //         "  播放状态信息，不需确认，立刻播放歌曲。",
-        //         PropertyList({
-        //             Property("song_name", kPropertyTypeString),//歌曲名称（必需）
-        //             Property("artist_name", kPropertyTypeString, "")//艺术家名称（可选，默认为空字符串）
-        //         }),
-        //         [music,display](const PropertyList& properties) -> ReturnValue {
-        //         auto song_name = properties["song_name"].value<std::string>();
-        //         auto artist_name = properties["artist_name"].value<std::string>();
-        //          if (!music->Download(song_name, artist_name)) {
-        //             return "{\"success\": false, \"message\": \"获取音乐资源失败\"}";
-        //         }
-        //         auto download_result = music->GetDownloadResult();
-        //         ESP_LOGI(TAG, "Music details result: %s", download_result.c_str());
-        //         if(music->WaitForMusicLoaded())
-        //         {
-        //             // 切换到在线音乐界面
-        //             if(display->onlinemusic_screen_ == nullptr) {
-        //                 display->OnlineMusicUI();
-        //                 lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+    //     AddTool("self.music.play_song",
+    //             "在线播放指定的歌曲。当用户要求播放音乐时使用此工具，会自动获取歌曲详情并开始流式播放。\n"
+    //             "参数:\n"
+    //             "  `song_name`: 要播放的歌曲名称（必需）。\n"
+    //             "  `artist_name`: 要播放的歌曲艺术家名称（可选，默认为空字符串）。\n"
+    //             "返回:\n"
+    //             "  播放状态信息，不需确认，立刻播放歌曲。",
+    //             PropertyList({
+    //                 Property("song_name", kPropertyTypeString),//歌曲名称（必需）
+    //                 Property("artist_name", kPropertyTypeString, "")//艺术家名称（可选，默认为空字符串）
+    //             }),
+    //             [music,display](const PropertyList& properties) -> ReturnValue {
+    //             auto song_name = properties["song_name"].value<std::string>();
+    //             auto artist_name = properties["artist_name"].value<std::string>();
+    //              if (!music->Download(song_name, artist_name)) {
+    //                 return "{\"success\": false, \"message\": \"获取音乐资源失败\"}";
+    //             }
+    //             auto download_result = music->GetDownloadResult();
+    //             ESP_LOGI(TAG, "Music details result: %s", download_result.c_str());
+    //             if(music->WaitForMusicLoaded())
+    //             {
+    //                 // 切换到在线音乐界面
+    //                 if(display->onlinemusic_screen_ == nullptr) {
+    //                     display->OnlineMusicUI();
+    //                     lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
                         
-        //             }
-        //             if(display->current_screen_ != display->onlinemusic_screen_) {
-        //                 lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
-        //                 lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
-        //             }
-        //         } else {
-        //             return "{\"success\": false, \"message\": \"音乐加载超时\"}";
-        //         }
-        //         return "{\"success\": true, \"message\": \"音乐开始播放\"}";
-        //     });
+    //                 }
+    //                 if(display->current_screen_ != display->onlinemusic_screen_) {
+    //                     lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
+    //                     lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
+    //                 }
+    //             } else {
+    //                 return "{\"success\": false, \"message\": \"音乐加载超时\"}";
+    //             }
+    //             return "{\"success\": true, \"message\": \"音乐开始播放\"}";
+    //         });
         // AddTool("self.musicSDCard.play_song",
         //         "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件。\n"
         //         "参数:\n"
@@ -371,7 +371,7 @@ void McpServer::AddCommonTools() {
                 }),
                 [music](const PropertyList& properties) -> ReturnValue {
                     auto playlist_name = properties["playlist_name"].value<std::string>();
-                    
+                    std::vector<std::string> unsselectedname;
                     auto song_name = music->ExtractSongNameFromFileName(properties["songname"].value<std::string>());                    
                     if(!song_name.empty()) {
                         std::vector<std::string> filepaths;
@@ -392,10 +392,20 @@ void McpServer::AddCommonTools() {
                             }
                             else {
                                 ESP_LOGW(TAG, "Music file %s not found in music library", item.c_str());
-                                return "{\"success\": false, \"message\": \"音乐文件 " + item + " 不存在于音乐库中\"}";
+                                unsselectedname.push_back(item);
+                                continue;
                             }
                         }
+                        // 添加音乐到歌单
                         music->AddMusicToPlaylist(playlist_name, filepaths);
+                        music->SavePlaylistsToNVS();
+                        if(unsselectedname.size() >0) {
+                            std::string unsel_names;
+                            for(const auto& n : unsselectedname) {
+                                unsel_names += n + " ";
+                            }
+                            return "{\"success\": true, \"message\": \"部分音乐添加到歌单成功，但以下音乐未找到: " + unsel_names + "\"}";
+                        }   
                         return "{\"success\": true, \"message\": \"添加音乐到歌单成功\"}";
                     }
                     else {

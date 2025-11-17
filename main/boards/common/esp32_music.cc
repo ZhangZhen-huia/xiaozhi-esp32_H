@@ -2499,7 +2499,7 @@ void Esp32Music::AddMusicToPlaylist(const std::string& playlist_name, std::vecto
         ESP_LOGI(TAG, "Added music to playlist '%s': %s", playlist_name.c_str(), file_path.c_str());
 
     }
-    SavePlaylistsToNVS();
+    
 }
 
 // 异步保存控制标志（文件范围静态，避免修改头文件）

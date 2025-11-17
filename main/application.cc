@@ -582,25 +582,6 @@ void Application::Start() {
     if(music) {
         music->InitializeDefaultPlaylists();
     }
-    // if(music)
-    // {
-    //     music->ScanMusicLibrary("/sdcard/音乐");
-    //     ESP_LOGI(TAG, "Music library scanned, total %d songs found", music->GetMusicCount());
-
-    //     std::vector<std::string> list = {};
-    //     std::vector<MusicFileInfo> music_library = music->GetMusicLibrary();
-    //     ESP_LOGI("TAG", "Found %d music files", music_library.size());
-
-    //     for (const auto& music : music_library) {
-    //         ESP_LOGI(TAG, "Song: %s, File: %s, Size: %d bytes", 
-    //                 music.song_name.c_str(), music.file_name.c_str(), music.file_size);
-            
-    //         std::string filepath = "/sdcard/音乐/" + music.file_name;
-    //         list.push_back(filepath);
-    //     }
-    //     music->AddMusicToDefaultPlaylists(list);
-
-    // }
 }
 
 // Add a async task to MainLoop
