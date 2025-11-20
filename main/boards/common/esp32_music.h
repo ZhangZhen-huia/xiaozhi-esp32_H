@@ -1,6 +1,7 @@
 #ifndef ESP32_MUSIC_H
 #define ESP32_MUSIC_H
 
+#include <cstdio>
 #include <string>
 #include <thread>
 #include <atomic>
@@ -37,6 +38,13 @@ struct Playlist {
     Playlist(const std::string& n = "") : name(n) {}
 };
 
+// 新增：描述歌曲元数据（歌手 + 歌名）及规范化字段
+struct SongMeta {
+    std::string artist;             // 原始解析到的歌手（可能包含空格/特殊字符）
+    std::string title;              // 原始解析到的曲名
+    std::string norm_artist;        // 规范化后用于匹配（小写、去掉非字母数字）
+    std::string norm_title;         // 规范化后用于匹配（小写、去掉非字母数字）
+};
 class Esp32Music : public Music {
 public:
     // 显示模式控制 - 移动到public区域
@@ -125,11 +133,26 @@ private:
     void ScanDirectoryRecursive(const std::string& path);
     bool IsMusicFile(const std::string& file_path) const;
     MusicFileInfo ExtractMusicInfo(const std::string& file_path) const;
-    std::vector<MusicFileInfo> SearchMusic(const std::string& keyword) const;
     std::vector<std::string> GetPlaylistNames() const;
     std::vector<MusicFileInfo> GetPlaylist(const std::string& playlist_name) const;
 
+    // 当前播放文件指针与偏移（用于记录并恢复）
+    FILE* current_play_file_ = nullptr;
+    size_t current_play_file_offset_ = 0;
+    std::mutex current_play_file_mutex_;
 
+    std::string current_play_file_path_;
+    // 请求在 ReadFromSDCard 时从该偏移开始读取（由 PlayFromSD(..., start_offset) 设置）
+    size_t start_play_offset_ = 0;
+
+    // NVS 上保存的断点（LoadPlaybackPosition 填充）
+    std::string saved_playlist_name_;
+
+    int saved_play_index_ = -1;
+    int64_t saved_play_ms_ = 0;
+    size_t saved_file_offset_ = 0;
+    std::string saved_file_path_;
+    bool has_saved_position_ = false;
 
 public:
     Esp32Music();
@@ -167,13 +190,13 @@ public:
     virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files)override;
     virtual int SearchMusicIndexFromlist(std::string name, const std::string& playlist_name) const override;
 
+    virtual std::string GetCurrentSongName()override;
     virtual void SetPlayIndex(std::string& playlist_name, int index)override;
     virtual void NextPlayIndexOrder(std::string& playlist_name)override;
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;
     virtual int GetLastPlayIndex(std::string& playlist_name)override;
-    virtual void AddMusicToPlaylist(const std::string& playlist_name, std::vector<std::string> music_files)override;
     virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const override;
     virtual void SetCurrentPlayList(const std::string& playlist_name)override;
     virtual std::string ExtractSongNameFromFileName(const std::string& file_name) const override;
@@ -181,6 +204,19 @@ public:
     virtual void SavePlaylistsToNVS()override;
     virtual bool LoadPlaylistsFromNVS()override;
     virtual void InitializeDefaultPlaylists()override;
+    virtual void LoadPlaybackPosition()override;
+    virtual void SavePlaybackPosition()override;
+    virtual bool ResumeSavedPlayback()override;
+    virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name, size_t start_offset);
+    virtual bool IfSavedPosition() override{ return has_saved_position_; };
+    virtual std::vector<std::string> SearchSingerFromlist(std::string singer, const std::string& playlist_name) const override;
+    virtual bool DeletePlaylistFromNVS(const std::string& playlist_name)override;
+    virtual bool DeleteAllPlaylistsExceptDefault()override;
+
 };
 
+
+// 全局辅助函数：从文件名或输入中解析出 SongMeta
+SongMeta ParseSongMeta(const std::string& filename);
+std::string NormalizeForSearch(std::string s) ;
 #endif // ESP32_MUSIC_H

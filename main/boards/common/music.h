@@ -3,15 +3,17 @@
 
 #include <string>
 #include <vector>
+
 struct MusicFileInfo {
     std::string file_path;
     std::string file_name;
-    std::string song_name;
-    std::string artist;
-    std::string album;
-    size_t file_size;
-    int duration; // 秒
-    MusicFileInfo() : file_size(0), duration(0) {}
+    std::string song_name; // 规范化后的曲名（用于匹配）
+    int duration = 0;
+    size_t file_size = 0;
+
+    // 新增：歌手信息
+    std::string artist;       // 解析到的原始歌手名（可显示）
+    std::string artist_norm;  // 规范化后用于匹配（小写、去特殊字符）
 };
 
 enum PlaybackMode {
@@ -55,7 +57,6 @@ public:
     virtual std::string GetCurrentPlayList(void) = 0;
     virtual PlaybackMode GetPlaybackMode()  = 0;
     virtual int GetLastPlayIndex(std::string& playlist_name) = 0;
-    virtual void AddMusicToPlaylist(const std::string& playlist_name, std::vector<std::string> music_files) = 0;
     virtual bool CreatePlaylist(const std::string& playlist_name) = 0;
     virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const = 0;
     virtual void SetCurrentPlayList(const std::string& playlist_name) = 0;
@@ -64,6 +65,16 @@ public:
     virtual void SavePlaylistsToNVS() = 0;
     virtual bool LoadPlaylistsFromNVS() = 0;
     virtual void InitializeDefaultPlaylists() = 0;
+    virtual void LoadPlaybackPosition() = 0;
+    virtual void SavePlaybackPosition() = 0;
+    virtual bool ResumeSavedPlayback() = 0;
+    virtual bool IfSavedPosition()  = 0;
+    virtual std::vector<std::string> SearchSingerFromlist(std::string singer, const std::string& playlist_name) const =0;
+    virtual std::string GetCurrentSongName() = 0;
+    virtual bool DeletePlaylistFromNVS(const std::string& playlist_name) = 0;
+    virtual bool DeleteAllPlaylistsExceptDefault() = 0;
+
+
 };
 
 #endif // MUSIC_H 

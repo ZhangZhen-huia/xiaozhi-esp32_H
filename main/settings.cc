@@ -1,5 +1,6 @@
 #include "settings.h"
 
+#include <cstdint>
 #include <esp_log.h>
 #include <nvs_flash.h>
 
@@ -97,6 +98,8 @@ void Settings::EraseKey(const std::string& key) {
         if (ret != ESP_ERR_NVS_NOT_FOUND) {
             ESP_ERROR_CHECK(ret);
         }
+        // 标记为脏，等待 commit（或调用 Commit() 立即提交）
+        dirty_ = true;
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
     }
@@ -105,6 +108,34 @@ void Settings::EraseKey(const std::string& key) {
 void Settings::EraseAll() {
     if (read_write_) {
         ESP_ERROR_CHECK(nvs_erase_all(nvs_handle_));
+        // 标记为脏，等待 commit（或调用 Commit() 立即提交）
+        dirty_ = true;
+    } else {
+        ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
+    }
+}
+
+// 新增：立即提交
+void Settings::Commit() {
+    if (nvs_handle_ != 0 && read_write_ && dirty_) {
+        ESP_ERROR_CHECK(nvs_commit(nvs_handle_));
+        dirty_ = false;
+    }
+}
+
+int64_t Settings::GetInt64(const std::string& key, int64_t default_value) {
+    if (nvs_handle_ == 0) return default_value;
+    int64_t value = 0;
+    if (nvs_get_i64(nvs_handle_, key.c_str(), &value) != ESP_OK) {
+        return default_value;
+    }
+    return value;
+}
+
+void Settings::SetInt64(const std::string& key, int64_t value) {
+    if (read_write_) {
+        ESP_ERROR_CHECK(nvs_set_i64(nvs_handle_, key.c_str(), value));
+        dirty_ = true;
     } else {
         ESP_LOGW(TAG, "Namespace %s is not open for writing", ns_.c_str());
     }

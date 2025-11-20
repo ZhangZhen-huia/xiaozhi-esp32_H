@@ -13,7 +13,7 @@ esp_err_t process_jpeg(uint8_t *jpeg_data, size_t jpeg_size, uint8_t **rgb565_da
 
 #define TAG "LcdDisplay_music"
 
-LV_IMG_DECLARE(img3);
+// LV_IMG_DECLARE(img3);
 int32_t g_img_angle;   // 0.1° 单位
 lv_timer_t * hide_timer;     /* 一次性定时器 */
 lv_obj_t *img_cover;          /* 封面 */
@@ -148,7 +148,7 @@ void LcdDisplay::OfflineMusicUI()
     lv_obj_clear_flag(circle, LV_OBJ_FLAG_SCROLLABLE);
 
     img_cover = lv_img_create(circle);
-    lv_image_set_src(img_cover, &img3);  // 使用下载的封面
+    // lv_image_set_src(img_cover, &img3);  // 使用下载的封面
     lv_obj_center(img_cover);
     lv_obj_invalidate(img_cover);
 

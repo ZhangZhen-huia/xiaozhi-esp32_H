@@ -17,6 +17,7 @@
 #include "settings.h"
 #include "lvgl_theme.h"
 #include "lvgl_display.h"
+#include "esp32_music.h"
 #include "lcd_display.h"
 #define TAG "MCP"
 
@@ -94,18 +95,6 @@ void McpServer::AddCommonTools() {
                 return true;
             });
             auto display = board.GetDisplay();
-    // AddTool("self.music.open",
-    //         "打开音乐播放器,当用户想要播放音乐或者打开音乐播放器的时候调用此工具",
-    //         PropertyList(),
-    //         [display](const PropertyList& properties) -> ReturnValue {
-    //             if(display->music_screen_ == nullptr) {
-    //                 display->MusicUI();
-    //             }
-                
-    //             lv_obj_add_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
-    //             lv_obj_clear_flag(display->music_screen_, LV_OBJ_FLAG_HIDDEN);
-    //             return true;
-    //         });
 #ifdef HAVE_LVGL
     // auto display = board.GetDisplay();
     if (display && display->GetTheme() != nullptr) {
@@ -151,42 +140,6 @@ void McpServer::AddCommonTools() {
 #endif
     auto music = board.GetMusic();
     if (music) {
-    //     AddTool("self.music.play_song",
-    //             "在线播放指定的歌曲。当用户要求播放音乐时使用此工具，会自动获取歌曲详情并开始流式播放。\n"
-    //             "参数:\n"
-    //             "  `song_name`: 要播放的歌曲名称（必需）。\n"
-    //             "  `artist_name`: 要播放的歌曲艺术家名称（可选，默认为空字符串）。\n"
-    //             "返回:\n"
-    //             "  播放状态信息，不需确认，立刻播放歌曲。",
-    //             PropertyList({
-    //                 Property("song_name", kPropertyTypeString),//歌曲名称（必需）
-    //                 Property("artist_name", kPropertyTypeString, "")//艺术家名称（可选，默认为空字符串）
-    //             }),
-    //             [music,display](const PropertyList& properties) -> ReturnValue {
-    //             auto song_name = properties["song_name"].value<std::string>();
-    //             auto artist_name = properties["artist_name"].value<std::string>();
-    //              if (!music->Download(song_name, artist_name)) {
-    //                 return "{\"success\": false, \"message\": \"获取音乐资源失败\"}";
-    //             }
-    //             auto download_result = music->GetDownloadResult();
-    //             ESP_LOGI(TAG, "Music details result: %s", download_result.c_str());
-    //             if(music->WaitForMusicLoaded())
-    //             {
-    //                 // 切换到在线音乐界面
-    //                 if(display->onlinemusic_screen_ == nullptr) {
-    //                     display->OnlineMusicUI();
-    //                     lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
-                        
-    //                 }
-    //                 if(display->current_screen_ != display->onlinemusic_screen_) {
-    //                     lv_obj_add_flag(display->current_screen_, LV_OBJ_FLAG_HIDDEN);
-    //                     lv_obj_clear_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
-    //                 }
-    //             } else {
-    //                 return "{\"success\": false, \"message\": \"音乐加载超时\"}";
-    //             }
-    //             return "{\"success\": true, \"message\": \"音乐开始播放\"}";
-    //         });
         // AddTool("self.musicSDCard.play_song",
         //         "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件。\n"
         //         "参数:\n"
@@ -228,96 +181,347 @@ void McpServer::AddCommonTools() {
         //             }
         //             return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
         //         });
-        AddTool("playlist",
-                "当用户没有指定播放歌曲时或者想要播放某个音乐歌单或者从哪个歌曲开始播放时调用此工具\n"
+        AddTool("playmusic",
+                "当用户想要播放音乐时调用该函数\n"
                 "参数:\n"
-                "  `playlist_name`: 要播放的播放列表名称,非必须,默认为默认歌单。\n"
-                "  `start_song`: 从播放列表中的哪首歌开始播放,非必须,默认为空字符串，从第一首开始播放。\n"
-                "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` `单曲播放` `循环播放`\n"
+                "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
+                "  `singer`: 歌手名称，可选，默认为空字符串。\n"
+                "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` 、 `循环播放`\n"
                 "返回:\n"
-                "  播放状态信息，立刻开始播放。",
+                "  播放状态信息，播报要播放的内容，然后不需确认立刻开始播放。",
                 PropertyList({
-                    Property("playlist_name", kPropertyTypeString,""), // 播放列表名称（可选）
-                    Property("start_song", kPropertyTypeString,""), // 从播放列表中的哪首歌开始播放（可选）
-                    Property("mode", kPropertyTypeString,"顺序播放") // 播放模式（可选）
+                    Property("songname", kPropertyTypeString,""), // 歌曲名称（可选）
+                    Property("singer", kPropertyTypeString,""), // 歌手名称（可选）
+                    Property("mode", kPropertyTypeString,"顺序播放")// 播放模式（可选）
                 }),
-                [music,display](const PropertyList& properties) -> ReturnValue {
-                    static int first_call = 1;
-                    if(first_call && (properties["playlist_name"].value<std::string>().empty() &&
-                       properties["start_song"].value<std::string>().empty())) {
+                [music](const PropertyList& properties) -> ReturnValue {
+                    auto song_name = properties["songname"].value<std::string>();
+                    auto singer = properties["singer"].value<std::string>();
+                    auto mode = properties["mode"].value<std::string>();
 
-                        ESP_LOGI(TAG, "Play Last Playlist and Index");
-                        first_call = 0;
-                        Settings settings("music", true); // 可写命名空间 "music"
-                        auto last_playlist = settings.GetString("last_playlist", "DefaultMusicList");
-                        music->SetPlayIndex(last_playlist, settings.GetInt("last_play_index", 0));
-                        if(!music->PlayPlaylist(last_playlist))
-                            return "{\"success\": false, \"message\": \"播放失败\"}";
-                        music->SetCurrentPlayList(last_playlist);
-                        return "{\"success\": true, \"message\": \"播放成功\"}";
-                    }
-                    else {
-                        auto playlist_name = properties["playlist_name"].value<std::string>();
-                        auto start_song = properties["start_song"].value<std::string>();
-                        first_call = 0;
-                        if(playlist_name.empty())
-                            {
-                                playlist_name = music->GetCurrentPlayList();
-                                if(playlist_name.empty())
-                                    playlist_name = "DefaultMusicList";
+                    // JSON 字符串转义（局部 lambda）
+                    auto escape_json = [](const std::string &s) {
+                        std::string out;
+                        out.reserve(s.size());
+                        for (unsigned char c : s) {
+                            switch (c) {
+                                case '\"': out += "\\\""; break;
+                                case '\\': out += "\\\\"; break;
+                                case '\b': out += "\\b"; break;
+                                case '\f': out += "\\f"; break;
+                                case '\n': out += "\\n"; break;
+                                case '\r': out += "\\r"; break;
+                                case '\t': out += "\\t"; break;
+                                default:
+                                    if (c < 0x20) {
+                                        char buf[8];
+                                        snprintf(buf, sizeof(buf), "\\u%04x", c);
+                                        out += buf;
+                                    } else {
+                                        out += c;
+                                    }
                             }
-                        ESP_LOGI(TAG, "Play playlist: %s", playlist_name.c_str());
-                        music->SetCurrentPlayList(playlist_name);
-                        // 解析播放模式（支持中文与常见英文）
-                        auto mode_str = properties["mode"].value<std::string>();
-                        auto normalize = [](std::string s) {
-                            // 简单去除首尾空白
-                            while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
-                            while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
-                            // 转小写（对英文有效，对中文无影响）
-                            std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
-                            return s;
-                        };
-                        int index = 0;
-                        std::string m = normalize(mode_str);
-                        if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
-                            music->SetRandomMode(true);
-                            ESP_LOGI(TAG, "Set Random Play Mode");
                         }
-                        else if (m == "循环播放" || m== "循环" || m == "loop") {
-                            music->SetLoopMode(true);
-                            ESP_LOGI(TAG, "Set Loop Play Mode");
-                        }
-                        else if( m=="播放一次" || m=="一次" || m=="once" || m=="single" || m== "单曲播放") 
-                        {
-                            music->SetOnceMode(true);
-                            ESP_LOGI(TAG, "Set Once Play Mode");
-                        }
-                        else {//默认顺序播放
-                            music->SetOrderMode(true);
-                            ESP_LOGI(TAG, "Set Order Play Mode");
-                        }
-                        //从指定音乐开始播放
-                        if(!start_song.empty()) {
-                                ESP_LOGI(TAG, "Start from song: %s", start_song.c_str());
-                                auto index = music->SearchMusicIndexFromlist(start_song, playlist_name);
-                                if(index >=0 ) {
-                                    music->SetPlayIndex(playlist_name, index);
-                                    if(!music->PlayPlaylist(playlist_name) )
-                                        return "{\"success\": false, \"message\": \"播放失败\"}";
+                        return out;
+                    };
+
+                    // 解析播放模式（支持中文与常见英文）
+                    auto mode_str = properties["mode"].value<std::string>();
+                    std::string m = NormalizeForSearch(mode_str);
+                    if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+                        music->SetRandomMode(true);
+                        ESP_LOGI(TAG, "Set Random Play Mode");
+                    }
+                    else if (m == "循环播放" || m== "循环" || m == "loop") {
+                        music->SetLoopMode(true);
+                        ESP_LOGI(TAG, "Set Loop Play Mode");
+                    }
+                    else {//默认顺序播放
+                        music->SetOrderMode(true);
+                        ESP_LOGI(TAG, "Set Order Play Mode");
+                    }
+
+                    std::string now_playing; // 要返回给调用方的播放提示
+
+                    if(song_name.empty() && singer.empty()) {
+
+                        if (music->IfSavedPosition()) {
+                            // 异步恢复以不阻塞主线程
+                            std::thread([music]() {
+                                vTaskDelay(pdMS_TO_TICKS(15000));
+                                ESP_LOGI(TAG, "Attempting to resume saved playback (async)");
+                                if (!music->ResumeSavedPlayback()) {
+                                    ESP_LOGI(TAG, "ResumeSavedPlayback failed or not possible");
                                 }
+                            }).detach();
+                            now_playing = music->GetCurrentSongName();
+                            // 返回包含摘要的结果
+                            std::string payload = "{\"success\": true, \"message\": \"将恢复上次播放\", \"now_playing\": \"";
+                            payload += escape_json(now_playing);
+                            payload += "\"}";
+                            return payload;
+                        } else {
+                            return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
                         }
-                        //这里就是从上次播放的音乐开始播放
-                        else {
-                                if(!music->PlayPlaylist(playlist_name) )
-                                        return "{\"success\": false, \"message\": \"播放失败\"}";
-                            }
-                        return "{\"success\": true, \"message\": \"播放成功\"}";
-
                     }
-                });
+                    else if(!song_name.empty() && singer.empty())
+                    {
+                        ESP_LOGI(TAG, "Playing song: %s", song_name.c_str());
+                        auto index = music->SearchMusicIndexFromlist(song_name, music->GetCurrentPlayList());
+                        auto playlist_name = music->GetCurrentPlayList();
+                        if(index >=0 ) {
+                            music->SetPlayIndex(playlist_name, index);
+                            if(!music->PlayPlaylist(playlist_name) )
+                                return "{\"success\": false, \"message\": \"播放失败\"}";
+                            now_playing = song_name;
+                        }  else {
+                            return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+                        }
+                    }
+                    else if(!singer.empty() && song_name.empty())
+                    {
+                        ESP_LOGI(TAG, "Search songs by singer: %s", singer.c_str());
+                        std::vector<MusicFileInfo> search_results;
+                        auto all_music = music->GetMusicLibrary();
+                        auto norm_singer = NormalizeForSearch(singer);
+                        for (const auto& music_info : all_music) {
+                            auto meta = ParseSongMeta(music_info.file_path);
+                            if (meta.norm_artist.find(norm_singer) != std::string::npos) {
+                                search_results.push_back(music_info);
+                            }
+                        }
+                        if (search_results.empty()) {
+                            return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+                        }
+                        // 创建临时播放列表
+                        std::string temp_playlist_name = "SearchResults_" + singer;
+                        std::vector<std::string> file_paths;
+                        for (const auto& info : search_results) {
+                            file_paths.push_back(info.file_path);
+                        }
+                        
+                        music->DeleteAllPlaylistsExceptDefault();
+                        music->CreatePlaylist(temp_playlist_name, file_paths);
+                        music->SavePlaylistsToNVS();
+                        music->SetCurrentPlayList(temp_playlist_name);
+
+                        if (!music->PlayPlaylist(temp_playlist_name)) {
+                            return "{\"success\": false, \"message\": \"播放失败\"}";
+                        }
+                        now_playing = "歌手: " + singer;
+                    }
+                    else
+                    {
+                        ESP_LOGI(TAG, "Playing song: %s by singer: %s", song_name.c_str(), singer.c_str());
+                        auto all_music = music->GetMusicLibrary();
+                        bool found = false;
+                        for (const auto& music_info : all_music) {
+                            auto meta = ParseSongMeta(music_info.file_path);
+                            if (meta.norm_title == NormalizeForSearch(song_name) &&
+                                meta.norm_artist == NormalizeForSearch(singer)) {
+                                // 找到匹配的歌曲和歌手
+                                if (!music->PlayFromSD(music_info.file_path, song_name)) {
+                                    return "{\"success\": false, \"message\": \"播放失败\"}";
+                                }
+                                music->SetCurrentPlayList("DefaultMusicList");
+                                now_playing = singer + " - " + song_name;
+                                found = true;
+                                break;
+                            }
+                        }
+                        if (!found) {
+                            return "{\"success\": false, \"message\": \"未找到匹配的歌曲和歌手\"}";
+                        }
+                    }
+
+                    // 返回包含 now_playing 的 JSON（默认播放成功）
+                    std::string payload = "{\"success\": true, \"message\": \"本地音乐开始播放\", \"now_playing\": \"";
+                    payload += escape_json(now_playing);
+                    payload += "\"}";
+                    return payload;
+                }
+                );
+                AddTool("searchmusic",
+                "当用户询问可以播放哪些歌曲时调用\n"
+                "参数:\n"
+                "  `singer`: 歌手名称（非必需）。\n"
+                "返回:\n"
+                "  返回可以播放的歌曲。",
+                PropertyList({
+                    Property("singer", kPropertyTypeString,"") // 歌手名称（可选）
+                }),
+                [music](const PropertyList& properties) -> ReturnValue {
+                    auto singer = properties["singer"].value<std::string>();
+                    auto all_music = music->GetMusicLibrary();
+                    std::string result = "{\"success\": true, \"message\": \"我可以播放以下歌曲: \", \"songs\": [";
+                    if(!singer.empty()) {
+
+                        ESP_LOGI(TAG, "Search songs by singer: %s", singer.c_str());
+                        std::vector<MusicFileInfo> search_results;
+                        auto norm_singer = NormalizeForSearch(singer);
+                        for (const auto& music_info : all_music) {
+                            auto meta = ParseSongMeta(music_info.file_path);
+                            if (meta.norm_artist.find(norm_singer) != std::string::npos) {
+                                search_results.push_back(music_info);
+                            }
+                        }
+                        if (search_results.empty()) {
+                            return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+                        }
+                        
+                        // 构建返回的 JSON 字符串
+                        for (size_t i = 0; i < search_results.size(); ++i) {
+                            auto meta = ParseSongMeta(search_results[i].file_path);
+                            result += "{\"title\": \"" + meta.title + "\", \"artist\": \"" + meta.artist + "\"}";
+                            if (i != search_results.size() - 1) {
+                                result += ", ";
+                            }
+                        }
+                        result += "],需要我播放哪一首吗?\"}";
+                    }
+                    else
+                    {
+                        size_t max_pick = 5;
+                        size_t total = all_music.size();
+                        size_t pick = std::min(max_pick, total);
+                        
+                        if (pick > 0) {
+
+                            for (size_t k = 0; k < pick; ++k) {
+                                size_t idx = esp_random() % pick;
+                                auto &mi = all_music[idx];
+                                auto meta = ParseSongMeta(mi.file_path);
+                                if (k) result += ", ";
+                                result += "{\"title\": \"" + meta.title + "\", \"artist\": \"" + meta.artist + "\"}";
+                            }
+                        }
+
+                        result += "],需要我播放哪一首吗?\"}";
+                    }
+                    return result;
+                }
+                );
+// ...existing code...        // AddTool("playlist",
+        //         "当用户没有指定播放歌曲时或者想要播放某个音乐歌单或者从哪个歌曲开始播放时调用此工具\n"
+        //         "参数:\n"
+        //         "  `playlist_name`: 要播放的播放列表名称,非必须,默认为默认歌单。\n"
+        //         "  `start_song`: 从播放列表中的哪首歌开始播放,非必须,默认为空字符串，从第一首开始播放。\n"
+        //         "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` `单曲播放` `循环播放`\n"
+        //         "   `singer`: 歌手名称，可选，默认为空字符串。\n"
+        //         "返回:\n"
+        //         "  播放状态信息，立刻开始播放。",
+        //         PropertyList({
+        //             Property("playlist_name", kPropertyTypeString,""), // 播放列表名称（可选）
+        //             Property("start_song", kPropertyTypeString,""), // 从播放列表中的哪首歌开始播放（可选）
+        //             Property("mode", kPropertyTypeString,"顺序播放"),// 播放模式（可选）
+        //             Property("singer", kPropertyTypeString,"") // 歌手名称（可选）
+        //         }),
+        //         [music,display](const PropertyList& properties) -> ReturnValue {
+        //             auto playlist_name = properties["playlist_name"].value<std::string>();
+        //             auto start_song = properties["start_song"].value<std::string>();
+        //             auto singer = properties["singer"].value<std::string>();
+
+        //             if(playlist_name.empty() &&start_song.empty() && singer.empty()) {
+
+        //                 if (music->IfSavedPosition()) {
+        //                     std::thread([music]() {
+        //                         ESP_LOGI(TAG, "Attempting to resume saved playback (async)");
+        //                         if (!music->ResumeSavedPlayback()) {
+        //                             ESP_LOGI(TAG, "ResumeSavedPlayback failed or not possible");
+        //                         }
+        //                     }).detach();
+        //                 }
+
+        //                 return "{\"success\": true, \"message\": \"播放成功\"}";
+        //             }
+        //             else if(playlist_name.empty() && start_song.empty() && !singer.empty())
+        //             {
+        //                 ESP_LOGI(TAG, "Search songs by singer: %s", singer.c_str());
+        //                 std::vector<MusicFileInfo> search_results;
+        //                 auto all_music = music->GetMusicLibrary();
+        //                 auto norm_singer = NormalizeForSearch(singer);
+        //                 for (const auto& music_info : all_music) {
+        //                     auto meta = ParseSongMeta(music_info.file_path);
+        //                     if (meta.norm_artist.find(norm_singer) != std::string::npos) {
+        //                         search_results.push_back(music_info);
+        //                     }
+        //                 }
+        //                 if (search_results.empty()) {
+        //                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+        //                 }
+        //                 // 创建临时播放列表
+        //                 std::string temp_playlist_name = "SearchResults_" + singer;
+        //                 std::vector<std::string> file_paths;
+        //                 for (const auto& info : search_results) {
+        //                     file_paths.push_back(info.file_path);
+        //                 }
+        //                 music->CreatePlaylist(temp_playlist_name, file_paths);
+        //                 music->SetCurrentPlayList(temp_playlist_name);
+        //                 if (!music->PlayPlaylist(temp_playlist_name)) {
+        //                     return "{\"success\": false, \"message\": \"播放失败\"}";
+        //                 }
+        //                 return "{\"success\": true, \"message\": \"播放成功\"}";
+        //             }
+        //             else
+        //             {
+        //                 if(playlist_name.empty())
+        //                     {
+        //                         playlist_name = music->GetCurrentPlayList();
+        //                         if(playlist_name.empty())
+        //                             playlist_name = "DefaultMusicList";
+        //                     }
+        //                 ESP_LOGI(TAG, "Play playlist: %s", playlist_name.c_str());
+        //                 music->SetCurrentPlayList(playlist_name);
+
+        //                 // 解析播放模式（支持中文与常见英文）
+        //                 auto mode_str = properties["mode"].value<std::string>();
+        //                 int index = 0;
+        //                 std::string m = NormalizeForSearch(mode_str);
+        //                 if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+        //                     music->SetRandomMode(true);
+        //                     ESP_LOGI(TAG, "Set Random Play Mode");
+        //                 }
+        //                 else if (m == "循环播放" || m== "循环" || m == "loop") {
+        //                     music->SetLoopMode(true);
+        //                     ESP_LOGI(TAG, "Set Loop Play Mode");
+        //                 }
+        //                 else if( m=="播放一次" || m=="一次" || m=="once" || m=="single" || m== "单曲播放") 
+        //                 {
+        //                     music->SetOnceMode(true);
+        //                     ESP_LOGI(TAG, "Set Once Play Mode");
+        //                 }
+        //                 else {//默认顺序播放
+        //                     music->SetOrderMode(true);
+        //                     ESP_LOGI(TAG, "Set Order Play Mode");
+        //                 }
+
+        //                 if(!singer.empty()) {
+        //                     ESP_LOGI(TAG, "Search songs by singer: %s", singer.c_str());
+        //                     auto results = music->SearchSingerFromlist(singer, playlist_name);
+        //                 }
+        //                 //从指定音乐开始播放
+        //                 if(!start_song.empty()) {
+        //                         ESP_LOGI(TAG, "Start from song: %s", start_song.c_str());
+        //                         auto index = music->SearchMusicIndexFromlist(start_song, playlist_name);
+        //                         if(index >=0 ) {
+        //                             music->SetPlayIndex(playlist_name, index);
+        //                             if(!music->PlayPlaylist(playlist_name) )
+        //                                 return "{\"success\": false, \"message\": \"播放失败\"}";
+        //                         }
+        //                 }
+        //                 //这里就是从上次播放的音乐开始播放
+        //                 else {
+        //                         if(!music->PlayPlaylist(playlist_name) )
+        //                                 return "{\"success\": false, \"message\": \"播放失败\"}";
+        //                     }
+        //                 return "{\"success\": true, \"message\": \"播放成功\"}";
+
+        //             }
+
+                    
+        //         });
         AddTool("nextmusic",
-                "下一首音乐播放工具\n"
+                "当用户说要播放下一首时调用\n"
                 "返回:\n"
                 "直接播放，不需要确认。",
                 PropertyList(),
@@ -358,113 +562,6 @@ void McpServer::AddCommonTools() {
                     }
                     return "{\"success\": false, \"message\": \"上一首播放失败\"}";
             });
-        AddTool("addmusictolist",
-                "把某个音乐加入某个歌单时调用\n"
-                "参数:\n"
-                "  `playlist_name`: 要添加到的播放列表名称,默认为默认歌单。(非必须)\n"
-                "  `songname`: 要添加的本地音乐文件名，支持多个，用逗号分隔（非必需）。\n"
-                "返回:\n"
-                "  添加状态信息，立刻添加。",
-                PropertyList({
-                    Property("playlist_name", kPropertyTypeString,"DefaultMusicList"), // 播放列表名称（可选）
-                    Property("songname", kPropertyTypeString,"") // 要添加的本地音乐文件名（必需）
-                }),
-                [music](const PropertyList& properties) -> ReturnValue {
-                    auto playlist_name = properties["playlist_name"].value<std::string>();
-                    std::vector<std::string> unsselectedname;
-                    auto song_name = music->ExtractSongNameFromFileName(properties["songname"].value<std::string>());                    
-                    if(!song_name.empty()) {
-                        std::vector<std::string> filepaths;
-                        std::stringstream ss(song_name);
-                        std::string item;
-                        while (std::getline(ss, item, ',')) {
-                            if(music->FindPlaylistIndex(playlist_name) == -1) {
-                                // 歌单不存在，创建歌单
-                                if(!music->CreatePlaylist(playlist_name)) {
-                                    return "{\"success\": false, \"message\": \"创建歌单失败\"}";
-                                }
-                            }
-                            auto name = music->SearchMusicPathFromlist(item, "DefaultMusicList");
-                            //确保歌曲存在于音乐库中
-                            if(name!= "")
-                            {
-                                filepaths.push_back(name);
-                            }
-                            else {
-                                ESP_LOGW(TAG, "Music file %s not found in music library", item.c_str());
-                                unsselectedname.push_back(item);
-                                continue;
-                            }
-                        }
-                        // 添加音乐到歌单
-                        music->AddMusicToPlaylist(playlist_name, filepaths);
-                        music->SavePlaylistsToNVS();
-                        if(unsselectedname.size() >0) {
-                            std::string unsel_names;
-                            for(const auto& n : unsselectedname) {
-                                unsel_names += n + " ";
-                            }
-                            return "{\"success\": true, \"message\": \"部分音乐添加到歌单成功，但以下音乐未找到: " + unsel_names + "\"}";
-                        }   
-                        return "{\"success\": true, \"message\": \"添加音乐到歌单成功\"}";
-                    }
-                    else {
-                        // 仅创建歌单
-                        if(music->CreatePlaylist(playlist_name)) {
-                            return "{\"success\": true, \"message\": \"创建歌单成功\"}";
-                        } else {
-                            return "{\"success\": false, \"message\": \"创建歌单失败\"}";
-                        }
-                    }
-
-                });
-
-                // AddTool("SetPlayMode",
-                //         "当需要更改或设置播放模式时调用此工具\n"
-                //         "参数:\n"
-                //         "  `mode`: 播放模式，可选：`顺序播放`、`随机播放`、`循环播放`、`播放一次`\n"
-                //         "返回:\n"
-                //         "  设置状态信息，立刻生效。",
-                //         PropertyList({
-                //             Property("mode", kPropertyTypeString,"顺序播放") // 播放模式（可选）
-                //         }),
-                //         [music](const PropertyList& properties) -> ReturnValue {
-                //             // 解析播放模式（支持中文与常见英文）
-                //             auto mode_str = properties["mode"].value<std::string>();
-                //             auto normalize = [](std::string s) {
-                //                 // 简单去除首尾空白
-                //                 while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
-                //                 while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
-                //                 // 转小写（对英文有效，对中文无影响）
-                //                 std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
-                //                 return s;
-                //             };
-                //             std::string m = normalize(mode_str);
-                //             if(m == "顺序播放" || m == "顺序" || m == "order") {
-                //                 music->SetOrderMode(true);
-                //             }
-                //             else if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
-                //                 music->SetRandomMode(true);
-                //             }
-                //             else if (m == "循环播放" || m == "循环" || m == "loop") {
-                //                 music->SetLoopMode(true);
-                //             }
-                //             else if(m=="播放一次" || m=="一次" || m=="once" || m=="single") 
-                //             {
-                //                 music->SetOnceMode(true);
-                //             }
-                //             return "{\"success\": true, \"message\": \"设置成功\"}";
-                //     });
-        // AddTool("self.music.completed",
-        //         "在线音乐播放完成。",
-        //         PropertyList(),
-        //         [display](const PropertyList& properties) -> ReturnValue {
-        //             if(display->current_screen_ == display->onlinemusic_screen_) {
-        //                 lv_obj_add_flag(display->onlinemusic_screen_, LV_OBJ_FLAG_HIDDEN);
-        //                 lv_obj_clear_flag(display->main_screen_, LV_OBJ_FLAG_HIDDEN);
-        //             }
-        //             return true;
-        //     });
     }
 
 

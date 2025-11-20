@@ -13,10 +13,18 @@ public:
     void SetString(const std::string& key, const std::string& value);
     int32_t GetInt(const std::string& key, int32_t default_value = 0);
     void SetInt(const std::string& key, int32_t value);
+
+    // 新增 64 位整型接口
+    int64_t GetInt64(const std::string& key, int64_t default_value = 0);
+    void SetInt64(const std::string& key, int64_t value);
+    
     bool GetBool(const std::string& key, bool default_value = false);
     void SetBool(const std::string& key, bool value);
     void EraseKey(const std::string& key);
     void EraseAll();
+
+    // 新增：立即提交到 NVS
+    void Commit();
 
 private:
     std::string ns_;

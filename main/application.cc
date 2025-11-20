@@ -17,7 +17,8 @@
 #include <arpa/inet.h>
 #include <font_awesome.h>
 #include "qmi8658.h"
-
+#include "ble/ble_wifi_integration.h"
+#include <ssid_manager.h>
 #define TAG "Application"
 
 
@@ -361,7 +362,17 @@ void Application::StopListening() {
     });
 }
 
+
+bool IsWifiConfigMode() {
+    auto& ssid_manager = SsidManager::GetInstance();
+    auto ssid_list = ssid_manager.GetSsidList();
+    Settings settings("wifi", true);
+    return settings.GetInt("force_ap") == 1 || ssid_list.empty();
+}
+
 void Application::Start() {
+
+    // bool en = IsWifiConfigMode();
     //在这一步就已经调用了board的构造函数来进行关于板级硬件的初始化了
     auto& board = Board::GetInstance();
 
@@ -405,6 +416,8 @@ void Application::Start() {
     //然后触发main_event_loop函数中的对应处理
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
+    // if(en && ble_wifi_config_enabled_)
+        // BleWifiIntegration::StartBleWifiConfig();
     /* Wait for the network to be ready */
     board.StartNetwork();
 
@@ -581,6 +594,7 @@ void Application::Start() {
     auto music = board.GetMusic();
     if(music) {
         music->InitializeDefaultPlaylists();
+        // music->DeletePlaylistsFromNVS();
     }
 }
 

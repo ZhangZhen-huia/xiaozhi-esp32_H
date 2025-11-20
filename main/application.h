@@ -66,6 +66,9 @@ public:
     // 新增：接收外部音频数据（如音乐播放）
     void AddAudioData(AudioStreamPacket&& packet);
     void SendMessage(std::string &message);
+
+    void EnableBleWifiConfig(bool enable) { ble_wifi_config_enabled_ = enable; }
+    bool IsBleWifiConfigEnabled() const { return ble_wifi_config_enabled_; }
 private:
     Application();
     ~Application();
@@ -87,11 +90,14 @@ private:
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
 
+    bool ble_wifi_config_enabled_ = true;
+    
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
+
 };
 
 

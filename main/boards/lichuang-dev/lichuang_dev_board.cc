@@ -114,12 +114,15 @@ private:
     void InitializeButtons() {
         boot_button_.OnClick([this]() {
             auto& app = Application::GetInstance();
-            // auto display = Board::GetInstance().GetDisplay();
         
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
             }
            app.ToggleChatState();
+        });
+        
+        boot_button_.OnLongPress([this]() {
+            ResetWifiConfiguration();
         });
 
 #if CONFIG_USE_DEVICE_AEC
