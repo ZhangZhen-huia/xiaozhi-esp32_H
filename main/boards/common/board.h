@@ -13,7 +13,7 @@
 #include "camera.h"
 #include "assets.h"
 #include "music.h"
-#include "qmi8658.h"
+
 
 void* create_board();
 class AudioCodec;
@@ -47,7 +47,6 @@ public:
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();
     virtual Music* GetMusic();
-    virtual QMI8658* GetImu();
     virtual NetworkInterface* GetNetwork() = 0;
     virtual void StartNetwork() = 0;
     virtual const char* GetNetworkStateIcon() = 0;
@@ -56,6 +55,7 @@ public:
     virtual void SetPowerSaveMode(bool enabled) = 0;
     virtual std::string GetBoardJson() = 0;
     virtual std::string GetDeviceStatusJson() = 0;
+    virtual void EnterWifiConfigMode() = 0;
 };
 
 #define DECLARE_BOARD(BOARD_CLASS_NAME) \

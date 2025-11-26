@@ -110,7 +110,7 @@ public:
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
     void UpdateOutputTimestamp();
-
+    // std::unique_ptr<WakeWord> GetWakeWord(){return wake_word_;}
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
@@ -157,6 +157,7 @@ private:
     void PushTaskToEncodeQueue(AudioTaskType type, std::vector<int16_t>&& pcm);
     void SetDecodeSampleRate(int sample_rate, int frame_duration);
     void CheckAndUpdateAudioPowerState();
+
 };
 
 #endif

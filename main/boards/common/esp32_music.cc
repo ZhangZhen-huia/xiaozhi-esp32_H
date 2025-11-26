@@ -7,6 +7,7 @@
 #include "display/display.h"
 #include "display/lcd_display.h"
 #include <esp_log.h>
+#include <errno.h>
 #include <esp_heap_caps.h>
 #include <esp_pthread.h>
 #include <esp_timer.h>
@@ -25,148 +26,10 @@
 #include "settings.h"
 #define TAG "Esp32Music"
 
-// ========== 简单的ESP32认证函数 ==========
-/**
- * @brief 获取设备MAC地址
- * @return MAC地址字符串
- */
-static std::string get_device_mac() {
-    return SystemInfo::GetMacAddress();
-}
 
-/**
- * @brief 获取设备芯片ID
- * @return 芯片ID字符串
- */
-static std::string get_device_chip_id() {
-    // 使用MAC地址作为芯片ID，去除冒号分隔符
-    std::string mac = SystemInfo::GetMacAddress();
-    // 去除所有冒号
-    mac.erase(std::remove(mac.begin(), mac.end(), ':'), mac.end());
-    return mac;
-}
 
-/**
- * @brief 生成动态密钥
- * @param timestamp 时间戳
- * @return 动态密钥字符串
- */
-static std::string generate_dynamic_key(int64_t timestamp) {
-    // 密钥（请修改为与服务端一致）
-    const std::string secret_key = "your-esp32-secret-key-2024";
-    
-    // 获取设备信息
-    std::string mac = get_device_mac();
-    std::string chip_id = get_device_chip_id();
-    
-    // 组合数据：MAC:芯片ID:时间戳:密钥
-    std::string data = mac + ":" + chip_id + ":" + std::to_string(timestamp) + ":" + secret_key;
-    
-    // SHA256哈希
-    unsigned char hash[32];
-    mbedtls_sha256((unsigned char*)data.c_str(), data.length(), hash, 0);
-    
-    // 转换为十六进制字符串（前16字节）
-    std::string key;
-    for (int i = 0; i < 16; i++) {
-        char hex[3];
-        snprintf(hex, sizeof(hex), "%02X", hash[i]);
-        key += hex;
-    }
-    
-    return key;
-}
-
-/**
- * @brief 为HTTP请求添加认证头
- * @param http HTTP客户端指针
- */
-static void add_auth_headers(Http* http) {
-    // 获取当前时间戳
-    int64_t timestamp = esp_timer_get_time() / 1000000;  // 转换为秒
-    
-    // 生成动态密钥
-    std::string dynamic_key = generate_dynamic_key(timestamp);
-    
-    // 获取设备信息
-    std::string mac = get_device_mac();
-    std::string chip_id = get_device_chip_id();
-    
-    // 添加认证头
-    if (http) {
-        http->SetHeader("X-MAC-Address", mac);
-        http->SetHeader("X-Chip-ID", chip_id);
-        http->SetHeader("X-Timestamp", std::to_string(timestamp));
-        http->SetHeader("X-Dynamic-Key", dynamic_key);
-        
-        ESP_LOGI(TAG, "Added auth headers - MAC: %s, ChipID: %s, Timestamp: %lld", 
-                 mac.c_str(), chip_id.c_str(), timestamp);
-    }
-}
-
-// URL编码函数
-static std::string url_encode(const std::string& str) {
-    std::string encoded;
-    char hex[4];
-    
-    for (size_t i = 0; i < str.length(); i++) {
-        unsigned char c = str[i];
-        
-        if ((c >= 'A' && c <= 'Z') ||
-            (c >= 'a' && c <= 'z') ||
-            (c >= '0' && c <= '9') ||
-            c == '-' || c == '_' || c == '.' || c == '~') {
-            encoded += c;
-        } else if (c == ' ') {
-            encoded += '+';  // 空格编码为'+'或'%20'
-        } else {
-            snprintf(hex, sizeof(hex), "%%%02X", c);
-            encoded += hex;
-        }
-    }
-    return encoded;
-}
-
-// 在文件开头添加一个辅助函数，统一处理URL构建
-static std::string buildUrlWithParams(const std::string& base_url, const std::string& path, const std::string& query) {
-    std::string result_url = base_url + path + "?";
-    size_t pos = 0;
-    size_t amp_pos = 0;
-    
-    while ((amp_pos = query.find("&", pos)) != std::string::npos) {
-        std::string param = query.substr(pos, amp_pos - pos);
-        size_t eq_pos = param.find("=");
-        
-        if (eq_pos != std::string::npos) {
-            std::string key = param.substr(0, eq_pos);
-            std::string value = param.substr(eq_pos + 1);
-            result_url += key + "=" + url_encode(value) + "&";
-        } else {
-            result_url += param + "&";
-        }
-        
-        pos = amp_pos + 1;
-    }
-    
-    // 处理最后一个参数
-    std::string last_param = query.substr(pos);
-    size_t eq_pos = last_param.find("=");
-    
-    if (eq_pos != std::string::npos) {
-        std::string key = last_param.substr(0, eq_pos);
-        std::string value = last_param.substr(eq_pos + 1);
-        result_url += key + "=" + url_encode(value);
-    } else {
-        result_url += last_param;
-    }
-    
-    return result_url;
-}
-
-Esp32Music::Esp32Music() : last_downloaded_data_(), current_music_url_(), current_song_name_(),
-                         song_name_displayed_(false), current_lyric_url_(), lyrics_(), 
-                         current_lyric_index_(-1), lyric_thread_(), is_lyric_running_(false),cover_thread_(),is_cover_running_(false),
-                         display_mode_(DISPLAY_MODE_LYRICS), is_playing_(false), is_downloading_(false), 
+Esp32Music::Esp32Music() : last_downloaded_data_(), current_song_name_(),
+                         is_playing_(false), is_downloading_(false), 
                          play_thread_(), download_thread_(), audio_buffer_(), buffer_mutex_(), 
                          buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
                          mp3_decoder_initialized_(false) {
@@ -177,72 +40,6 @@ Esp32Music::Esp32Music() : last_downloaded_data_(), current_music_url_(), curren
 
 }
 
-void Esp32Music::InitializeDefaultPlaylists() {
-    // 从 NVS 加载已保存的歌单（如果有）
-    LoadPlaylistsFromNVS();
-
-    // 开机扫描 SD 中音乐并同步到默认歌单（只在实际变化时写 NVS，避免重复写）
-    {
-        // 同步扫描（可改为异步以避免启动阻塞）
-        if (ScanMusicLibrary("/sdcard/音乐")) {
-            // 从 music_library_ 读取文件路径（受 mutex 保护）
-            std::vector<std::string> scanned_paths;
-            {
-                std::lock_guard<std::mutex> lock(music_library_mutex_);
-                scanned_paths.reserve(music_library_.size());
-                for (const auto& music : music_library_) {
-                    scanned_paths.push_back(music.file_path);
-                    ESP_LOGI(TAG, "Song: %s, File: %s, Path: %s, Size: %d bytes",
-                             music.song_name.c_str(), music.file_name.c_str(), music.file_path.c_str(), music.file_size);
-                }
-            }
-
-            // 去重并排序，保证比较稳定
-            std::sort(scanned_paths.begin(), scanned_paths.end());
-            scanned_paths.erase(std::unique(scanned_paths.begin(), scanned_paths.end()), scanned_paths.end());
-
-            int idx = FindPlaylistIndex(this->default_musiclist);
-            if (idx == -1) {
-                // 默认歌单不存在，只有在扫描到文件时创建并保存
-                if (!scanned_paths.empty()) {
-                    CreatePlaylist(this->default_musiclist, scanned_paths);
-                    SavePlaylistsToNVS();
-                    ESP_LOGI(TAG, "Created default playlist from scan with %d songs", (int)scanned_paths.size());
-                } else {
-                    ESP_LOGI(TAG, "No music found on SD to create default playlist");
-                }
-            } else {
-                // 比较现有歌单与扫描结果，只有不同才替换并保存
-                std::vector<std::string> existing;
-                {
-                    std::lock_guard<std::mutex> lock(music_library_mutex_);
-                    existing = playlists_[idx].file_paths;
-                }
-                //std::sort(...)排序：让相同字符串相邻，为后续去重做准备
-                std::sort(existing.begin(), existing.end());
-                //std::unique(...)去重：把相邻的重复元素“挤”到尾部，返回新逻辑末尾的迭代器
-                //.erase(...)删除：把尾部那坨“重复垃圾”从容器里彻底删掉
-                existing.erase(std::unique(existing.begin(), existing.end()), existing.end());
-
-                if (existing != scanned_paths) {
-                    {
-                        std::lock_guard<std::mutex> lock(music_library_mutex_);
-                        playlists_[idx].file_paths = scanned_paths;
-                    }
-                    SavePlaylistsToNVS();
-                    ESP_LOGI(TAG, "Updated default playlist from SD scan (saved to NVS), songs=%d", (int)scanned_paths.size());
-                } else {
-                    ESP_LOGI(TAG, "Default playlist matches SD scan, skip NVS write");
-                }
-            }
-        } else {
-            ESP_LOGW(TAG, "ScanMusicLibrary failed or SD not ready, default playlist not updated");
-        }
-    }
-
-    LoadPlaybackPosition();
-
-}
 
 
 Esp32Music::~Esp32Music() {
@@ -251,7 +48,6 @@ Esp32Music::~Esp32Music() {
     // 停止所有操作
     is_downloading_ = false;
     is_playing_ = false;
-    is_lyric_running_ = false;
     
     // 通知所有等待的线程
     {
@@ -339,13 +135,6 @@ Esp32Music::~Esp32Music() {
         ESP_LOGI(TAG, "Playback thread finished");
     }
     
-    // 等待歌词线程结束
-    if (lyric_thread_.joinable()) {
-        ESP_LOGI(TAG, "Waiting for lyric thread to finish");
-        lyric_thread_.join();
-        ESP_LOGI(TAG, "Lyric thread finished");
-    }
-    
     // 清理缓冲区和MP3解码器
     ClearAudioBuffer();
     CleanupMp3Decoder();
@@ -353,245 +142,6 @@ Esp32Music::~Esp32Music() {
     ESP_LOGI(TAG, "Music player destroyed successfully");
 }
 
-bool Esp32Music::Download(const std::string& song_name, const std::string& artist_name) {
-    ESP_LOGI(TAG, "小智开源音乐固件qq交流群:826072986");
-    ESP_LOGI(TAG, "Starting to get music details for: %s", song_name.c_str());
-    
-    // 清空之前的下载数据
-    last_downloaded_data_.clear();
-    
-    // 保存歌名用于后续显示
-    current_song_name_ = song_name;
-    
-    // 第一步：请求stream_pcm接口获取音频信息
-    std::string base_url = "http://www.xiaozhishop.xyz:5005";
-    std::string full_url = base_url + "/stream_pcm?song=" + url_encode(song_name) + "&artist=" + url_encode(artist_name);
-    
-    ESP_LOGI(TAG, "Request URL: %s", full_url.c_str());
-    
-    // 使用Board提供的HTTP客户端
-    auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(0);
-    
-    // 设置基本请求头
-    http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
-    http->SetHeader("Accept", "application/json");
-    
-    // 添加ESP32认证头
-    add_auth_headers(http.get());
-    
-    // 打开GET连接
-    if (!http->Open("GET", full_url)) {
-        ESP_LOGE(TAG, "Failed to connect to music API");
-        return false;
-    }
-    
-    // 检查响应状态码
-    int status_code = http->GetStatusCode();
-    if (status_code != 200) {
-        ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
-        http->Close();
-        return false;
-    }
-    
-    // 读取响应数据
-    last_downloaded_data_ = http->ReadAll();
-    http->Close();
-    
-    ESP_LOGI(TAG, "HTTP GET Status = %d, content_length = %d", status_code, last_downloaded_data_.length());
-    ESP_LOGD(TAG, "Complete music details response: %s", last_downloaded_data_.c_str());
-    
-    // 简单的认证响应检查（可选）
-    if (last_downloaded_data_.find("ESP32动态密钥验证失败") != std::string::npos) {
-        ESP_LOGE(TAG, "Authentication failed for song: %s", song_name.c_str());
-        return false;
-    }
-    
-    if (!last_downloaded_data_.empty()) {
-        // 解析响应JSON以提取音频URL
-        cJSON* response_json = cJSON_Parse(last_downloaded_data_.c_str());
-        printf("Response JSON: %s\n", last_downloaded_data_.c_str());
-        if (response_json) {
-            // 提取关键信息
-            cJSON* artist = cJSON_GetObjectItem(response_json, "artist");
-            cJSON* title = cJSON_GetObjectItem(response_json, "title");
-            cJSON* audio_url = cJSON_GetObjectItem(response_json, "audio_url");
-            cJSON* lyric_url = cJSON_GetObjectItem(response_json, "lyric_url");
-            // cJSON* cover_url = cJSON_GetObjectItem(response_json, "cover_url");
-            if (cJSON_IsString(artist)) {
-                ESP_LOGI(TAG, "Artist: %s", artist->valuestring);
-            }
-            if (cJSON_IsString(title)) {
-                ESP_LOGI(TAG, "Title: %s", title->valuestring);
-                current_song_name_ = title->valuestring;
-            }
-            
-            // 检查audio_url是否有效
-            if (cJSON_IsString(audio_url) && audio_url->valuestring && strlen(audio_url->valuestring) > 0) {
-                ESP_LOGI(TAG, "Audio URL path: %s", audio_url->valuestring);
-                
-                // 第二步：拼接完整的音频下载URL，确保对audio_url进行URL编码
-                std::string audio_path = audio_url->valuestring;
-                
-                // 使用统一的URL构建功能
-                if (audio_path.find("?") != std::string::npos) {
-                    size_t query_pos = audio_path.find("?");
-                    std::string path = audio_path.substr(0, query_pos);
-                    std::string query = audio_path.substr(query_pos + 1);
-                    
-                    current_music_url_ = buildUrlWithParams(base_url, path, query);
-                } else {
-                    current_music_url_ = base_url + audio_path;
-                }
-                
-                ESP_LOGI(TAG, "小智开源音乐固件qq交流群:826072986");
-                ESP_LOGI(TAG, "Starting streaming playback for: %s", song_name.c_str());
-                song_name_displayed_ = false;  // 重置歌名显示标志
-                StartStreaming(current_music_url_);
-                
-                // 处理歌词URL - 只有在歌词显示模式下才启动歌词
-                if (cJSON_IsString(lyric_url) && lyric_url->valuestring && strlen(lyric_url->valuestring) > 0) {
-                    // 拼接完整的歌词下载URL，使用相同的URL构建逻辑
-                    std::string lyric_path = lyric_url->valuestring;
-                    if (lyric_path.find("?") != std::string::npos) {
-                        size_t query_pos = lyric_path.find("?");
-                        std::string path = lyric_path.substr(0, query_pos);
-                        std::string query = lyric_path.substr(query_pos + 1);
-                        
-                        current_lyric_url_ = buildUrlWithParams(base_url, path, query);
-                    } else {
-                        current_lyric_url_ = base_url + lyric_path;
-                    }
-                    
-                    // 根据显示模式决定是否启动歌词
-                    if (display_mode_ == DISPLAY_MODE_LYRICS) {
-                        ESP_LOGI(TAG, "Loading lyrics for: %s (lyrics display mode)", song_name.c_str());
-                        
-                        // 启动歌词下载和显示
-                        if (is_lyric_running_) {
-                            is_lyric_running_ = false;
-                            if (lyric_thread_.joinable()) {
-                                lyric_thread_.join();
-                            }
-                        }
-                        
-                        is_lyric_running_ = true;
-                        current_lyric_index_ = -1;
-                        lyrics_.clear();
-                        
-                        lyric_thread_ = std::thread(&Esp32Music::LyricDisplayThread, this);
-                    } else {
-                        ESP_LOGI(TAG, "Lyric URL found but spectrum display mode is active, skipping lyrics");
-                    }
-                } else {
-                    ESP_LOGW(TAG, "No lyric URL found for this song");
-                }
-                
-                //  //下载封面
-                // if(cJSON_IsString(cover_url) && cover_url->valuestring && strlen(cover_url->valuestring) >0){
-                //     ESP_LOGI(TAG, "Cover URL: %s", cover_url->valuestring);
-                //     // 拼接完整的封面下载URL，使用相同的URL构建逻辑
-                //     std::string cover_path = cover_url->valuestring;
-                //     if (cover_path.find("?") != std::string::npos) {
-                //         size_t query_pos = cover_path.find("?");
-                //         std::string path = cover_path.substr(0, query_pos);
-                //         std::string query = cover_path.substr(query_pos + 1);
-                        
-                //         current_cover_url_ = buildUrlWithParams(base_url, path, query);
-                //     } else {
-                //         current_cover_url_ = cover_path;
-                //     }
-                //     // 启动歌词下载和显示
-                //     if (is_cover_running_) {
-                //         is_cover_running_ = false;
-                //         if (cover_thread_.joinable()) {
-                //             cover_thread_.join();
-                //         }
-                //     }
-                //         is_cover_running_ = true;
-                //         // current_lyric_index_ = -1;
-                //         // lyrics_.clear();
-                //         cover_thread_ = std::thread(&Esp32Music::CoverDisplayThread, this);
-                    
-                // } else {
-                //     ESP_LOGW(TAG, "No cover URL found for this song");
-                // }
-                cJSON_Delete(response_json);
-                return true;
-            } else {
-                // audio_url为空或无效
-                ESP_LOGE(TAG, "Audio URL not found or empty for song: %s", song_name.c_str());
-                ESP_LOGE(TAG, "Failed to find music: 没有找到歌曲 '%s'", song_name.c_str());
-                cJSON_Delete(response_json);
-                return false;
-            }
-        } else {
-            ESP_LOGE(TAG, "Failed to parse JSON response");
-        }
-    } else {
-        ESP_LOGE(TAG, "Empty response from music API");
-    }
-    
-    return false;
-}
-
-
-
-std::string Esp32Music::GetDownloadResult() {
-    return last_downloaded_data_;
-}
-
-// 开始流式播放
-bool Esp32Music::StartStreaming(const std::string& music_url) {
-    if (music_url.empty()) {
-        ESP_LOGE(TAG, "Music URL is empty");
-        return false;
-    }
-    
-    ESP_LOGD(TAG, "Starting streaming for URL: %s", music_url.c_str());
-    
-    // 停止之前的播放和下载
-    is_downloading_ = false;
-    is_playing_ = false;
-    
-    // 等待之前的线程完全结束
-    if (download_thread_.joinable()) {
-        {
-            std::lock_guard<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.notify_all();  // 通知线程退出
-        }
-        download_thread_.join();
-    }
-    if (play_thread_.joinable()) {
-        {
-            std::lock_guard<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.notify_all();  // 通知线程退出
-        }
-        play_thread_.join();
-    }
-    
-    // 清空缓冲区
-    ClearAudioBuffer();
-    
-    // 配置线程栈大小以避免栈溢出
-    esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    cfg.stack_size = 8192;  // 8KB栈大小
-    cfg.prio = 5;           // 中等优先级
-    cfg.thread_name = "audio_stream";
-    esp_pthread_set_cfg(&cfg);
-    
-    // 开始下载线程
-    is_downloading_ = true;
-    download_thread_ = std::thread(&Esp32Music::DownloadAudioStream, this, music_url);
-    
-    // 开始播放线程（会等待缓冲区有足够数据）
-    is_playing_ = true;
-    play_thread_ = std::thread(&Esp32Music::PlayAudioStream, this);
-    
-    ESP_LOGI(TAG, "Streaming threads started successfully");
-    
-    return true;
-}
 
 // 停止流式播放
 bool Esp32Music::StopStreaming() {
@@ -669,155 +219,12 @@ bool Esp32Music::StopStreaming() {
         }
     }
     
-    // 在线程完全结束后，只在频谱模式下停止FFT显示
-    if (display && display_mode_ == DISPLAY_MODE_SPECTRUM) {
-        // display->stopFft();
-        ESP_LOGI(TAG, "Stopped FFT display in StopStreaming (spectrum mode)");
-    } else if (display) {
-        ESP_LOGI(TAG, "Not in spectrum mode, skipping FFT stop in StopStreaming");
-    }
     
     ESP_LOGI(TAG, "Music streaming stop signal sent");
     return true;
 }
 
-// 流式下载音频数据
-void Esp32Music::DownloadAudioStream(const std::string& music_url) {
-    ESP_LOGD(TAG, "Starting audio stream download from: %s", music_url.c_str());
-    
-    // 验证URL有效性
-    if (music_url.empty() || music_url.find("http") != 0) {
-        ESP_LOGE(TAG, "Invalid URL format: %s", music_url.c_str());
-        is_downloading_ = false;
-        return;
-    }
-    
-    auto network = Board::GetInstance().GetNetwork();
-    auto http = network->CreateHttp(0);
-    
-    // 设置基本请求头
-    http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
-    http->SetHeader("Accept", "*/*");
-    http->SetHeader("Range", "bytes=0-");  // 支持断点续传
-    
-    // 添加ESP32认证头
-    add_auth_headers(http.get());
-    
-    if (!http->Open("GET", music_url)) {
-        ESP_LOGE(TAG, "Failed to connect to music stream URL");
-        is_downloading_ = false;
-        return;
-    }
-    
-    int status_code = http->GetStatusCode();
-    if (status_code != 200 && status_code != 206) {  // 206 for partial content
-        ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
-        http->Close();
-        is_downloading_ = false;
-        return;
-    }
-    
-    ESP_LOGI(TAG, "Started downloading audio stream, status: %d", status_code);
-    
-    // 分块读取音频数据
-    const size_t chunk_size = 4096;  // 4KB每块
-    char buffer[chunk_size];
-    size_t total_downloaded = 0;
-    
-    while (is_downloading_ && is_playing_) {
-        int bytes_read = http->Read(buffer, chunk_size);
-        if (bytes_read < 0) {
-            ESP_LOGE(TAG, "Failed to read audio data: error code %d", bytes_read);
-            break;
-        }
-        if (bytes_read == 0) {
-            ESP_LOGI(TAG, "Audio stream download completed, total: %d bytes", total_downloaded);
-            break;
-        }
-        
-        // 打印数据块信息
-        // ESP_LOGI(TAG, "Downloaded chunk: %d bytes at offset %d", bytes_read, total_downloaded);
-        
-        // 安全地打印数据块的十六进制内容（前16字节）
-        if (bytes_read >= 16) {
-            // ESP_LOGI(TAG, "Data: %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X %02X ...", 
-            //         (unsigned char)buffer[0], (unsigned char)buffer[1], (unsigned char)buffer[2], (unsigned char)buffer[3],
-            //         (unsigned char)buffer[4], (unsigned char)buffer[5], (unsigned char)buffer[6], (unsigned char)buffer[7],
-            //         (unsigned char)buffer[8], (unsigned char)buffer[9], (unsigned char)buffer[10], (unsigned char)buffer[11],
-            //         (unsigned char)buffer[12], (unsigned char)buffer[13], (unsigned char)buffer[14], (unsigned char)buffer[15]);
-        } else {
-            ESP_LOGI(TAG, "Data chunk too small: %d bytes", bytes_read);
-        }
-        
-        // 尝试检测文件格式（检查文件头）
-        if (total_downloaded == 0 && bytes_read >= 4) {
-            if (memcmp(buffer, "ID3", 3) == 0) {
-                ESP_LOGI(TAG, "Detected MP3 file with ID3 tag");
-            } else if (buffer[0] == 0xFF && (buffer[1] & 0xE0) == 0xE0) {
-                ESP_LOGI(TAG, "Detected MP3 file header");
-            } else if (memcmp(buffer, "RIFF", 4) == 0) {
-                ESP_LOGI(TAG, "Detected WAV file");
-            } else if (memcmp(buffer, "fLaC", 4) == 0) {
-                ESP_LOGI(TAG, "Detected FLAC file");
-            } else if (memcmp(buffer, "OggS", 4) == 0) {
-                ESP_LOGI(TAG, "Detected OGG file");
-            } else {
-                ESP_LOGI(TAG, "Unknown audio format, first 4 bytes: %02X %02X %02X %02X", 
-                        (unsigned char)buffer[0], (unsigned char)buffer[1], 
-                        (unsigned char)buffer[2], (unsigned char)buffer[3]);
-            }
-        }
-        
-        // 创建音频数据块
-        uint8_t* chunk_data = (uint8_t*)heap_caps_malloc(bytes_read, MALLOC_CAP_SPIRAM);
-        if (!chunk_data) {
-            ESP_LOGE(TAG, "Failed to allocate memory for audio chunk");
-            break;
-        }
-        memcpy(chunk_data, buffer, bytes_read);
-        
-        // 等待缓冲区有空间
-        {
-            std::unique_lock<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_; });
-            
-            if (is_downloading_) {
-                audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
-                buffer_size_ += bytes_read;
-                total_downloaded += bytes_read;
-                
-                // 通知播放线程有新数据
-                buffer_cv_.notify_one();
-                
-                if (total_downloaded % (256 * 1024) == 0) {  // 每256KB打印一次进度
-                    ESP_LOGI(TAG, "Downloaded %d bytes, buffer size: %d", total_downloaded, buffer_size_);
-                }
-            } else {
-                heap_caps_free(chunk_data);
-                break;
-            }
-        }
-    }
-    
-    http->Close();
-    is_downloading_ = false;
-    
-    // 通知播放线程下载完成
-    {
-        std::lock_guard<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.notify_all();
-    }
-    
-    ESP_LOGI(TAG, "Audio stream download thread finished");
-}
 
-
-bool Esp32Music::WaitForMusicLoaded() {
-    ESP_LOGI(TAG, "等待音乐资源准备完毕");
-
-    auto bits = xEventGroupWaitBits(event_group_, MUSIC_EVENT_LOADED, pdTRUE, pdTRUE, portMAX_DELAY);
-    return (bits & MUSIC_EVENT_LOADED);
-}
 // 流式播放音频数据
 void Esp32Music::PlayAudioStream() {
     ESP_LOGI(TAG, "Starting audio stream playback");
@@ -876,10 +283,6 @@ void Esp32Music::PlayAudioStream() {
     // 标记是否已经处理过ID3标签
     bool id3_processed = false;
     
-    Settings settings("music", true); // 可写命名空间 "music"
-    settings.SetString("last_playlist", current_playlist_name_);
-    const auto& playlist = playlists_[FindPlaylistIndex(current_playlist_name_)];
-    settings.SetInt("last_play_index", playlist.play_index);
     
     xEventGroupSetBits(event_group_, MUSIC_EVENT_LOADED);
     while (is_playing_) {
@@ -907,27 +310,31 @@ void Esp32Music::PlayAudioStream() {
         }
         
         // 设备状态检查通过，显示当前播放的歌名
-        if (!song_name_displayed_ && !current_song_name_.empty()) {
             auto& board = Board::GetInstance();
             auto display = board.GetDisplay();
             if (display) {
-                // 格式化歌名显示为《歌名》播放中...
-                std::string formatted_song_name = "《" + current_song_name_ + "》播放中...";
-                display->SetMusicInfo(formatted_song_name.c_str());
-                ESP_LOGI(TAG, "Displaying song name: %s", formatted_song_name.c_str());
-                song_name_displayed_ = true;
-            }
-
-            // 根据显示模式启动相应的显示功能
-            if (display) {
-                if (display_mode_ == DISPLAY_MODE_SPECTRUM) {
-                    // display->start();
-                    ESP_LOGI(TAG, "Display start() called for spectrum visualization");
-                } else {
-                    ESP_LOGI(TAG, "Lyrics display mode active, FFT visualization disabled");
+                static int flag = 1;
+                if(flag)
+                {
+                    if((MusicOrStory_ == MUSIC) && (!current_song_name_.empty()))
+                    {    
+                        // 格式化歌名显示为《歌名》播放中...
+                        std::string formatted_song_name = "《" + current_song_name_ + "》播放中...";
+                        display->SetMusicInfo(formatted_song_name.c_str());
+                        ESP_LOGI(TAG, "Displaying song name: %s", formatted_song_name.c_str());
+                    }
+                    else if((MusicOrStory_ == STORY) && (!current_story_name_.empty()))
+                    {
+                        // 格式化故事名显示为《故事名》播放中...
+                        std::string formatted_story_name = "《" + current_story_name_ + "》播放中...";
+                        display->SetMusicInfo(formatted_story_name.c_str());
+                        ESP_LOGI(TAG, "Displaying story name: %s", formatted_story_name.c_str());
+                    }
+                    flag = 0;
                 }
+
             }
-        }
+        
         
         // 如果需要更多MP3数据，从缓冲区读取
         if (bytes_left < 4096) {  // 保持至少4KB数据用于解码
@@ -1032,7 +439,11 @@ void Esp32Music::PlayAudioStream() {
                 auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pos_save_time).count();
                 if (elapsed >= kSaveIntervalMs) {
                     // 异步/快速的保存函数已实现为线程安全且尽量合并写操作
-                    SavePlaybackPosition();
+                    if (MusicOrStory_ == MUSIC) {
+                        SavePlaybackPosition();
+                    } else {
+                        SaveStoryPlaybackPosition();
+                    }
                     last_pos_save_time = now;
                 }
             }
@@ -1041,9 +452,7 @@ void Esp32Music::PlayAudioStream() {
                     total_frames_decoded_, current_play_time_ms_, frame_duration_ms,
                     mp3_frame_info_.samprate, mp3_frame_info_.nChans);
             
-            // 更新歌词显示
-            int buffer_latency_ms = 600; // 实测调整值
-            UpdateLyricDisplay(current_play_time_ms_ + buffer_latency_ms);
+
             
             // 将PCM数据发送到Application的音频解码队列
             if (mp3_frame_info_.outputSamps > 0) {
@@ -1143,7 +552,12 @@ void Esp32Music::PlayAudioStream() {
     is_playing_ = false;
 
 
-    SavePlaybackPosition();
+        // 保存断点（按类型）
+    if (MusicOrStory_ == MUSIC) {
+        SavePlaybackPosition();
+    } else {
+        SaveStoryPlaybackPosition();
+    }
     auto &app = Application::GetInstance();
     auto state = app.GetDeviceState();
     if(state == kDeviceStateIdle){
@@ -1248,503 +662,7 @@ size_t Esp32Music::SkipId3Tag(uint8_t* data, size_t size) {
     return total_skip;
 }
 
-// 下载歌词
-bool Esp32Music::DownloadLyrics(const std::string& lyric_url) {
-    ESP_LOGI(TAG, "Downloading lyrics from: %s", lyric_url.c_str());
-    
-    // 检查URL是否为空
-    if (lyric_url.empty()) {
-        ESP_LOGE(TAG, "Lyric URL is empty!");
-        return false;
-    }
-    
-    // 添加重试逻辑
-    const int max_retries = 3;
-    int retry_count = 0;
-    bool success = false;
-    std::string lyric_content;
-    std::string current_url = lyric_url;
-    int redirect_count = 0;
-    const int max_redirects = 5;  // 最多允许5次重定向
-    
-    while (retry_count < max_retries && !success && redirect_count < max_redirects) {
-        if (retry_count > 0) {
-            ESP_LOGI(TAG, "Retrying lyric download (attempt %d of %d)", retry_count + 1, max_retries);
-            // 重试前暂停一下
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-        
-        // 使用Board提供的HTTP客户端
-        auto network = Board::GetInstance().GetNetwork();
-        auto http = network->CreateHttp(0);
-        if (!http) {
-            ESP_LOGE(TAG, "Failed to create HTTP client for lyric download");
-            retry_count++;
-            continue;
-        }
-        
-        // 设置基本请求头
-        http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
-        http->SetHeader("Accept", "text/plain");
-        
-        // 添加ESP32认证头
-        add_auth_headers(http.get());
-        
-        // 打开GET连接
-        ESP_LOGI(TAG, "小智开源音乐固件qq交流群:826072986");
-        if (!http->Open("GET", current_url)) {
-            ESP_LOGE(TAG, "Failed to open HTTP connection for lyrics");
-            // 移除delete http; 因为unique_ptr会自动管理内存
-            retry_count++;
-            continue;
-        }
-        
-        // 检查HTTP状态码
-        int status_code = http->GetStatusCode();
-        ESP_LOGI(TAG, "Lyric download HTTP status code: %d", status_code);
-        
-        // 处理重定向 - 由于Http类没有GetHeader方法，我们只能根据状态码判断
-        if (status_code == 301 || status_code == 302 || status_code == 303 || status_code == 307 || status_code == 308) {
-            // 由于无法获取Location头，只能报告重定向但无法继续
-            ESP_LOGW(TAG, "Received redirect status %d but cannot follow redirect (no GetHeader method)", status_code);
-            http->Close();
-            retry_count++;
-            continue;
-        }
-        
-        // 非200系列状态码视为错误
-        if (status_code < 200 || status_code >= 300) {
-            ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
-            http->Close();
-            retry_count++;
-            continue;
-        }
-        
-        // 读取响应
-        lyric_content.clear();
-        char buffer[1024];
-        int bytes_read;
-        bool read_error = false;
-        int total_read = 0;
-        
-        // 由于无法获取Content-Length和Content-Type头，我们不知道预期大小和内容类型
-        ESP_LOGD(TAG, "Starting to read lyric content");
-        
-        while (true) {
-            bytes_read = http->Read(buffer, sizeof(buffer) - 1);
-            // ESP_LOGD(TAG, "Lyric HTTP read returned %d bytes", bytes_read); // 注释掉以减少日志输出
-            
-            if (bytes_read > 0) {
-                buffer[bytes_read] = '\0';
-                lyric_content += buffer;
-                total_read += bytes_read;
-                
-                // 定期打印下载进度 - 改为DEBUG级别减少输出
-                if (total_read % 4096 == 0) {
-                    ESP_LOGD(TAG, "Downloaded %d bytes so far", total_read);
-                }
-            } else if (bytes_read == 0) {
-                // 正常结束，没有更多数据
-                ESP_LOGD(TAG, "Lyric download completed, total bytes: %d", total_read);
-                success = true;
-                break;
-            } else {
-                // bytes_read < 0，可能是ESP-IDF的已知问题
-                // 如果已经读取到了一些数据，则认为下载成功
-                if (!lyric_content.empty()) {
-                    ESP_LOGW(TAG, "HTTP read returned %d, but we have data (%d bytes), continuing", bytes_read, lyric_content.length());
-                    success = true;
-                    break;
-                } else {
-                    ESP_LOGE(TAG, "Failed to read lyric data: error code %d", bytes_read);
-                    read_error = true;
-                    break;
-                }
-            }
-        }
-        
-        http->Close();
-        
-        if (read_error) {
-            retry_count++;
-            continue;
-        }
-        
-        // 如果成功读取数据，跳出重试循环
-        if (success) {
-            break;
-        }
-    }
-    
-    // 检查是否超过了最大重试次数
-    if (retry_count >= max_retries) {
-        ESP_LOGE(TAG, "Failed to download lyrics after %d attempts", max_retries);
-        return false;
-    }
-    
-    // 记录前几个字节的数据，帮助调试
-    if (!lyric_content.empty()) {
-        size_t preview_size = std::min(lyric_content.size(), size_t(50));
-        std::string preview = lyric_content.substr(0, preview_size);
-        ESP_LOGD(TAG, "Lyric content preview (%d bytes): %s", lyric_content.length(), preview.c_str());
-    } else {
-        ESP_LOGE(TAG, "Failed to download lyrics or lyrics are empty");
-        return false;
-    }
-    
-    ESP_LOGI(TAG, "Lyrics downloaded successfully, size: %d bytes", lyric_content.length());
-    return ParseLyrics(lyric_content);
-}
 
-// 解析歌词
-bool Esp32Music::ParseLyrics(const std::string& lyric_content) {
-    ESP_LOGI(TAG, "Parsing lyrics content");
-    
-    // 使用锁保护lyrics_数组访问
-    std::lock_guard<std::mutex> lock(lyrics_mutex_);
-    
-    lyrics_.clear();
-    
-    // 按行分割歌词内容
-    std::istringstream stream(lyric_content);
-    std::string line;
-    
-    while (std::getline(stream, line)) {
-        // 去除行尾的回车符
-        if (!line.empty() && line.back() == '\r') {
-            line.pop_back();
-        }
-        
-        // 跳过空行
-        if (line.empty()) {
-            continue;
-        }
-        
-        // 解析LRC格式: [mm:ss.xx]歌词文本
-        if (line.length() > 10 && line[0] == '[') {
-            size_t close_bracket = line.find(']');
-            if (close_bracket != std::string::npos) {
-                std::string tag_or_time = line.substr(1, close_bracket - 1);
-                std::string content = line.substr(close_bracket + 1);
-                
-                // 检查是否是元数据标签而不是时间戳
-                // 元数据标签通常是 [ti:标题], [ar:艺术家], [al:专辑] 等
-                size_t colon_pos = tag_or_time.find(':');
-                if (colon_pos != std::string::npos) {
-                    std::string left_part = tag_or_time.substr(0, colon_pos);
-                    
-                    // 检查冒号左边是否是时间（数字）
-                    bool is_time_format = true;
-                    for (char c : left_part) {
-                        if (!isdigit(c)) {
-                            is_time_format = false;
-                            break;
-                        }
-                    }
-                    
-                    // 如果不是时间格式，跳过这一行（元数据标签）
-                    if (!is_time_format) {
-                        // 可以在这里处理元数据，例如提取标题、艺术家等信息
-                        ESP_LOGD(TAG, "Skipping metadata tag: [%s]", tag_or_time.c_str());
-                        continue;
-                    }
-                    
-                    // 是时间格式，解析时间戳
-                    try {
-                        int minutes = std::stoi(tag_or_time.substr(0, colon_pos));
-                        float seconds = std::stof(tag_or_time.substr(colon_pos + 1));
-                        int timestamp_ms = minutes * 60 * 1000 + (int)(seconds * 1000);
-                        
-                        // 安全处理歌词文本，确保UTF-8编码正确
-                        std::string safe_lyric_text;
-                        if (!content.empty()) {
-                            // 创建安全副本并验证字符串
-                            safe_lyric_text = content;
-                            // 确保字符串以null结尾
-                            safe_lyric_text.shrink_to_fit();
-                        }
-                        
-                        lyrics_.push_back(std::make_pair(timestamp_ms, safe_lyric_text));
-                        
-                        if (!safe_lyric_text.empty()) {
-                            // 限制日志输出长度，避免中文字符截断问题
-                            size_t log_len = std::min(safe_lyric_text.length(), size_t(50));
-                            std::string log_text = safe_lyric_text.substr(0, log_len);
-                            ESP_LOGD(TAG, "Parsed lyric: [%d ms] %s", timestamp_ms, log_text.c_str());
-                        } else {
-                            ESP_LOGD(TAG, "Parsed lyric: [%d ms] (empty)", timestamp_ms);
-                        }
-                    } catch (const std::exception& e) {
-                        ESP_LOGW(TAG, "Failed to parse time: %s", tag_or_time.c_str());
-                    }
-                }
-            }
-        }
-    }
-    
-    // 按时间戳排序
-    std::sort(lyrics_.begin(), lyrics_.end());
-    
-    ESP_LOGI(TAG, "Parsed %d lyric lines", lyrics_.size());
-    return !lyrics_.empty();
-}
-
-// 歌词显示线程
-void Esp32Music::LyricDisplayThread() {
-    ESP_LOGI(TAG, "Lyric display thread started");
-    
-    if (!DownloadLyrics(current_lyric_url_)) {
-        ESP_LOGE(TAG, "Failed to download or parse lyrics");
-        is_lyric_running_ = false;
-        return;
-    }
-    
-    // 定期检查是否需要更新显示(频率可以降低)
-    while (is_lyric_running_ && is_playing_) {
-        std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    }
-    
-    ESP_LOGI(TAG, "Lyric display thread finished");
-}
-
-
-void Esp32Music::UpdateLyricDisplay(int64_t current_time_ms) {
-    std::lock_guard<std::mutex> lock(lyrics_mutex_);
-    
-    if (lyrics_.empty()) {
-        return;
-    }
-    auto display = Board::GetInstance().GetDisplay();
-    // display->OnlineMusiclrc_refresh(0,lyrics_);
-    // 查找当前应该显示的歌词
-    int new_lyric_index = -1;
-    int lrc_top = display->OnlineMusiclrc_get_top();
-
-    // 从当前歌词索引开始查找，提高效率
-    //load()是进行一次原子读取并返回当前存储的整数值
-    int start_index = (current_lyric_index_.load() >= 0) ? current_lyric_index_.load() : 0;
-    
-    // 正向查找：找到最后一个时间戳小于等于当前时间的歌词
-    for (int i = start_index; i < (int)lyrics_.size(); i++) {
-        if (lyrics_[i].first <= current_time_ms) {
-            new_lyric_index = i;
-        } else {
-            break;  // 时间戳已超过当前时间
-        }
-    }
-    
-    // 如果没有找到(可能当前时间比第一句歌词还早)，显示空
-    if (new_lyric_index == -1) {
-        new_lyric_index = -1;
-    }
-    
-    // 如果歌词索引发生变化，更新显示
-    if (new_lyric_index != current_lyric_index_) {
-        current_lyric_index_ = new_lyric_index;
-        int new_top = new_lyric_index - 2;
-        if (new_top < 0) new_top = 0;
-        if (new_top != lrc_top)
-            display->lrc_animate_next(new_top);
-        
-        // auto& board = Board::GetInstance();
-        // auto display = board.GetDisplay();
-        // if (display) {
-        //     std::string lyric_text;
-            
-        //     if (current_lyric_index_ >= 0 && current_lyric_index_ < (int)lyrics_.size()) {
-        //         lyric_text = lyrics_[current_lyric_index_].second;
-        //     }
-            
-        //     // 显示歌词
-            // display->SetChatMessage("lyric", lyric_text.c_str());
-            
-        //     ESP_LOGD(TAG, "Lyric update at %lldms: %s", 
-        //             current_time_ms, 
-        //             lyric_text.empty() ? "(no lyric)" : lyric_text.c_str());
-        // }
-    }
-}
-
-
-bool Esp32Music::DownloadCover(const std::string& cover_url)
-{
-    ESP_LOGI(TAG, "Downloading cover from: %s", cover_url.c_str());
-    
-    // 检查URL是否为空
-    if (cover_url.empty()) {
-        ESP_LOGE(TAG, "Cover URL is empty!");
-        return false;
-    }
-
-    // 添加重试逻辑
-    const int max_retries = 3;
-    int retry_count = 0;
-    bool success = false;
-    std::string cover_content;
-    std::string current_url = cover_url;
-    int redirect_count = 0;
-    const int max_redirects = 5;  // 最多允许5次重定向
-    while (retry_count < max_retries && !success && redirect_count < max_redirects) {
-        if(retry_count > 0) {
-            ESP_LOGI(TAG, "Retrying cover download (attempt %d of %d)", retry_count + 1, max_retries);
-            // 重试前暂停一下
-            std::this_thread::sleep_for(std::chrono::milliseconds(500));
-        }
-
-        // 使用Board提供的HTTP客户端
-        auto network = Board::GetInstance().GetNetwork();
-        auto http = network->CreateHttp(0);
-        if (!http) {
-            ESP_LOGE(TAG, "Failed to create HTTP client for cover download");
-            retry_count++;
-            continue;   
-        }
-        // 设置基本请求头
-        http->SetHeader("User-Agent", "ESP32-Music-Player/1.0");
-        // http->SetHeader("Accept", "");
-        // http->SetHeader("Accept", "image/jpeg,image/png,*/*;q=0.8");
-        add_auth_headers(http.get());
-        // 打开GET连接
-        if (!http->Open("GET", current_url)) {
-            ESP_LOGE(TAG, "Failed to open HTTP connection for cover");
-            // 移除delete http; 因为unique_ptr会自动管理内存
-            retry_count++;
-            continue;
-        }
-
-        // 检查HTTP状态码
-        int status_code = http->GetStatusCode();
-        ESP_LOGI(TAG, "Cover download HTTP status code: %d", status_code);
-        // 处理重定向 - 由于Http类没有GetHeader方法，我们只能根据状态码判断
-        if (status_code == 301 || status_code == 302 || status_code == 303 || status_code == 307 || status_code == 308) {
-            // 由于无法获取Location头，只能报告重定向但无法继续
-            ESP_LOGW(TAG, "Received redirect status %d but cannot follow redirect (no GetHeader method)", status_code);
-            http->Close();
-            retry_count++;
-            continue;
-        }
-        // 非200系列状态码视为错误
-        if (status_code < 200 || status_code >= 300) {
-            ESP_LOGE(TAG, "HTTP GET failed with status code: %d", status_code);
-            http->Close();
-            retry_count++;
-            continue;
-        }
-        // 读取响应
-        cover_content.clear();
-        char buffer[1024];
-        int bytes_read;
-        bool read_error = false;
-        int total_read = 0;
-        // 由于无法获取Content-Length和Content-Type头，我们不知道预期大小和内容类型
-        ESP_LOGI(TAG, "Starting to read cover content");
-        while (true) {
-            bytes_read = http->Read(buffer, sizeof(buffer) - 1);
-            // ESP_LOGD(TAG, "Cover HTTP read returned %d bytes", bytes_read);  // 注释掉以减少日志输出
-            if (bytes_read > 0) {
-                buffer[bytes_read] = '\0';
-                cover_content += buffer;
-                total_read += bytes_read;
-                // 定期打印下载进度 - 改为DEBUG级别减少输出
-                if (total_read % 4096 == 0) {
-                    ESP_LOGI(TAG, "Downloaded %d bytes so far", total_read);
-                }
-            } else if (bytes_read == 0) {
-                // 正常结束，没有更多数据
-                ESP_LOGI(TAG, "Cover download completed, total bytes: %d", total_read);
-                success = true;
-                break;
-            } else {
-                // bytes_read < 0，可能是ESP-IDF的已知问题
-                // 如果已经读取到了一些数据，则认为下载成功
-                if (!cover_content.empty()) {
-                    ESP_LOGW(TAG, "HTTP read returned %d, but we have data (%d bytes), continuing", bytes_read, cover_content.length());
-                    success = true;
-                    break;
-                } else {
-                    ESP_LOGE(TAG, "Failed to read cover data: error code %d", bytes_read);
-                    read_error = true;
-                    break;
-                }
-            }
-    }
-        http->Close();
-        if (read_error) {
-            retry_count++;
-            continue;
-        }
-        // 如果成功读取数据，跳出重试循环
-        if (success) {
-            break;
-        }
-    }
-    // 检查是否超过了最大重试次数
-    if (retry_count >= max_retries) {
-        ESP_LOGE(TAG, "Failed to download cover after %d attempts", max_retries);
-        return false;
-    }
-    if(!cover_content.empty()) {
-        size_t preview_size = std::min(cover_content.size(), size_t(50));
-        std::string preview = cover_content.substr(0, preview_size);
-        // ESP_LOGI(TAG, "Cover content preview (%d bytes): %s", cover_content.length(), preview.c_str());
-        ESP_LOG_BUFFER_HEX("RAW", cover_content.data(),
-                   std::min(64, (int)cover_content.length()));
-    } else {
-        ESP_LOGE(TAG, "Failed to download cover or cover is empty");
-        return false;
-    }
-    ESP_LOGI(TAG, "Cover downloaded successfully, size: %d bytes", cover_content.length());
-    // cover_content_ = std::move(cover_content);
-    return ParseCover(cover_content);
-}
-
-static uint8_t *cover_buf = nullptr;   // 存上一张图
-esp_err_t process_jpeg(uint8_t *jpeg_data, size_t jpeg_size, uint8_t **rgb565_data, size_t *rgb565_size, size_t *width, size_t *height);
-extern lv_obj_t *img_cover;          /* 封面 */
-bool Esp32Music::ParseCover(const std::string& cover_content) {
-    ESP_LOGI(TAG, "Parsing cover content");
-    uint8_t *rgb565_data = NULL;
-    size_t rgb565_size = 0;
-    size_t width = 0, height = 0;
-    static lv_img_dsc_t img_dsc_cover_ = {0};
-    if(!process_jpeg((uint8_t *)cover_content.data(), cover_content.length(), &rgb565_data, &rgb565_size, &width, &height))
-    {
-        ESP_LOGE(TAG, "Failed to process JPEG cover image");
-        return false;
-    }
-    if(cover_buf)
-    {
-        free(cover_buf);
-        cover_buf = NULL;
-    }
-    cover_buf = rgb565_data; // 保存上一张图的buf，下一次释放
-    // 设置LVGL图像描述符
-    img_dsc_cover_.data = cover_buf;
-    img_dsc_cover_.data_size = rgb565_size;
-    img_dsc_cover_.header.w = width;
-    img_dsc_cover_.header.h = height;
-    img_dsc_cover_.header.cf = LV_COLOR_FORMAT_RGB565;
-    lv_image_set_src(img_cover, &img_dsc_cover_);  // 使用下载的封面
-    return true;
-}
-
-
-void Esp32Music::CoverDisplayThread() {
-    ESP_LOGI(TAG, "Cover display thread started");
-    
-    if (!DownloadCover(current_cover_url_)) {
-        ESP_LOGE(TAG, "Failed to download or parse Cover");
-        is_cover_running_ = false;
-        return;
-    }
-    
-    // // 定期检查是否需要更新显示(频率可以降低)
-    // while (is_cover_running_ && is_playing_) {
-    //     std::this_thread::sleep_for(std::chrono::milliseconds(50));
-    // }
-    
-    ESP_LOGI(TAG, "Cover display thread finished");
-}
 // 删除复杂的类方法，使用简单的静态函数
 
 /**
@@ -1761,15 +679,6 @@ void Esp32Music::CoverDisplayThread() {
 
 // 删除复杂的认证验证和配置方法，使用简单的静态函数
 
-// 显示模式控制方法实现
-void Esp32Music::SetDisplayMode(DisplayMode mode) {
-    DisplayMode old_mode = display_mode_.load();
-    display_mode_ = mode;
-    
-    ESP_LOGI(TAG, "Display mode changed from %s to %s", 
-            (old_mode == DISPLAY_MODE_SPECTRUM) ? "SPECTRUM" : "LYRICS",
-            (mode == DISPLAY_MODE_SPECTRUM) ? "SPECTRUM" : "LYRICS");
-}
 
 
 
@@ -1884,8 +793,35 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
 
     ESP_LOGI(TAG, "SD card file size: %d bytes", file_size);
     
+
+
     // 保存歌名用于显示
-    current_song_name_ = song_name.empty() ? file_path : song_name;
+    if(MusicOrStory_ == MUSIC)
+    {
+        if(!song_name.empty())
+            current_song_name_ = song_name;
+        else
+        {
+            size_t pos = file_path.find_last_of("/\\");
+            if (pos != std::string::npos) 
+                current_song_name_ = file_path.substr(pos + 1);
+            
+            pos = current_song_name_.find_last_of('.');
+            if (pos != std::string::npos)
+                current_song_name_ = current_song_name_.substr(0, pos);
+        }
+    }
+    else
+    {
+        if(!song_name.empty())
+            current_story_name_ = song_name;
+        else
+        {
+            size_t pos = file_path.find_last_of("/\\");
+            current_story_name_ = file_path.substr(pos + 1);
+        }
+    }
+
     
     // 停止之前的播放
     StopStreaming();
@@ -1893,8 +829,6 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     // 清空之前的下载数据
     last_downloaded_data_.clear();
     
-    // 开始SD卡流式播放
-    song_name_displayed_ = false;
     return StartSDCardStreaming(file_path);
 }
 
@@ -1909,11 +843,7 @@ bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
         return false;
     }
     
-    // // 记录当前播放文件路径（保护并发访问），保证 SavePlaybackPosition 能回退到有效路径
-    // {
-    //     std::lock_guard<std::mutex> lock(music_library_mutex_);
-    //     current_play_file_path_ = file_path;
-    // }
+
 
     ESP_LOGD(TAG, "Starting SD card streaming for: %s", file_path.c_str());
     
@@ -2085,93 +1015,172 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
 
 // ========== SD卡音乐库扫描功能 ==========
 
-bool Esp32Music::ScanMusicLibrary(const std::string& music_folder) {
-    ESP_LOGI(TAG, "Scanning music library from: %s", music_folder.c_str());
-    
-    // 检查目录是否存在
-    if (!file_exists(music_folder)) {
-        ESP_LOGE(TAG, "Music folder does not exist: %s", music_folder.c_str());
+char* Esp32Music::ps_strdup(const std::string &s) {
+    size_t len = s.size() + 1;
+    char *p = (char*)heap_caps_malloc(len, MALLOC_CAP_SPIRAM);
+    if (!p) return nullptr;
+    memcpy(p, s.c_str(), len);
+    return p;
+}
+void Esp32Music::ps_free_str(char *p) {
+    if (p) heap_caps_free(p);
+}
+
+// 释放 PSRAM 中的音乐库（调用时需持有 music_library_mutex_）
+void Esp32Music::free_ps_music_library_locked() {
+    if (!ps_music_library_) return;
+    for (size_t i = 0; i < ps_music_count_; ++i) {
+        auto &e = ps_music_library_[i];
+        ps_free_str(e.file_path); e.file_path = nullptr;
+        ps_free_str(e.file_name); e.file_name = nullptr;
+        ps_free_str(e.song_name); e.song_name = nullptr;
+        ps_free_str(e.artist); e.artist = nullptr;
+        ps_free_str(e.artist_norm); e.artist_norm = nullptr;
+    }
+    heap_caps_free(ps_music_library_);
+    ps_music_library_ = nullptr;
+    ps_music_count_ = 0;
+    ps_music_capacity_ = 0;
+}
+
+// 在 PSRAM 数组中追加一条（要求外部持有 music_library_mutex_）
+// 返回 true 表示追加成功
+bool Esp32Music::ps_add_music_info_locked(const MusicFileInfo &info) {
+    // 扩容策略：1.5x 或最少初始容量 64
+    size_t need = ps_music_count_ + 1;
+    if (need > ps_music_capacity_) {
+        size_t new_cap = ps_music_capacity_ ? (ps_music_capacity_ * 3) / 2 : 64;
+        if (new_cap < need) new_cap = need;
+        // 在 PSRAM 中分配新数组
+        PSMusicInfo *new_arr = (PSMusicInfo*)heap_caps_malloc(new_cap * sizeof(PSMusicInfo), MALLOC_CAP_SPIRAM);
+        if (!new_arr) return false;
+        // 初始化新内存
+        memset(new_arr, 0, new_cap * sizeof(PSMusicInfo));
+        // 复制旧条目结构（指针值拷贝）
+        if (ps_music_library_ && ps_music_count_ > 0) {
+            memcpy(new_arr, ps_music_library_, ps_music_count_ * sizeof(PSMusicInfo));
+            heap_caps_free(ps_music_library_);
+        }
+        ps_music_library_ = new_arr;
+        ps_music_capacity_ = new_cap;
+    }
+
+    // 填充新条目（逐字段在 PSRAM 分配字符串副本）
+    PSMusicInfo &dst = ps_music_library_[ps_music_count_];
+    dst.file_path = ps_strdup(info.file_path);
+    dst.file_name = ps_strdup(info.file_name);
+    dst.song_name = ps_strdup(info.song_name);
+    dst.artist = ps_strdup(info.artist);
+    dst.artist_norm = ps_strdup(info.artist_norm);
+    dst.file_size = info.file_size;
+    dst.duration = info.duration;
+
+    // 检查是否有字符串分配失败，若失败则释放刚分配字段并返回 false（保留已存在条目）
+    if ((!dst.file_path) || (!dst.file_name) || (!dst.song_name) || (!dst.artist) || (!dst.artist_norm)) {
+        ps_free_str(dst.file_path); dst.file_path = nullptr;
+        ps_free_str(dst.file_name); dst.file_name = nullptr;
+        ps_free_str(dst.song_name); dst.song_name = nullptr;
+        ps_free_str(dst.artist); dst.artist = nullptr;
+        ps_free_str(dst.artist_norm); dst.artist_norm = nullptr;
         return false;
     }
-    
-    if (!is_directory(music_folder)) {
-        ESP_LOGE(TAG, "Path is not a directory: %s", music_folder.c_str());
-        return false;
-    }
-    
-    // 清空现有音乐库
-    {
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        music_library_.clear();
-        music_library_scanned_ = false;
-    }
-    
-    // 递归扫描目录
-    ScanDirectoryRecursive(music_folder);
-    
-    // 更新扫描状态
-    {
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        music_library_scanned_ = true;
-    }
-    
-    ESP_LOGI(TAG, "Music library scan completed, found %d music files", music_library_.size());
+
+    ps_music_count_++;
     return true;
 }
 
-
+// Replace ScanDirectoryRecursive: append into PSRAM array
 void Esp32Music::ScanDirectoryRecursive(const std::string& path) {
     DIR* dir = opendir(path.c_str());
     if (!dir) {
         ESP_LOGE(TAG, "Failed to open directory: %s", path.c_str());
         return;
     }
-    
     struct dirent* entry;
     int file_count = 0;
     int dir_count = 0;
-    
     while ((entry = readdir(dir)) != nullptr) {
-        // 跳过 "." 和 ".."
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) {
-            continue;
-        }
-        
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
         std::string full_path = path + "/" + entry->d_name;
-        
-        //如果是目录，递归扫描
         if (entry->d_type == DT_DIR) {
-            // 递归扫描子目录
             ESP_LOGD(TAG, "Scanning subdirectory: %s", full_path.c_str());
             ScanDirectoryRecursive(full_path);
             dir_count++;
-        } 
-        //如果是文件，检查是否是音乐文件
-        else if (entry->d_type == DT_REG) {
-            // 检查是否是音乐文件
+        } else if (entry->d_type == DT_REG) {
             if (IsMusicFile(full_path)) {
                 MusicFileInfo music_info = ExtractMusicInfo(full_path);
-                
-                std::lock_guard<std::mutex> lock(music_library_mutex_);
-                music_library_.push_back(music_info);
-                
-                file_count++;
-                
-                // 每扫描10个文件打印一次进度
-                if (file_count % 10 == 0) {
-                    ESP_LOGI(TAG, "Scanned %d music files...", file_count);
+                {
+                    std::lock_guard<std::mutex> lock(music_library_mutex_);
+                    if (!ps_add_music_info_locked(music_info)) {
+                        ESP_LOGW(TAG, "Failed to add music info into PSRAM for %s", full_path.c_str());
+                        // 失败时继续扫描，其它条目保留
+                    }
                 }
-                
-                ESP_LOGD(TAG, "Found music file: %s (%d bytes)", 
-                        music_info.file_name.c_str(), music_info.file_size);
+                file_count++;
+                if (file_count % 10 == 0) ESP_LOGI(TAG, "Scanned %d music files...", file_count);
+                ESP_LOGD(TAG, "Found music file: %s (%d bytes)", music_info.file_name.c_str(), (int)music_info.file_size);
             }
         }
     }
-    
     closedir(dir);
-    
-    ESP_LOGD(TAG, "Scanned directory %s: %d files, %d subdirectories", 
-             path.c_str(), file_count, dir_count);
+    ESP_LOGD(TAG, "Scanned directory %s: %d files, %d subdirectories", path.c_str(), file_count, dir_count);
+}
+
+// Replace ScanMusicLibrary: use PSRAM array
+bool Esp32Music::ScanMusicLibrary(const std::string& music_folder) {
+    ESP_LOGI(TAG, "Scanning music library from: %s", music_folder.c_str());
+    if (!file_exists(music_folder) || !is_directory(music_folder)) {
+        ESP_LOGE(TAG, "Music folder invalid: %s", music_folder.c_str());
+        return false;
+    }
+    {
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        free_ps_music_library_locked();
+        music_library_scanned_ = false;
+    }
+    ScanDirectoryRecursive(music_folder);
+    {
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        music_library_scanned_ = true;
+    }
+    ESP_LOGI(TAG, "Music library scan completed, found %u music files", (unsigned)ps_music_count_);
+    return ps_music_count_ > 0;
+}
+
+void Esp32Music::ScanAndLoadMusic() {
+    ESP_LOGI(TAG, "Initializing default playlists from SD card music library");
+    {
+        // 清理并扫描
+        if (!ScanMusicLibrary("/sdcard/音乐")) {
+            ESP_LOGW(TAG, "ScanMusicLibrary failed or SD not ready");
+        }
+    }
+    LoadPlaybackPosition();
+}
+
+const PSMusicInfo* Esp32Music::GetMusicLibrary(size_t &out_count) const {
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    out_count = ps_music_count_;
+    return ps_music_library_;
+}
+
+// GetMusicInfo: search PSRAM array by path
+MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
+    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    for (size_t i = 0; i < ps_music_count_; ++i) {
+        if (ps_music_library_[i].file_path && file_path == ps_music_library_[i].file_path) {
+            MusicFileInfo info;
+            info.file_path = std::string(ps_music_library_[i].file_path);
+            info.file_name = ps_music_library_[i].file_name ? std::string(ps_music_library_[i].file_name) : std::string();
+            info.song_name = ps_music_library_[i].song_name ? std::string(ps_music_library_[i].song_name) : std::string();
+            info.artist = ps_music_library_[i].artist ? std::string(ps_music_library_[i].artist) : std::string();
+            info.artist_norm = ps_music_library_[i].artist_norm ? std::string(ps_music_library_[i].artist_norm) : std::string();
+            info.file_size = ps_music_library_[i].file_size;
+            info.duration = ps_music_library_[i].duration;
+            return info;
+        }
+    }
+    return MusicFileInfo();
 }
 
 
@@ -2317,103 +1326,13 @@ SongMeta ParseSongMeta(const std::string& filename) {
     return meta;
 }
 
-std::string Esp32Music::ExtractSongNameFromFileName(const std::string& file_name) const {
-    std::string song_name = file_name;
-    std::string singer_name;
-    // 去掉路径部分
-    size_t pos = song_name.find_last_of("/\\");
-    if (pos != std::string::npos) song_name = song_name.substr(pos + 1);
-
-    // 去掉扩展名（如 .mp3 .wav 等）
-    size_t dot = song_name.find_last_of('.');
-    if (dot != std::string::npos) {
-        std::string ext = song_name.substr(dot);
-        const char* exts[] = {".mp3", ".wav", ".flac", ".m4a", ".aac", ".ogg", ".wma", nullptr};
-        bool known = false;
-        for (int i = 0; exts[i] != nullptr; ++i) {
-            if (ext == exts[i]) { known = true; break; }
-        }
-        if (known) song_name.erase(dot);
-    }
-
-    // 如果文件名是 "Artist - Song" 或 "Artist-Song" 格式，取 '-' 后面的部分作为曲名
-    size_t dash = song_name.find('-');
-    if (dash != std::string::npos) {
-        std::string left = song_name.substr(0, dash);
-        std::string right = song_name.substr(dash + 1);
-        //检查 left 中是否至少有一个字母字符，并且 right 非空且 left 不太长
-        bool left_has_alpha = std::any_of(left.begin(), left.end(), [](unsigned char c){ return std::isalpha(c); });
-        bool right_nonempty = std::any_of(right.begin(), right.end(), [](unsigned char c){ return !std::isspace(c); });
-        if (left_has_alpha && right_nonempty && left.size() < 128) {
-            song_name = right;
-            singer_name = left;
-        }
-    }
-
-    // // 去掉常见后缀（如 "(Official Video)" 等）
-    // const char* suffixes[] = {
-    //     " (official video)", " (official audio)", " (audio)", " (lyrics)",
-    //     " [official audio]", " [lyrics]", " - official", nullptr
-    // };
-    // std::string tmp = song_name;
-    // std::transform(tmp.begin(), tmp.end(), tmp.begin(), [](unsigned char c){ return std::tolower(c); });
-    // for (int i = 0; suffixes[i] != nullptr; ++i) {
-    //     auto s = std::string(suffixes[i]);
-    //     size_t p = tmp.find(s);
-    //     if (p != std::string::npos) {
-    //         song_name.erase(p);
-    //         tmp.erase(p);
-    //     }
-    // }
-
-    // 去除首尾空白
-    size_t start = song_name.find_first_not_of(" \t\r\n");
-    size_t end = song_name.find_last_not_of(" \t\r\n");
-    if (start == std::string::npos) return "";
-    song_name = song_name.substr(start, end - start + 1);
-
-    // 规范化：转小写并移除所有非字母数字字符（包含空格和特殊字符）
-    std::transform(song_name.begin(), song_name.end(), song_name.begin(),
-                   [](unsigned char c){ return std::tolower(c); });
-    song_name.erase(std::remove_if(song_name.begin(), song_name.end(),
-                                   [](unsigned char c){ return !std::isalnum(c); }),
-                    song_name.end());
-
-    return song_name;
-}
-
-MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    
-    for (const auto& music_info : music_library_) {
-        if (music_info.file_path == file_path) {
-            return music_info;
-        }
-    }
-    
-    // 如果没有找到，返回一个空的MusicFileInfo
-    return MusicFileInfo();
-}
 
 
-std::vector<MusicFileInfo> Esp32Music::GetMusicLibrary() const {
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    return music_library_;
-}
+
 
 
 
 // ========== 播放列表功能实现 ==========
-
-int Esp32Music::FindPlaylistIndex(const std::string& name) const {
-
-    for (size_t i = 0; i < playlists_.size(); i++) {
-        if (playlists_[i].name == name) {
-            return i;
-        }
-    }
-    return -1;
-}
 
 bool Esp32Music::CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) {
     if (playlist_name.empty()) {
@@ -2427,96 +1346,88 @@ bool Esp32Music::CreatePlaylist(const std::string& playlist_name, const std::vec
         }
     }
     std::lock_guard<std::mutex> lock(music_library_mutex_);
-    
-    // 检查播放列表是否已存在
-    if (FindPlaylistIndex(playlist_name) != -1) {
-        ESP_LOGE(TAG, "Playlist already exists: %s", playlist_name.c_str());
-        return false;
-    }
-    // 创建新播放列表
-    Playlist new_playlist(playlist_name);
-    new_playlist.file_paths = file_paths;
-    playlists_.push_back(new_playlist);
 
-    ESP_LOGI(TAG, "Created playlist '%s' with %d songs", playlist_name.c_str(), file_paths.size());
+    playlist_.file_paths.clear();
+    playlist_.play_index = 0;
+    playlist_.last_play_index = 0;
+    // 创建新播放列表
+    playlist_ = Playlist(playlist_name);
+    playlist_.file_paths = file_paths;
+
+    ESP_LOGI(TAG, "Created playlist '%s' with %d songs", playlist_.name.c_str(), playlist_.file_paths.size());
     return true;
 }
 
-bool Esp32Music::CreatePlaylist(const std::string& playlist_name) {
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    
-    // 检查播放列表是否已存在
-    if (FindPlaylistIndex(playlist_name) != -1) {
-        ESP_LOGE(TAG, "Playlist already exists: %s", playlist_name.c_str());
-        return false;
-    }
-    
-    // 创建新播放列表
-    Playlist new_playlist(playlist_name);
-    
-    playlists_.push_back(new_playlist);
-    
-    ESP_LOGI(TAG, "Created empty playlist '%s'", playlist_name.c_str());
-    return true;
-}
+
 void Esp32Music::SetPlayIndex(std::string& playlist_name, int index) {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
-    int list_index = FindPlaylistIndex(playlist_name);
-    if (list_index == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return;
+    if(playlist_name == default_musiclist_)
+    {
+        play_index_ = index;
+        if(play_index_ >= ps_music_count_)
+            play_index_ = ps_music_count_;
     }
-    auto& playlist = playlists_[list_index];
-    playlist.last_play_index = playlist.play_index;
-    playlist.play_index = index;
-    if(playlist.play_index >= playlist.file_paths.size())
-        playlist.play_index = playlist.file_paths.size();
+    else
+    {
+        playlist_.play_index = index;
+        if(playlist_.play_index >= playlist_.file_paths.size())
+            playlist_.play_index = playlist_.file_paths.size();
+    }
 }
 
 void Esp32Music::NextPlayIndexOrder(std::string& playlist_name) {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
-    int list_index = FindPlaylistIndex(playlist_name);
-    if (list_index == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
+    if(playlist_name == default_musiclist_)
+    {
+        last_play_index_ = play_index_;
+        play_index_++;
+        if(play_index_ >= ps_music_count_)
+            play_index_ = 0;
+        ESP_LOGI(TAG, "Order next play index: %d", play_index_);
         return;
     }
-    auto& playlist = playlists_[list_index];
-    playlist.last_play_index = playlist.play_index;
-    playlist.play_index++;
-    if(playlist.play_index >= playlist.file_paths.size())
-        playlist.play_index = 0;
-    ESP_LOGI(TAG, "Order next play index: %d", playlist.play_index);
-}
-
-int Esp32Music::GetLastPlayIndex(std::string& playlist_name) {
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    int list_index = FindPlaylistIndex(playlist_name);
-    if (list_index == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return -1;
+    else
+    {
+        playlist_.last_play_index = playlist_.play_index;
+        playlist_.play_index++;
+        if(playlist_.play_index >= playlist_.file_paths.size())
+            playlist_.play_index = 0;
+        ESP_LOGI(TAG, "Order next play index: %d", playlist_.play_index);
     }
-    auto& playlist = playlists_[list_index];
-    return playlist.last_play_index;
 }
 
+
+std::string Esp32Music::SearchMusicFromlistByIndex(std::string list) const {
+    if(list != default_musiclist_)
+        return playlist_.file_paths[playlist_.play_index];
+
+    return ps_music_library_[play_index_].song_name;
+}
 std::string Esp32Music::GetCurrentPlayList(void) {
 
     return current_playlist_name_;
 }
+
 void Esp32Music::NextPlayIndexRandom(std::string& playlist_name) {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
-    int list_index = FindPlaylistIndex(playlist_name);
-    if (list_index == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return;
+    int index;
+    if (playlist_name == default_musiclist_) {
+        ESP_LOGI(TAG, "Playing default music library");
+        do {
+            last_play_index_ = play_index_;
+            play_index_ = esp_random() % ps_music_count_;
+        } while (play_index_ == last_play_index_);
+        index = play_index_;
     }
-    auto& playlist = playlists_[list_index];
-    playlist.last_play_index = playlist.play_index;
-    // 确保随机索引不同于当前索引
-    do {
-        playlist.play_index = esp_random() % playlist.file_paths.size();
-    } while (playlist.play_index == playlist.last_play_index);
-    ESP_LOGI(TAG, "Random next play index: %d", playlist.play_index);
+    else
+    {
+        do {
+            playlist_.last_play_index = playlist_.play_index;
+            playlist_.play_index = esp_random() % playlist_.file_paths.size();
+        } while (playlist_.play_index == playlist_.last_play_index);
+        index = playlist_.play_index;
+    }
+    ESP_LOGI(TAG, "Random next play index: %d", index);
 }
 
 
@@ -2527,136 +1438,59 @@ void Esp32Music::SetCurrentPlayList(const std::string& playlist_name) {
 bool Esp32Music::PlayPlaylist(std::string& playlist_name) {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
 
-    int list_index = FindPlaylistIndex(playlist_name);
-    if (list_index == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return false;
+    if (playlist_name == default_musiclist_) {
+        ESP_LOGI(TAG, "Playing default music library");
+        bool result = PlayFromSD(ps_music_library_[play_index_].file_path);
+        return result;
     }
-    
-    const auto& playlist = playlists_[list_index];
-    if (playlist.file_paths.empty()) {
-        ESP_LOGE(TAG, "Playlist is empty: %s", playlist_name.c_str());
-        return false;
+    else
+    {
+        bool result = PlayFromSD(playlist_.file_paths[playlist_.play_index]);
+        return result;
     }
-    current_playlist_name_ = playlist_name;
-    bool result = PlayFromSD(playlist.file_paths[playlist.play_index]);
-    return result;
 }
 
-std::vector<std::string> Esp32Music::GetPlaylistNames() const {
-    std::vector<std::string> names;
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    
-    for (const auto& playlist : playlists_) {
-        names.push_back(playlist.name);
-    }
-    return names;
-}
 
-std::vector<MusicFileInfo> Esp32Music::GetPlaylist(const std::string& playlist_name) const {
-    std::vector<MusicFileInfo> playlist_info;
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    
-    int index = FindPlaylistIndex(playlist_name);
-    if (index == -1) {
-        return playlist_info;
-    }
-    
-    const auto& playlist = playlists_[index];
-    for (const auto& file_path : playlist.file_paths) {
-        MusicFileInfo info = GetMusicInfo(file_path);
-        if (!info.file_path.empty()) {
-            playlist_info.push_back(info);
-        }
-    }
-    
-    return playlist_info;
-}
+
 
 // 在播放列表中按规范化键搜索（支持 Artist-Song 的组合匹配）
-int Esp32Music::SearchMusicIndexFromlist(std::string name, const std::string& playlist_name) const {
-    int pindex = FindPlaylistIndex(playlist_name);
-    if (pindex == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return -1;
-    }
+int Esp32Music::SearchMusicIndexFromlist(std::string name) const {
 
-    // 规范化输入
-    std::string target = NormalizeForSearch(name);
-
-    const auto& playlist = playlists_[pindex];
-    for (size_t i = 0; i < playlist.file_paths.size(); ++i) {
-        MusicFileInfo info = GetMusicInfo(playlist.file_paths[i]);
-        if (info.file_path.empty()) continue;
+    for (size_t i = 0; i < ps_music_count_; ++i) {
+        MusicFileInfo info = GetMusicInfo(ps_music_library_[i].file_path);
+            if (info.file_path.empty()) continue;
 
         // info.song_name / info.artist_norm 已由 ExtractMusicInfo 填充并规范化
         std::string song_key = info.song_name;
         std::string artist_key = info.artist_norm;
-        std::string combined_key = artist_key.empty() ? song_key : (artist_key + song_key);
+        std::string combined_key = artist_key + "-" + song_key;
 
-        if (song_key == target || combined_key == target) {
-            ESP_LOGI(TAG, "Found song '%s' in playlist '%s' at index %d", name.c_str(), playlist_name.c_str(), (int)i);
+        if (song_key == name || combined_key == name) {
+            ESP_LOGI(TAG, "Found song '%s' in playlist defaultlist at index %d", name.c_str(), (int)i);
             return static_cast<int>(i);
         }
     }
+
     return -1;
 }
 
 // 在播放列表中按规范化键搜索（支持 Artist-Song 的组合匹配）
-std::vector<std::string> Esp32Music::SearchSingerFromlist(std::string singer, const std::string& playlist_name) const {
-    int pindex = FindPlaylistIndex(playlist_name);
-    if (pindex == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return {};
-    }
-
+std::vector<std::string> Esp32Music::SearchSinger(std::string singer) const {
     // 规范化输入
     std::string target = NormalizeForSearch(singer);
     std::vector<std::string> results;
-    const auto& playlist = playlists_[pindex];
-    for (size_t i = 0; i < playlist.file_paths.size(); ++i) {
-        MusicFileInfo info = GetMusicInfo(playlist.file_paths[i]);
+    for (size_t i = 0; i < ps_music_count_; ++i) {
+        MusicFileInfo info = GetMusicInfo(ps_music_library_[i].file_path);
         if (info.file_path.empty()) continue;
 
         std::string artist_key = info.artist_norm;
         if (artist_key == target) {
-            ESP_LOGI(TAG, "Found singer '%s' in playlist '%s' at index %d", singer.c_str(), playlist_name.c_str(), (int)i);
             results.push_back(info.song_name);
         }
     }
     return results;
 }
 
-std::string Esp32Music::SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const {
-    int pindex = FindPlaylistIndex(playlist_name);
-    if (pindex == -1) {
-        ESP_LOGE(TAG, "Playlist not found: %s", playlist_name.c_str());
-        return "";
-    }
-
-    std::string target = NormalizeForSearch(name);
-    const auto& playlist = playlists_[pindex];
-    for (size_t i = 0; i < playlist.file_paths.size(); ++i) {
-        MusicFileInfo info = GetMusicInfo(playlist.file_paths[i]);
-        if (info.file_path.empty()) continue;
-
-        std::string song_key = info.song_name;
-        std::string artist_key = info.artist_norm;
-        std::string combined_key = artist_key.empty() ? song_key : (artist_key + song_key);
-
-        if (song_key == target || combined_key == target) {
-            ESP_LOGI(TAG, "Found song '%s' in playlist '%s' at index %d", name.c_str(), playlist_name.c_str(), (int)i);
-            return info.file_path;
-        }
-    }
-    return "";
-}
-
-void Esp32Music::AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files) {
-    ESP_LOGI(TAG, "Adding music to default playlists");
-    CreatePlaylist(default_musiclist, default_music_files);
-    SavePlaylistsToNVS();
-}
 
 
 std::string Esp32Music::GetCurrentSongName()
@@ -2664,247 +1498,8 @@ std::string Esp32Music::GetCurrentSongName()
     return current_song_name_;
 }
 
-// 异步保存控制标志（文件范围静态，避免修改头文件）
-static std::atomic<bool> save_in_progress(false);
-static std::atomic<bool> save_pending(false);
-void Esp32Music::SavePlaylistsToNVS() {
-    // 复制当前 playlists_ 快照（锁内）
-    std::vector<Playlist> snapshot;
-    {
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        snapshot = playlists_;
-    }
-
-    // 如果已有保存进行中，只标记 pending 并返回（后台线程会处理后续变更）
-    if (save_in_progress.exchange(true)) {
-        save_pending.store(true);
-        return;
-    }
-
-    // 启动后台写线程（分离）
-    std::thread([snapshot,this]() mutable {
-        while (true) {
-            // 序列化 snapshot 到 JSON
-            cJSON* root = cJSON_CreateArray();
-            for (const auto& pl : snapshot) {
-                cJSON* obj = cJSON_CreateObject();
-                cJSON_AddStringToObject(obj, "name", pl.name.c_str());
-                ESP_LOGI(TAG, "Serializing playlist '%s' ", pl.name.c_str());
-                cJSON* files = cJSON_CreateArray();
-                for (const auto& f : pl.file_paths) {
-                    cJSON_AddItemToArray(files, cJSON_CreateString(f.c_str()));
-                }
-                cJSON_AddItemToObject(obj, "files", files);
-                cJSON_AddItemToArray(root, obj);
-            }
-            char* json_str = cJSON_PrintUnformatted(root);
-            cJSON_Delete(root);
-
-            if (json_str) {
-                // 写入 NVS（使用 Settings，会在析构时 commit）
-                Settings settings("music", true);
-                settings.SetString("playlists", json_str);
-                free(json_str);
-                ESP_LOGI(TAG, "Saved %d playlists to NVS (async)", (int)snapshot.size());
-            } else {
-                ESP_LOGW(TAG, "Failed to serialize playlists to JSON (async)");
-            }
-
-            // 写入完成，检查是否有 pending（在此后台运行期间外部调用了 SavePlaylistsToNVS）
-            if (save_pending.exchange(false)) {
-                // 重新获取最新 snapshot
-
-                    std::lock_guard<std::mutex> lock(this->music_library_mutex_);
-                    snapshot = this->playlists_;
-                    continue; // 继续循环，执行下一次保存
-            }
-
-            break; // 无 pending，完成所有保存
-        }
-
-        // 释放 in_progress 标志
-        save_in_progress.store(false);
-    }).detach();
-}
-
-
-
-
-bool Esp32Music::DeletePlaylistFromNVS(const std::string& playlist_name) {
-    if (playlist_name.empty()) {
-        ESP_LOGE(TAG, "DeletePlaylistFromNVS called with empty name");
-        return false;
-    }
-
-    {
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        int idx = FindPlaylistIndex(playlist_name);
-        if (idx == -1) {
-            ESP_LOGW(TAG, "DeletePlaylistFromNVS: playlist not found: %s", playlist_name.c_str());
-            return false;
-        }
-
-        // 如果正在播放该歌单，先停止播放（防止删除后引用失效）
-        bool was_current = (current_playlist_name_ == playlist_name);
-        if (was_current) {
-            ESP_LOGI(TAG, "Deleting current playlist '%s' - stopping playback", playlist_name.c_str());
-            // 设置停止标志并通知线程安全退出
-            is_playing_ = false;
-            is_downloading_ = false;
-            {
-                std::lock_guard<std::mutex> buf_lock(buffer_mutex_);
-                buffer_cv_.notify_all();
-            }
-            // 清空当前播放歌单指示，避免后续保存写入已删除歌单
-            current_playlist_name_.clear();
-        }
-
-        // 从内存中移除歌单
-        playlists_.erase(playlists_.begin() + idx);
-        ESP_LOGI(TAG, "Deleted playlist '%s' from memory", playlist_name.c_str());
-    }
-
-    // 持久化变更（异步写入）
-    SavePlaylistsToNVS();
-
-    // 如果 NVS 中保存的断点指向此歌单，则清除相关断点信息
-    Settings settings("music", true);
-    std::string saved_pl = settings.GetString("last_playlist", "");
-    if (saved_pl == playlist_name) {
-        settings.EraseKey("last_playlist");
-        settings.EraseKey("last_play_index");
-        settings.EraseKey("last_play_ms");
-        settings.EraseKey("lastfileoffset");
-        settings.EraseKey("last_music_name");
-        settings.Commit();
-        // 更新内存状态
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        has_saved_position_ = false;
-        saved_playlist_name_.clear();
-        saved_play_index_ = -1;
-        saved_play_ms_ = 0;
-        saved_file_offset_ = 0;
-        // saved_file_path_.clear();
-        ESP_LOGI(TAG, "Cleared saved playback position referencing deleted playlist '%s' from NVS", playlist_name.c_str());
-    }
-
-    return true;
-}
-
-
-bool Esp32Music::DeleteAllPlaylistsExceptDefault() {
-    // 先在锁内删除内存中的歌单（记录是否需要停止播放某个正在播放的歌单）
-    std::string playing_to_stop;
-    bool removed_any = false;
-    {
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        for (auto it = playlists_.begin(); it != playlists_.end(); ) {
-            if (it->name != default_musiclist) {
-                // 如果要删除的是当前正在播放的歌单，记下来稍后停止播放（避免在持锁时调用可能阻塞的 StopStreaming）
-                if (!current_playlist_name_.empty() && current_playlist_name_ == it->name) {
-                    playing_to_stop = it->name;
-                    current_playlist_name_.clear(); // 先清除当前标识，避免其它线程再使用
-                }
-                it = playlists_.erase(it);
-                removed_any = true;
-            } else {
-                ++it;
-            }
-        }
-    }
-
-    // 如果需要停止播放，脱锁后再安全停止播放线程
-    if (!playing_to_stop.empty()) {
-        ESP_LOGI(TAG, "Deleted current playlist '%s', stopping playback", playing_to_stop.c_str());
-        // StopStreaming 可能阻塞并需要其他锁；异步或同步调用视你的 StopStreaming 实现而定
-        // StopStreaming();
-    }
-
-    // // 持久化歌单变更
-    // SavePlaylistsToNVS();
-
-    // // 清理 NVS 中引用已删除歌单的断点记录（如果 last_playlist 不再存在）
-    // Settings settings("music", true);
-    // std::string saved_pl = settings.GetString("last_playlist", "");
-    // if (!saved_pl.empty() && saved_pl != default_musiclist) {
-    //     // 如果 saved_pl 不在内存歌单中，则清除断点相关键
-    //     bool found = false;
-    //     {
-    //         std::lock_guard<std::mutex> lock(music_library_mutex_);
-    //         for (const auto& pl : playlists_) {
-    //             if (pl.name == saved_pl) { found = true; break; }
-    //         }
-    //     }
-    //     if (!found) {
-    //         settings.EraseKey("last_playlist");
-    //         settings.EraseKey("last_play_index");
-    //         settings.EraseKey("last_play_ms");
-    //         settings.EraseKey("last_file_path");
-    //         settings.EraseKey("last_file_offset");
-    //         settings.EraseKey("last_music_name");
-    //         settings.Commit();
-    //         // 更新内存状态
-    //         std::lock_guard<std::mutex> lock(music_library_mutex_);
-    //         has_saved_position_ = false;
-    //         saved_playlist_name_.clear();
-    //         saved_play_index_ = -1;
-    //         saved_play_ms_ = 0;
-    //         saved_file_offset_ = 0;
-    //         saved_file_path_.clear();
-    //         ESP_LOGI(TAG, "Cleared saved playback position referencing deleted playlists");
-    //     }
-    // }
-
-    ESP_LOGI(TAG, "DeleteAllPlaylistsExceptDefault completed, removed_any=%d", removed_any ? 1 : 0);
-    return removed_any;
-}
-
-// 从 NVS 加载 playlists_
-bool Esp32Music::LoadPlaylistsFromNVS() {
-    Settings settings("music", false);
-    std::string json = settings.GetString("playlists", "");
-    if (json.empty()) {
-        ESP_LOGI(TAG, "No playlists found in NVS");
-        return false;
-    }
-    cJSON* root = cJSON_Parse(json.c_str());
-    if (!root || !cJSON_IsArray(root)) {
-        ESP_LOGW(TAG, "Invalid playlists JSON in NVS");
-        if (root) cJSON_Delete(root);
-        return false;
-    }
-
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    playlists_.clear();
-    cJSON* item = nullptr;
-    cJSON_ArrayForEach(item, root) {
-        cJSON* name = cJSON_GetObjectItem(item, "name");
-        cJSON* files = cJSON_GetObjectItem(item, "files");
-        if (!cJSON_IsString(name) || !cJSON_IsArray(files)) continue;
-        Playlist pl(name->valuestring);
-        cJSON* f = nullptr;
-        cJSON_ArrayForEach(f, files) {
-            if (cJSON_IsString(f)) pl.file_paths.push_back(f->valuestring);
-        }
-        playlists_.push_back(std::move(pl));
-        ESP_LOGI(TAG, "Loaded playlist '%s' ", pl.name.c_str());
-    }
-    cJSON_Delete(root);
-    ESP_LOGI(TAG, "Loaded %d playlists from NVS", (int)playlists_.size());
-    return true;
-}
-
-
-
-
 void Esp32Music::LoadPlaybackPosition() {
     Settings settings("music", false);
-    std::string plist = settings.GetString("last_playlist", "");
-    if (plist.empty()) {
-        has_saved_position_ = false;
-        ESP_LOGI(TAG, "No saved playback position in NVS");
-        return;
-    }
     int idx = settings.GetInt("last_play_index", -1);
     int32_t ms = settings.GetInt("last_play_ms", 0);
     int64_t offset_i64 = settings.GetInt64("lastfileoffset", 0);
@@ -2912,41 +1507,21 @@ void Esp32Music::LoadPlaybackPosition() {
     // std::string saved_path = settings.GetString("last_file_path", "");
     size_t offset = offset_i64 > 0 ? static_cast<size_t>(offset_i64) : 0;
 
-    saved_playlist_name_ = plist;
     saved_play_index_ = idx;
     saved_play_ms_ = ms;
     saved_file_offset_ = offset;
-    // saved_file_path_ = saved_path;
-    has_saved_position_ = true;
-    current_playlist_name_ = saved_playlist_name_;
-    current_song_name_ = music_name;
+    has_saved_MusicPosition_ = true;
+    current_playlist_name_ = default_musiclist_;
+    
+    size_t pos = music_name.find_last_of("/\\");
+    if (pos == std::string::npos) 
+        current_song_name_ = music_name;
+    else
+        current_song_name_ = music_name.substr(pos + 1);
 
-    // // 额外：如果保存了 file_path，则尽量在对应歌单中根据路径寻找正确的索引（防止索引重排）
-    // if (!saved_file_path_.empty()) {
-    //     int pidx = FindPlaylistIndex(saved_playlist_name_);
-    //     if (pidx != -1) {
-    //         const auto &files = playlists_[pidx].file_paths;
-    //         int found = -1;
-    //         for (size_t i = 0; i < files.size(); ++i) {
-    //             if (files[i] == saved_file_path_) { found = (int)i; break; }
-    //         }
-    //         if (found != -1) {
-    //             saved_play_index_ = found;
-    //             ESP_LOGI(TAG, "Recovered saved file path in playlist '%s' -> index %d", saved_playlist_name_.c_str(), saved_play_index_);
-    //         } else {
-    //             ESP_LOGW(TAG, "Saved file path not found in playlist '%s', will try saved index %d", saved_playlist_name_.c_str(), saved_play_index_);
-    //         }
-    //     } else {
-    //         ESP_LOGW(TAG, "Saved playlist '%s' not found when resolving saved file path", saved_playlist_name_.c_str());
-    //     }
-    //         // ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' index=%d ms=%d offset=%llu path='%s'",
-    //         //  saved_playlist_name_.c_str(), saved_play_index_, (int)saved_play_ms_, (unsigned long long)saved_file_offset_,
-    //         //  saved_file_path_.c_str());
-
-    // }
-    // else {
-        ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' index=%d ms=%d offset=%llu",
-             saved_playlist_name_.c_str(), saved_play_index_, (int)saved_play_ms_, (unsigned long long)saved_file_offset_
+    play_index_ = saved_play_index_;
+        ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' name='%s' index=%d ms=%d offset=%llu",
+             current_playlist_name_.c_str(), current_song_name_.c_str(), saved_play_index_, (int)saved_play_ms_, (unsigned long long)saved_file_offset_
              );
     // }
 
@@ -2954,33 +1529,16 @@ void Esp32Music::LoadPlaybackPosition() {
 
 
 void Esp32Music::SavePlaybackPosition() {
+    
+    size_t pos = current_song_name_.find_last_of("/\\");
+    if (pos != std::string::npos) 
+        current_song_name_ = current_song_name_.substr(pos + 1);
+    pos = current_song_name_.find_last_of('.');
+    if (pos != std::string::npos)
+        current_song_name_ = current_song_name_.substr(0, pos);
+
     // 先读取需要保存的状态（在 mutex 内确保一致性）
-    std::string playlist_copy;
-    int play_index = -1;
-    std::string path_from_playlist;
-    {
-        std::lock_guard<std::mutex> lock(music_library_mutex_);
-        playlist_copy = current_playlist_name_;
-        if (!playlist_copy.empty()) {
-            int idx = FindPlaylistIndex(playlist_copy);
-            if (idx != -1) {
-                // 先把 play_index 读取到本地并校验范围
-                play_index = playlists_[idx].play_index;
-                if (play_index >= 0 && play_index < (int)playlists_[idx].file_paths.size()) {
-                    path_from_playlist = playlists_[idx].file_paths[play_index];
-                } else {
-                    ESP_LOGW(TAG, "SavePlaybackPosition: play_index %d out of range for playlist '%s' (size=%u)",
-                             play_index, playlist_copy.c_str(), (unsigned)playlists_[idx].file_paths.size());
-                }
-            } else {
-                ESP_LOGW(TAG, "SavePlaybackPosition: current playlist '%s' not found", playlist_copy.c_str());
-            }
-        } else {
-            // nothing to save
-            ESP_LOGD(TAG, "SavePlaybackPosition: no current playlist, skip saving");
-            return;
-        }
-    }
+    saved_play_index_ = SearchMusicIndexFromlist(current_song_name_);
 
     // 读取 current_play_file_offset_
     size_t file_offset = 0;
@@ -2989,67 +1547,33 @@ void Esp32Music::SavePlaybackPosition() {
         file_offset = current_play_file_offset_;
     }
 
-    // // 若 playlist 路径为空则回退到 current_play_file_path_
-    // std::string final_path;
-    // {
-    //     std::lock_guard<std::mutex> lock(music_library_mutex_);
-    //     final_path = path_from_playlist.empty() ? current_play_file_path_ : path_from_playlist;
-    // }
-
     int64_t play_ms = current_play_time_ms_;
-
     Settings settings("music", true);
-    settings.SetString("last_playlist", playlist_copy);
-    settings.SetInt("last_play_index", play_index);
+    settings.SetInt("last_play_index", saved_play_index_);
     settings.SetInt("last_play_ms", static_cast<int32_t>(play_ms));
     settings.SetInt64("lastfileoffset", (int64_t)file_offset);
     settings.SetString("last_music_name", current_song_name_);
-    // if (!final_path.empty()) {
-    //     settings.SetString("last_file_path", final_path);
-    // } else {
-    //     // 如果最终路径也为空，仍然写入但记录警告
-    //     ESP_LOGW(TAG, "SavePlaybackPosition: final_path empty for playlist='%s' index=%d", playlist_copy.c_str(), play_index);
-    // }
+
     settings.Commit();
 
-
-    ESP_LOGI(TAG, "Saved playback pos: playlist='%s' index=%d ms=%lld offset=%llu ",
-             playlist_copy, play_index, (long long)play_ms, (unsigned long long)file_offset);
+    ESP_LOGI(TAG, "Saved playback pos: name=%s index=%d ms=%lld offset=%llu ",
+              current_song_name_.c_str(), saved_play_index_, (long long)play_ms, (unsigned long long)file_offset);
 }
 
 bool Esp32Music::ResumeSavedPlayback() {
-    if (!has_saved_position_) {
+    if (!has_saved_MusicPosition_) {
         ESP_LOGI(TAG, "No saved playback position to resume");
         return false;
     }
 
-    // 确保歌单已加载
-    int pidx = FindPlaylistIndex(saved_playlist_name_);
-    if (pidx == -1) {
-        ESP_LOGW(TAG, "Saved playlist not found: %s", saved_playlist_name_.c_str());
-        return false;
-    }
-
-    // // 优先按文件路径恢复（如果存在）
     std::string file_path;
-    // if (!saved_file_path_.empty()) {
-    //     // 确认路径在歌单里
-    //     const auto &files = playlists_[pidx].file_paths;
-    //     auto it = std::find(files.begin(), files.end(), saved_file_path_);
-    //     if (it != files.end()) {
-    //         file_path = *it;
-    //         saved_play_index_ = (int)std::distance(files.begin(), it);
-    //         ESP_LOGI(TAG, "Resuming by saved file path: %s (index %d)", file_path.c_str(), saved_play_index_);
-    //     } else {
-    //         ESP_LOGW(TAG, "Saved file path not found in playlist, falling back to saved index");
-    //     }
-    // }
 
-    if (saved_play_index_ < 0 || saved_play_index_ >= (int)playlists_[pidx].file_paths.size()) {
+
+    if (saved_play_index_ < 0 || saved_play_index_ >= ps_music_count_) {
         ESP_LOGW(TAG, "Saved play index out of range: %d", saved_play_index_);
         return false;
     }
-    file_path = playlists_[pidx].file_paths[saved_play_index_];
+    file_path = ps_music_library_[saved_play_index_].file_path;
     
 
     // 优先按字节偏移恢复
@@ -3077,6 +1601,7 @@ bool Esp32Music::ResumeSavedPlayback() {
 
     // 否则从头开始播放
     ESP_LOGI(TAG, "Resume fallback: start from beginning of %s", file_path.c_str());
+
     return PlayFromSD(file_path, /*song_name*/"", 0);
 }
 
@@ -3090,4 +1615,496 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
 
     // 使用已有逻辑开始播放（原来的 PlayFromSD 会调用 StartSDCardStreaming）
     return PlayFromSD(file_path, song_name);
+}
+
+
+
+//----------------------------------------------故事----------------------------------------------------
+
+
+void Esp32Music::ScanAndLoadStory() {
+    ESP_LOGI(TAG, "Initializing default playlists from SD card story library");
+    {
+        // 清理并扫描
+        if (!ScanStoryLibrary("/sdcard/故事")) {
+            ESP_LOGW(TAG, "ScanStoryLibrary failed or SD not ready");
+        }
+    }
+    LoadStoryPlaybackPosition();
+}
+
+
+static std::string NormalizeForSearch_local(const std::string &s) {
+    return NormalizeForSearch(s);
+}
+
+
+// ...existing code...
+// 释放 PSRAM 中的故事索引（要求持有 story_index_mutex_）
+void Esp32Music::free_ps_story_index_locked() {
+    if (!ps_story_index_) return;
+    for (size_t i = 0; i < ps_story_count_; ++i) {
+        PSStoryEntry &e = ps_story_index_[i];
+        // 释放章节字符串（这些在 SPIRAM 分配）
+        if (e.chapters) {
+            for (size_t j = 0; j < e.chapter_count; ++j) {
+                if (e.chapters[j]) heap_caps_free(e.chapters[j]);
+            }
+            heap_caps_free(e.chapters);
+            e.chapters = nullptr;
+            e.chapter_count = 0;
+        }
+        if (e.category) heap_caps_free(e.category);
+        if (e.story_name) heap_caps_free(e.story_name);
+        // norm_* 是 std::string（DRAM），将在 delete[] 时自动析构
+    }
+    // ps_story_index_ 是用 new[] 分配的，使用 delete[]
+    delete [] ps_story_index_;
+    ps_story_index_ = nullptr;
+    ps_story_count_ = 0;
+    ps_story_capacity_ = 0;
+}
+
+// 可选的追加函数（要求在调用前持有 story_index_mutex_）
+bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
+    size_t need = ps_story_count_ + 1;
+    if (need > ps_story_capacity_) {
+        size_t new_cap = ps_story_capacity_ ? (ps_story_capacity_ * 3) / 2 : 16;
+        if (new_cap < need) new_cap = need;
+        // 在 DRAM 中分配 PSStoryEntry 数组以保证 std::string 正确构造/析构
+        PSStoryEntry *new_arr = new (std::nothrow) PSStoryEntry[new_cap];
+        if (!new_arr) return false;
+        // 将已有元素浅拷贝/移动到新数组（转移对 SPIRAM 字符串的所有权并移动 std::string）
+        if (ps_story_index_ && ps_story_count_ > 0) {
+            for (size_t i = 0; i < ps_story_count_; ++i) {
+                // 转移 SPIRAM 分配的指针所有权
+                new_arr[i].category = ps_story_index_[i].category;
+                new_arr[i].story_name = ps_story_index_[i].story_name;
+                new_arr[i].chapters = ps_story_index_[i].chapters;
+                new_arr[i].chapter_count = ps_story_index_[i].chapter_count;
+                #ifdef HAVE_STORY_ID_MEMBER
+                new_arr[i].story_id = ps_story_index_[i].story_id;
+                #endif
+                // 移动 DRAM 中的规范化字符串
+                new_arr[i].norm_category = std::move(ps_story_index_[i].norm_category);
+                new_arr[i].norm_story = std::move(ps_story_index_[i].norm_story);
+                // 防止旧数组被释放时 double-free 指针
+                ps_story_index_[i].category = nullptr;
+                ps_story_index_[i].story_name = nullptr;
+                ps_story_index_[i].chapters = nullptr;
+                ps_story_index_[i].chapter_count = 0;
+            }
+            // 释放旧数组内存（旧数组用了 new[]，因此 delete[]）
+            delete [] ps_story_index_;
+        }
+        ps_story_index_ = new_arr;
+        ps_story_capacity_ = new_cap;
+    }
+
+    // 填充新条目：在 SPIRAM 中分配字符串和章节数组
+    PSStoryEntry &dst = ps_story_index_[ps_story_count_];
+    dst.category = ps_strdup(e.category);
+    dst.story_name = ps_strdup(e.story);
+    if (!dst.category || !dst.story_name) {
+        ps_free_str(dst.category); dst.category = nullptr;
+        ps_free_str(dst.story_name); dst.story_name = nullptr;
+        return false;
+    }
+    if (!e.chapters.empty()) {
+        dst.chapters = (char**)heap_caps_malloc(e.chapters.size() * sizeof(char*), MALLOC_CAP_SPIRAM);
+        if (!dst.chapters) {
+            ps_free_str(dst.category); dst.category = nullptr;
+            ps_free_str(dst.story_name); dst.story_name = nullptr;
+            return false;
+        }
+        memset(dst.chapters, 0, e.chapters.size() * sizeof(char*));
+        for (size_t i = 0; i < e.chapters.size(); ++i) {
+            dst.chapters[i] = ps_strdup(e.chapters[i]);
+            if (!dst.chapters[i]) {
+                // 回滚已分配章节
+                for (size_t k = 0; k < i; ++k) heap_caps_free(dst.chapters[k]);
+                heap_caps_free(dst.chapters);
+                dst.chapters = nullptr;
+                ps_free_str(dst.category); dst.category = nullptr;
+                ps_free_str(dst.story_name); dst.story_name = nullptr;
+                return false;
+            }
+        }
+        dst.chapter_count = e.chapters.size();
+    } else {
+        dst.chapters = nullptr;
+        dst.chapter_count = 0;
+    }
+
+    // 在 DRAM 中生成规范化字符串（轻量）
+    dst.norm_category = NormalizeForSearch_local(std::string(dst.category ? dst.category : ""));
+    dst.norm_story = NormalizeForSearch_local(std::string(dst.story_name ? dst.story_name : ""));
+
+    ps_story_count_++;
+    return true;
+}
+
+bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
+    ESP_LOGI(TAG, "Scanning story library from: %s", story_folder.c_str());
+    struct stat st;
+    if (stat(story_folder.c_str(), &st) != 0 || !S_ISDIR(st.st_mode)) {
+        ESP_LOGW(TAG, "Story folder not found: %s", story_folder.c_str());
+        return false;
+    }
+
+    // 先清理旧的 PSRAM 索引（在锁内）
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        free_ps_story_index_locked();
+    }
+
+    DIR* d_cat = opendir(story_folder.c_str());
+    if (!d_cat) {
+        ESP_LOGW(TAG, "Failed to open story folder: %s", story_folder.c_str());
+        return false;
+    }
+
+    struct dirent* ent_cat;
+    size_t added = 0;
+
+    while ((ent_cat = readdir(d_cat)) != nullptr) {
+        const char* cname = ent_cat->d_name;
+        if (strcmp(cname, ".") == 0 || strcmp(cname, "..") == 0) continue;
+
+        std::string cat_path = story_folder + "/" + cname;
+        struct stat st_cat;
+        if (stat(cat_path.c_str(), &st_cat) != 0 || !S_ISDIR(st_cat.st_mode)) continue;
+
+        DIR* d_story = opendir(cat_path.c_str());
+        if (!d_story) continue;
+        struct dirent* ent_story;
+
+        while ((ent_story = readdir(d_story)) != nullptr) {
+            const char* sname = ent_story->d_name;
+            if (strcmp(sname, ".") == 0 || strcmp(sname, "..") == 0) continue;
+
+            std::string story_path = cat_path + "/" + sname;
+            struct stat st_story;
+            if (stat(story_path.c_str(), &st_story) != 0 || !S_ISDIR(st_story.st_mode)) continue;
+
+            // 收集章节文件到临时容器
+            std::vector<std::string> chapters;
+            DIR* d_ch = opendir(story_path.c_str());
+            if (d_ch) {
+                struct dirent* ent_ch;
+                while ((ent_ch = readdir(d_ch)) != nullptr) {
+                    const char* chname = ent_ch->d_name;
+                    if (strcmp(chname, ".") == 0 || strcmp(chname, "..") == 0) continue;
+                    std::string ch_full = story_path + "/" + chname;
+                    struct stat st_ch;
+                    if (stat(ch_full.c_str(), &st_ch) == 0 && S_ISREG(st_ch.st_mode)) {
+                        if (IsMusicFile(ch_full)) chapters.push_back(ch_full);
+                    }
+                }
+                closedir(d_ch);
+            }
+
+            if (chapters.empty()) continue;
+            std::sort(chapters.begin(), chapters.end());
+
+            // 构造临时 StoryEntry 并追加到 PSRAM（短时间持锁）
+            StoryEntry se;
+            se.category = cname;
+            se.story = sname;
+            se.chapters = std::move(chapters);
+            se.norm_category = NormalizeForSearch_local(se.category);
+            se.norm_story = NormalizeForSearch_local(se.story);
+
+            {
+                std::lock_guard<std::mutex> lock(story_index_mutex_);
+                if (ps_add_story_locked(se)) {
+                    added++;
+                } else {
+                    ESP_LOGW(TAG, "Failed to add story to PSRAM: %s / %s", se.category.c_str(), se.story.c_str());
+                    // 继续扫描其它故事
+                }
+            }
+        }
+        closedir(d_story);
+    }
+
+    closedir(d_cat);
+
+    ESP_LOGI(TAG, "Story library scan completed, entries=%u", (unsigned)ps_story_count_);
+
+    return ps_story_count_ > 0;
+}
+std::vector<std::string> Esp32Music::GetStoryCategories() const {
+    std::vector<std::string> cats;
+    std::lock_guard<std::mutex> lock(story_index_mutex_);
+    for (size_t i = 0; i < ps_story_count_; ++i) {
+        const char* c = ps_story_index_[i].category;
+        if (c) {
+            std::string s(c);
+            if (std::find(cats.begin(), cats.end(), s) == cats.end()) cats.push_back(s);
+        }
+    }
+    return cats;
+}
+
+std::vector<std::string> Esp32Music::GetStoriesInCategory(const std::string& category) const {
+    std::string norm = NormalizeForSearch_local(category);
+    std::vector<std::string> list;
+    std::lock_guard<std::mutex> lock(story_index_mutex_);
+    for (size_t i = 0; i < ps_story_count_; ++i) {
+        if (ps_story_index_[i].norm_category == norm) {
+            if (ps_story_index_[i].story_name) list.push_back(std::string(ps_story_index_[i].story_name));
+        }
+    }
+    return list;
+}
+
+std::vector<std::string> Esp32Music::GetChaptersForStory(const std::string& category, const std::string& story_name) const {
+    std::string ncat = NormalizeForSearch_local(category);
+    std::string nst = NormalizeForSearch_local(story_name);
+    std::vector<std::string> chs;
+    std::lock_guard<std::mutex> lock(story_index_mutex_);
+    for (size_t i = 0; i < ps_story_count_; ++i) {
+        if (ps_story_index_[i].norm_category == ncat && ps_story_index_[i].norm_story == nst) {
+            for (size_t j = 0; j < ps_story_index_[i].chapter_count; ++j) {
+                if (ps_story_index_[i].chapters && ps_story_index_[i].chapters[j])
+                    chs.emplace_back(ps_story_index_[i].chapters[j]);
+            }
+            break;
+        }
+    }
+    return chs;
+}
+
+
+
+bool Esp32Music::SelectStoryAndPlay(const std::string& category, const std::string& story_name, size_t chapter_index) {
+    std::string ncat = NormalizeForSearch_local(category);
+    std::string nst = NormalizeForSearch_local(story_name);
+    PSStoryEntry found;
+    bool ok = false;
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        for (size_t i = 0; i < ps_story_count_; ++i) {
+            auto &e = ps_story_index_[i];
+            if (e.norm_category == ncat && e.norm_story == nst) {
+                found = e; // shallow copy of pointers ok for immediate use
+                ok = true;
+                break;
+            }
+        }
+    }
+    if (!ok) {
+        ESP_LOGW(TAG, "SelectStoryAndPlay: story not found '%s' / '%s'", category.c_str(), story_name.c_str());
+        return false;
+    }
+    if (found.chapter_count == 0 || !found.chapters) {
+        ESP_LOGW(TAG, "SelectStoryAndPlay: story has no chapters '%s' / '%s'", category.c_str(), story_name.c_str());
+        return false;
+    }
+    if (chapter_index >= found.chapter_count) chapter_index = 0;
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        current_story_name_ = found.story_name ? std::string(found.story_name) : std::string();
+    }
+    // PlayFromSD 接受 std::string/path
+
+    return PlayFromSD(std::string(found.chapters[chapter_index]), current_story_name_);
+}
+
+
+// ===== 故事断点播放实现 =====
+void Esp32Music::SaveStoryPlaybackPosition() {
+    // 读取当前播放偏移（从 current_play_file_offset_）
+    uint64_t offset = 0;
+    {
+        std::lock_guard<std::mutex> lock(current_play_file_mutex_);
+        offset = current_play_file_offset_;
+    }
+    int ms = static_cast<int>(current_play_time_ms_);
+    Settings settings("stories", true);
+    settings.SetString("last_category", category_);
+    settings.SetString("last_story", story_name_);
+    settings.SetInt("last_chapter", chapter_);
+    settings.SetInt64("last_chptoffset", (int64_t)offset);
+    settings.SetInt("last_chpt_ms", ms);
+    settings.Commit();
+
+    ESP_LOGI(TAG, "Saved story playback pos: category=%s story=%s chapter=%d offset=%llu ms=%d",
+             category_,story_name_,chapter_,(unsigned long long)offset,ms);
+}
+
+void Esp32Music::LoadStoryPlaybackPosition() {
+    Settings settings("stories", false);
+    std::string cat = settings.GetString("last_category", "");
+    std::string name = settings.GetString("last_story", "");
+    int idx = settings.GetInt("last_chapter", -1);
+    int64_t offset_i64 = settings.GetInt64("last_chptoffset", 0);
+    int ms = settings.GetInt("last_chpt_ms", 0);
+
+    saved_story_category_ = cat;
+    saved_story_name_ = name;
+    saved_chapter_index_ = idx;
+    saved_chapter_file_offset_ = offset_i64 > 0 ? static_cast<uint64_t>(offset_i64) : 0;
+    saved_chapter_ms_ = ms;
+    has_saved_story_position_ = (!saved_story_category_.empty() && !saved_story_name_.empty());
+
+    ESP_LOGI(TAG, "Loaded saved story pos: category='%s' story='%s' chapter=%d offset=%llu ms=%d",
+             saved_story_category_.c_str(), saved_story_name_.c_str(), saved_chapter_index_,
+             (unsigned long long)saved_chapter_file_offset_, saved_chapter_ms_);
+}
+
+bool Esp32Music::ResumeSavedStoryPlayback() {
+    if (!has_saved_story_position_) {
+        ESP_LOGI(TAG, "No saved story playback position to resume");
+        return false;
+    }
+
+    // 找到故事索引并定位章节
+    std::string ncat = NormalizeForSearch_local(saved_story_category_);
+    std::string nst = NormalizeForSearch_local(saved_story_name_);
+    size_t found_index = SIZE_MAX;
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        for (size_t i = 0; i < ps_story_count_; ++i) {
+            if (ps_story_index_[i].norm_category == ncat && ps_story_index_[i].norm_story == nst) {
+                found_index = i;
+                break;
+            }
+        }
+        if (found_index == SIZE_MAX) {
+            ESP_LOGW(TAG, "Saved story not found in index: %s / %s", saved_story_category_.c_str(), saved_story_name_.c_str());
+            return false;
+        }
+        // 校验章节索引
+        int chapter_idx = saved_chapter_index_;
+        if (chapter_idx < 0 || static_cast<size_t>(chapter_idx) >= ps_story_index_[found_index].chapter_count) {
+            ESP_LOGW(TAG, "Saved chapter index out of range, fallback to 0");
+            chapter_idx = 0;
+        }
+        const char* chapter_path = ps_story_index_[found_index].chapters[chapter_idx];
+        if (!chapter_path) {
+            ESP_LOGW(TAG, "Saved chapter path null");
+            return false;
+        }
+
+        // 开始播放，优先按字节偏移恢复
+        if (saved_chapter_file_offset_ > 0) {
+            ESP_LOGI(TAG, "Resuming story '%s'/%s chapter %d at offset %llu",
+                     saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx, (unsigned long long)saved_chapter_file_offset_);
+            // 设置当前story信息，便于显示/保存
+            current_story_name_ = ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : saved_story_name_;
+            MusicOrStory_ = STORY;
+            chapter_ = chapter_idx;
+            category_ = saved_story_category_;
+            story_name_ = saved_story_name_;
+            return PlayFromSD(std::string(chapter_path), current_story_name_, (size_t)saved_chapter_file_offset_);
+        }
+
+        // 若有 ms 信息且文件大小与时长能估算偏移，则可在此扩展（目前直接从头开始或按 offset）
+        if (saved_chapter_ms_ > 0) {
+            ESP_LOGI(TAG, "Resuming story by ms (%d) not implemented estimation, falling back to start", saved_chapter_ms_);
+        }
+
+        // 否则从头开始播放
+        ESP_LOGI(TAG, "Resuming story from beginning: %s / %s chapter %d", saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx);
+        current_story_name_ = ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : saved_story_name_;
+        MusicOrStory_ = STORY;
+        chapter_ = chapter_idx;
+        category_ = saved_story_category_;
+        story_name_ = current_story_name_;
+        return PlayFromSD(std::string(chapter_path), current_story_name_, 0);
+    }
+}
+
+bool Esp32Music::NextChapterInStory(const std::string& category, const std::string& story_name) {
+    // 查找 story 在 PSRAM 索引中的位置
+    std::string ncat = NormalizeForSearch_local(category);
+    std::string nst = NormalizeForSearch_local(story_name);
+
+    size_t found_index = SIZE_MAX;
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        for (size_t i = 0; i < ps_story_count_; ++i) {
+            if (ps_story_index_[i].norm_category == ncat && ps_story_index_[i].norm_story == nst) {
+                found_index = i;
+                break;
+            }
+        }
+    }
+
+    if (found_index == SIZE_MAX) {
+        ESP_LOGW(TAG, "NextChapterInStory: story not found '%s' / '%s'", category.c_str(), story_name.c_str());
+        return false;
+    }
+
+    // 计算下一个章节索引（如果越界则尝试切换到同类别的下一个故事）
+    int next_idx = 0;
+    size_t target_story_index = found_index;
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        if (!current_story_name_.empty() && current_story_name_ == (ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : std::string())) {
+            next_idx = chapter_ + 1;
+        } else {
+            next_idx = 0;
+        }
+
+        if (next_idx < 0) next_idx = 0;
+        if (static_cast<size_t>(next_idx) >= ps_story_index_[found_index].chapter_count) {
+            // 到了本故事最后一章，尝试在同一类别中找到下一个故事（向后查找并循环回首）
+            size_t next_story = SIZE_MAX;
+            // 向后查找
+            for (size_t i = found_index + 1; i < ps_story_count_; ++i) {
+                if (ps_story_index_[i].norm_category == ncat) { next_story = i; break; }
+            }
+            // 未找到则从头开始查找该类别
+            if (next_story == SIZE_MAX) {
+                for (size_t i = 0; i < found_index; ++i) {
+                    if (ps_story_index_[i].norm_category == ncat) { next_story = i; break; }
+                }
+            }
+            if (next_story == SIZE_MAX) {
+                ESP_LOGI(TAG, "NextChapterInStory: already at last chapter and no other story in category '%s'", category.c_str());
+                return false;
+            }
+            // 切换到下一个故事的第0章
+            target_story_index = next_story;
+            next_idx = 0;
+        }
+    }
+
+    // 读取路径并在锁外调用播放
+    std::string chapter_path;
+    std::string new_category;
+    std::string new_story_name;
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        const char* p = ps_story_index_[target_story_index].chapters[next_idx];
+        if (!p) {
+            ESP_LOGW(TAG, "NextChapterInStory: chapter path null for index %d", next_idx);
+            return false;
+        }
+        chapter_path = std::string(p);
+        new_story_name = ps_story_index_[target_story_index].story_name ? std::string(ps_story_index_[target_story_index].story_name) : std::string();
+        new_category = ps_story_index_[target_story_index].category ? std::string(ps_story_index_[target_story_index].category) : std::string();
+    }
+
+    // 更新状态并开始播放
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        chapter_ = next_idx;
+        current_story_name_ = new_story_name;
+        category_ = new_category;
+    }
+
+    MusicOrStory_ = STORY;
+    bool ok = PlayFromSD(chapter_path, current_story_name_);
+    if (ok) {
+        // 立即保存一次断点信息（文件偏移为 0）
+        SaveStoryPlaybackPosition();
+        ESP_LOGI(TAG, "NextChapterInStory: playing chapter %d of story '%s' (category '%s')", chapter_, current_story_name_.c_str(), category_.c_str());
+    } else {
+        ESP_LOGW(TAG, "NextChapterInStory: failed to play chapter %d of story '%s' (category '%s')", chapter_, current_story_name_.c_str(), category_.c_str());
+    }
+    return ok;
 }

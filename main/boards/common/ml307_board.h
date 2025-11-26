@@ -24,6 +24,7 @@ public:
     virtual void SetPowerSaveMode(bool enabled) override;
     virtual AudioCodec* GetAudioCodec() override { return nullptr; }
     virtual std::string GetDeviceStatusJson() override;
+    virtual void EnterWifiConfigMode() override{return;};
 };
 
 #endif // ML307_BOARD_H

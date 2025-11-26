@@ -16,9 +16,12 @@
 #include <driver/gpio.h>
 #include <arpa/inet.h>
 #include <font_awesome.h>
-#include "qmi8658.h"
+#include "wifi_board.h"
 #include "ble/ble_wifi_integration.h"
 #include <ssid_manager.h>
+#include "wifi_station.h"
+#include <esp_netif.h>
+#include "esp_wifi.h"
 #define TAG "Application"
 
 
@@ -61,6 +64,19 @@ Application::Application() {
         .skip_unhandled_events = true
     };
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+    esp_timer_create_args_t clock_Offlinetimer_args = {
+        .callback = [](void* arg) {
+            Application* app = (Application*)arg;
+            app->Offline_ticks_++;
+        },
+        .arg = this,
+        .dispatch_method = ESP_TIMER_TASK,
+        .name = "clock_timer",
+        .skip_unhandled_events = true
+    };
+    esp_timer_create(&clock_Offlinetimer_args, &clock_Offlinetimer_handle_);
+    
 }
 
 Application::~Application() {
@@ -457,6 +473,8 @@ void Application::Start() {
     //绑定一些回调函数
     protocol_->OnConnected([this]() {
         DismissAlert();
+        esp_timer_stop(clock_Offlinetimer_handle_);
+        Offline_ticks_ = 0;
     });
 
     protocol_->OnNetworkError([this](const std::string& message) {
@@ -593,7 +611,8 @@ void Application::Start() {
     }
     auto music = board.GetMusic();
     if(music) {
-        music->InitializeDefaultPlaylists();
+        music->ScanAndLoadMusic();
+        music->ScanAndLoadStory();
         // music->DeletePlaylistsFromNVS();
     }
 }
@@ -622,6 +641,8 @@ void Application::MainEventLoop() {
         if (bits & MAIN_EVENT_ERROR) {
             SetDeviceState(kDeviceStateIdle);
             Alert(Lang::Strings::ERROR, last_error_message_.c_str(), "circle_xmark", Lang::Sounds::OGG_EXCLAMATION);
+            Wifi_Offline = true;
+            esp_timer_start_periodic(clock_Offlinetimer_handle_, 5000000);
         }
 
         if (bits & MAIN_EVENT_SEND_AUDIO) {
@@ -656,21 +677,25 @@ void Application::MainEventLoop() {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
-        
+            auto& wifi_station = WifiStation::GetInstance();
+            if(wifi_station.IsConnected())
+            {
+                if(wifi_station.GetRssi()<-60)
+                {
+                    esp_wifi_scan_start(NULL, false);
+                }
+            }
             // Print the debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
-                // SystemInfo::PrintTaskList();
                 SystemInfo::PrintHeapStats();
-            }
-            auto& board = Board::GetInstance();
-            QMI8658* imu = board.GetImu();
-            t_sQMI8658 imu_data;
-            if (imu)
+            }   
+            if(Offline_ticks_>=5)         
             {
-                imu->qmi8658_application(&imu_data);
+                esp_timer_stop(clock_Offlinetimer_handle_);
+                Offline_ticks_=0;
+                SetDeviceState(kDeviceStateWifiConfiguring);
             }
-            
         }
     }
 }
@@ -692,6 +717,7 @@ void Application::OnWakeWordDetected() {
         }
 
         auto wake_word = audio_service_.GetLastWakeWord();
+
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
 #if CONFIG_SEND_WAKE_WORD_DATA
         // Encode and send the wake word data to the server
@@ -730,7 +756,6 @@ void Application::SetDeviceState(DeviceState state) {
     if (device_state_ == state) {
         return;
     }
-    
     clock_ticks_ = 0;
     auto previous_state = device_state_;
     device_state_ = state;
@@ -788,6 +813,9 @@ void Application::SetDeviceState(DeviceState state) {
             }
             audio_service_.ResetDecoder();
             break;
+        case kDeviceStateWifiConfiguring:
+                board.EnterWifiConfigMode();
+                break;
         default:
             // Do nothing
             break;

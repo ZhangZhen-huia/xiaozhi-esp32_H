@@ -17,6 +17,7 @@
 #include "wifi_configuration_ap.h"
 #include "ble_protocol.h"
 #include "ssid_manager.h"
+#include "wifi_station.h"
 
 #define TAG "BleWifiConfig"
 
@@ -37,6 +38,8 @@ static void ble_evt_handler(ble_evt_t* evt)
     if(evt->evt_id == BLE_EVT_CONNECTED) {
         ESP_LOGI(TAG, "BLE connected, conn_id=%d", evt->params.connected.conn_id);
         g_conn_handle = evt->params.connected.conn_id;
+        auto& wifi_station = WifiStation::GetInstance();
+        wifi_station.Stop();
     } else if(evt->evt_id == BLE_EVT_DISCONNECTED) {
         ESP_LOGI(TAG, "BLE disconnected, conn_id=%d", evt->params.disconnected.conn_id);
         g_conn_handle = 0xFFFF;
@@ -51,6 +54,10 @@ static int handle_get_wifi_config_cmd(uint16_t conn_id ) {
     auto& ssid_manager = SsidManager::GetInstance();
     const auto& ssid_list = ssid_manager.GetSsidList();
     
+    for(const auto& ssid: ssid_list) {
+        ESP_LOGI(TAG, "Saved SSID: %s", ssid.ssid.c_str());
+    }
+
     if (ssid_list.empty()) {
         ESP_LOGW(TAG, "No saved WiFi configurations");
         // 返回空配置
@@ -309,7 +316,7 @@ static int handle_wifi_operation_cmd(uint16_t conn_id, const uint8_t *payload, s
             std::string password((char*)&payload[offset], password_len);
             
             ESP_LOGI(TAG, "Setting WiFi config: ssid=%s, password_len=%d", ssid.c_str(), password.length());
-            
+
             // 保存到SSID管理器
             auto& ssid_manager = SsidManager::GetInstance();
             ssid_manager.AddSsid(ssid, password);
@@ -781,6 +788,7 @@ void BleWifiConfig::SetOnWifiConfigChanged(std::function<void(const std::string&
     g_wifi_config_callback = callback;
 }
 
+//判断蓝牙是否连接，返回1表示连接，0表示未连接
 bool BleWifiConfig::IsConnected() { 
     return g_conn_handle != BLE_HS_CONN_HANDLE_NONE; 
 }   

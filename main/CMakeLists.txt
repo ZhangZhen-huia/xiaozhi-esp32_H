@@ -14,8 +14,6 @@ set(SOURCES "audio/audio_codec.cc"
             "led/gpio_led.cc"
             "display/display.cc"
             "display/lcd_display.cc"
-            "display/lcd_display_music_offline.cc"
-            "display/lcd_display_music_online.cc"
             "display/oled_display.cc"
             "display/lvgl_display/lvgl_display.cc"
             "display/emote_display.cc"
@@ -64,6 +62,8 @@ function(find_component_by_pattern PATTERN COMPONENT_VAR PATH_VAR)
         endif()
     endforeach()
 endfunction()
+
+
 
 # Set default BUILTIN_TEXT_FONT and BUILTIN_ICON_FONT
 set(BUILTIN_TEXT_FONT font_puhui_14_1)
@@ -370,3 +370,4 @@ if ("${size}" AND "${offset}")
 else()
     message(STATUS "Assets partition not found, using v1 partition table")
 endif()
+

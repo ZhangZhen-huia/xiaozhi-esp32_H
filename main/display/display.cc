@@ -39,32 +39,6 @@ void Display ::SetMusicInfo(const char* song_name){
 
 }
 
-void Display ::OfflineMusicUI(){
-
-}
-void Display ::OfflineMusicUI_Deinit(){
-
-}
-void Display ::OfflineMusicUI_Recover(){
-
-}
-void Display::OfflineUpdatePlayTime(int64_t current_time_ms){
-    ESP_LOGW(TAG, "UpdatePlayTime: %lld", current_time_ms);
-}
-
-void Display::OnlineMusicUI(void){
-
-}
-void Display::OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, std::string>> lyrics){
-
-}
-int Display::OnlineMusiclrc_get_top(){
-    return 0;
-}
-void Display::lrc_animate_next(int new_top){
-
-}
-
 void Display::SetEmotion(const char* emotion) {
     ESP_LOGW(TAG, "SetEmotion: %s", emotion);
 }

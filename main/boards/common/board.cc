@@ -69,9 +69,7 @@ Camera* Board::GetCamera() {
 Music* Board::GetMusic() {
     return music_;
 }
-QMI8658* Board::GetImu() {
-    return nullptr;
-}
+
 Led* Board::GetLed() {
     static NoLed led;
     return &led;

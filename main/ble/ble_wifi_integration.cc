@@ -12,6 +12,8 @@
 #include "wifi_configuration_ap.h"
 #include "board.h"
 #include "esp_timer.h"
+#include "application.h"
+#include "assets/lang_config.h"
 static const char* TAG = "BLE_WIFI_INTEGRATION";
 
 /*
@@ -28,13 +30,16 @@ namespace BleWifiIntegration {
 static bool ble_wifi_config_active = false;
 
 static esp_timer_handle_t clock_timer_handle_ = nullptr;
+static esp_timer_handle_t clock_ConnecttingSound_timer_handle_ = nullptr;
+
 // 前向声明
 void StopBleWifiConfig();
 
 // WiFi配置改变回调函数
 static void OnWifiConfigChanged(const std::string& ssid, const std::string& password) {
     ESP_LOGI(TAG, "BLE WiFi config changed - SSID: %s", ssid.c_str());
-    
+
+    esp_timer_start_periodic(clock_ConnecttingSound_timer_handle_, 3*1000000); // 2秒后播放连接提示音
     // 尝试连接到新的WiFi网络
     auto& wifi_ap = WifiConfigurationAp::GetInstance();
     bool connected = wifi_ap.ConnectToWifi(ssid, password);
@@ -42,8 +47,6 @@ static void OnWifiConfigChanged(const std::string& ssid, const std::string& pass
     if (connected) {
         ESP_LOGI(TAG, "Successfully connected to WiFi: %s", ssid.c_str());
 
-        // 连接成功后，可以选择停止蓝牙配网以节省资源
-        StopBleWifiConfig();
         
         ESP_LOGI(TAG, "Restarting in 1 second");
         vTaskDelay(pdMS_TO_TICKS(1000));
@@ -55,6 +58,7 @@ static void OnWifiConfigChanged(const std::string& ssid, const std::string& pass
 
 static void update_adv(void){
     auto& ble_wifi_config = BleWifiConfig::GetInstance();
+
     if(!ble_wifi_config_active || ble_wifi_config.IsConnected()){
         return;
     }
@@ -113,6 +117,18 @@ bool StartBleWifiConfig() {
     };
     esp_timer_create(&clock_timer_args, &clock_timer_handle_);
     
+
+    esp_timer_create_args_t clock_ConnecttingSound_timer_args = {
+        .callback = [](void* arg) {
+            auto &app = Application::GetInstance();
+            app.PlaySound(Lang::Sounds::OGG_CONNECTING);
+        },
+        .name = "ConnecttingSound_timer",
+        .skip_unhandled_events = true
+    };
+    esp_timer_create(&clock_ConnecttingSound_timer_args, &clock_ConnecttingSound_timer_handle_);
+
+
     ble_wifi_config_active = true;
 
     update_adv();
@@ -138,13 +154,8 @@ void StopBleWifiConfig() {
     ble_wifi_config.Disconnect();
     ble_wifi_config.StopAdvertising();
     ble_wifi_config.Deinitialize();
-    
-    // // 同时清理BLE OTA服务
-    // auto& ble_ota = BleOta::GetInstance();
-    // if (ble_ota.IsInitialized()) {
-    //     ble_ota.Deinitialize();
-    //     ESP_LOGI(TAG, "BLE OTA service deinitialized");
-    // }
+    esp_timer_stop(clock_ConnecttingSound_timer_handle_);
+
     
     ble_wifi_config_active = false;
     ESP_LOGI(TAG, "BLE WiFi configuration stopped");

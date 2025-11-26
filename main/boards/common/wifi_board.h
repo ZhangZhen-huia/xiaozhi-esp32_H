@@ -3,11 +3,14 @@
 
 #include "board.h"
 
+
 class WifiBoard : public Board {
 protected:
     bool wifi_config_mode_ = false;
-    void EnterWifiConfigMode();
+    
     virtual std::string GetBoardJson() override;
+    esp_timer_handle_t clock_timer_handle_ = nullptr;
+    esp_timer_handle_t clock_timer_OnConnecthandle_ = nullptr;
 
 public:
     WifiBoard();
@@ -19,6 +22,7 @@ public:
     virtual void ResetWifiConfiguration();
     virtual AudioCodec* GetAudioCodec() override { return nullptr; }
     virtual std::string GetDeviceStatusJson() override;
+    virtual void EnterWifiConfigMode() override;
 };
 
 #endif // WIFI_BOARD_H

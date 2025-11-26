@@ -39,10 +39,7 @@ protected:
     std::unique_ptr<LvglImage> preview_image_cached_ = nullptr;
 
     lv_obj_t *label_musicname_ = nullptr;
-    lv_obj_t * lrc_lines[5] = {nullptr};  /* 歌词行对象数组 */
-    int lrc_cent = 2;    /* 中间行索引 = 2 */
-    int lrc_top = 0;     /* 当前“顶行”对应歌词下标 */
-    lv_obj_t *lyrics_area = nullptr;
+
     void InitializeLcdThemes();
     void SetupUI();
     
@@ -62,15 +59,6 @@ public:
     virtual void SetMusicInfo(const char* song_name) override;
     // Add theme switching function
     virtual void SetTheme(Theme* theme) override;
-    void OfflineMusicUI() override;
-    void OfflineMusicUI_Deinit()override;
-    void OfflineMusicUI_Recover()override;
-    void OfflineUpdatePlayTime(int64_t current_time_ms)override;
-
-    void OnlineMusicUI(void)override;
-    int OnlineMusiclrc_get_top()override { return lrc_top; };
-    void OnlineMusiclrc_refresh(int top_idx,std::vector<std::pair<int, std::string>> lyrics)override;
-    void lrc_animate_next(int new_top)override;
 };
 
 // SPI LCD显示器

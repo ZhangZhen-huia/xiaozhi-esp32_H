@@ -9,6 +9,7 @@
 #include <mutex>
 #include <condition_variable>
 #include <vector>
+#include <map>
 #include "lvgl.h"
 #include "music.h"
 #include <esp_lvgl_port.h>
@@ -19,6 +20,9 @@ extern "C" {
 
 #define MUSIC_EVENT_LOADED (1 << 0)
 #define MUSIC_EVENT_COMPLETED (1 << 1)
+
+#define STORY 1
+#define MUSIC 0
 
 // 音频数据块结构
 struct AudioChunk {
@@ -45,6 +49,24 @@ struct SongMeta {
     std::string norm_artist;        // 规范化后用于匹配（小写、去掉非字母数字）
     std::string norm_title;         // 规范化后用于匹配（小写、去掉非字母数字）
 };
+
+// 描述一个故事（属于某类别），包含若干章节（文件路径）
+struct StoryEntry {
+    std::string category;
+    std::string story;
+    std::vector<std::string> chapters; // 章节的完整文件路径（按文件名排序）
+    std::string norm_category;
+    std::string norm_story;
+};
+struct PSStoryEntry {
+    char *category = nullptr;    // PSRAM 分配的 NUL-终止字符串
+    char *story_name = nullptr;  // PSRAM 分配的 NUL-终止字符串
+    char **chapters = nullptr;   // PSRAM 分配的 char* 数组（每个元素也是 PSRAM 分配的字符串）
+    size_t chapter_count = 0;
+    std::string norm_category;   // 保留规范化用于快速比较（DRAM，轻量）
+    std::string norm_story;      // 保留规范化用于快速比较（DRAM，轻量）
+};
+
 class Esp32Music : public Music {
 public:
     // 显示模式控制 - 移动到public区域
@@ -57,24 +79,9 @@ private:
     EventGroupHandle_t event_group_ = nullptr; 
 
     std::string last_downloaded_data_;
-    std::string current_music_url_;
     std::string current_song_name_;
-    bool song_name_displayed_;
-    
-    std::string current_cover_url_;
 
-    // 歌词相关
-    std::string current_lyric_url_;
-    std::vector<std::pair<int, std::string>> lyrics_;  // 时间戳和歌词文本
-    std::mutex lyrics_mutex_;  // 保护lyrics_数组的互斥锁
-    std::atomic<int> current_lyric_index_;
-    std::thread lyric_thread_;
-    std::atomic<bool> is_lyric_running_;
     
-    std::thread cover_thread_;
-    std::atomic<bool> is_cover_running_;
-
-    std::atomic<DisplayMode> display_mode_;
     std::atomic<PlaybackMode> playback_mode_ = PLAYBACK_MODE_ORDER;
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_downloading_;
@@ -98,34 +105,30 @@ private:
     bool mp3_decoder_initialized_;
     
     // 私有方法
-    void DownloadAudioStream(const std::string& music_url);
     void PlayAudioStream();
     void ClearAudioBuffer();
     bool InitializeMp3Decoder();
     void CleanupMp3Decoder();
     void ResetSampleRate();  // 重置采样率到原始值
     
-    // 歌词相关私有方法
-    bool DownloadLyrics(const std::string& lyric_url);
-    bool ParseLyrics(const std::string& lyric_content);
-    void LyricDisplayThread();
-    void UpdateLyricDisplay(int64_t current_time_ms);
-    
-    bool DownloadCover(const std::string& cover_url);
-    bool ParseCover(const std::string& cover_content);
-    void CoverDisplayThread();
     // ID3标签处理
     size_t SkipId3Tag(uint8_t* data, size_t size);
 
     int16_t* final_pcm_data_fft = nullptr;
 
-    std::vector<MusicFileInfo> music_library_;
+    PSMusicInfo *ps_music_library_ = nullptr; // 分配在 PSRAM（heap_caps_malloc）的音乐库数组
+    int play_index_ = 0;
+    int last_play_index_ = 0;
+    size_t ps_music_count_ = 0;                // 音乐库中音乐
+    size_t ps_music_capacity_ = 0;
+    
+
     mutable std::mutex music_library_mutex_;
     std::atomic<bool> music_library_scanned_;
-    const std::string default_musiclist = "DefaultMusicList";
-    std::vector<Playlist> playlists_;  // 使用简单的容器数组存储歌单
+    const std::string default_musiclist_ = "DefaultMusicList";
+    Playlist playlist_;  // 使用简单的容器数组存储歌单
     std::string current_playlist_name_;
-    
+    std::atomic<int> MusicOrStory_;
     // SD卡读取线程
     void ReadFromSDCard(const std::string& file_path);
     bool StartSDCardStreaming(const std::string& file_path);
@@ -133,8 +136,30 @@ private:
     void ScanDirectoryRecursive(const std::string& path);
     bool IsMusicFile(const std::string& file_path) const;
     MusicFileInfo ExtractMusicInfo(const std::string& file_path) const;
-    std::vector<std::string> GetPlaylistNames() const;
-    std::vector<MusicFileInfo> GetPlaylist(const std::string& playlist_name) const;
+    bool ps_add_music_info_locked(const MusicFileInfo &info);
+    bool ps_add_story_locked(const StoryEntry &e);
+    void free_ps_music_library_locked();
+    void free_ps_story_index_locked();
+    
+    
+    char* ps_strdup(const std::string &s);
+    void ps_free_str(char *p);
+
+
+    PSStoryEntry *ps_story_index_ = nullptr; // PSRAM 分配的数组
+    size_t ps_story_count_ = 0;
+    size_t ps_story_capacity_ = 0;
+    mutable std::mutex story_index_mutex_;
+    std::string current_story_name_;
+    // std::string current_category_name_;
+
+    // 保存的故事断点（持久化/恢复用）
+    std::string saved_story_category_;
+    std::string saved_story_name_;
+    int saved_chapter_index_ = -1;
+    uint64_t saved_chapter_file_offset_ = 0; // 字节偏移
+    int saved_chapter_ms_ = 0; // 可选的时间位置（ms）
+    bool has_saved_story_position_ = false;
 
     // 当前播放文件指针与偏移（用于记录并恢复）
     FILE* current_play_file_ = nullptr;
@@ -145,35 +170,33 @@ private:
     // 请求在 ReadFromSDCard 时从该偏移开始读取（由 PlayFromSD(..., start_offset) 设置）
     size_t start_play_offset_ = 0;
 
-    // NVS 上保存的断点（LoadPlaybackPosition 填充）
-    std::string saved_playlist_name_;
-
+    // NVS 上保存的音乐断点
     int saved_play_index_ = -1;
     int64_t saved_play_ms_ = 0;
     size_t saved_file_offset_ = 0;
     std::string saved_file_path_;
-    bool has_saved_position_ = false;
+    bool has_saved_MusicPosition_ = false;
+
 
 public:
     Esp32Music();
     ~Esp32Music();
 
-    
-    virtual bool Download(const std::string& song_name, const std::string& artist_name) override;
-  
-    virtual std::string GetDownloadResult() override;
-    
+    virtual void SetMusicOrStory_(int val) override{
+        MusicOrStory_ = val;
+    }
+    virtual int GetMusicOrStory_() const override {
+        return MusicOrStory_;
+    }
     // 新增方法
-    virtual bool StartStreaming(const std::string& music_url) override;
     virtual bool StopStreaming() override;  // 停止流式播放
     virtual size_t GetBufferSize() const override { return buffer_size_; }
     virtual bool IsDownloading() const override { return is_downloading_; }
-    virtual int16_t* GetAudioData() override { return final_pcm_data_fft; }
-    virtual std::vector<std::pair<int, std::string>> GetLyrics() const override { return lyrics_; };  // 获取歌词
-    // 显示模式控制方法
-    void SetDisplayMode(DisplayMode mode);
-    DisplayMode GetDisplayMode() const { return display_mode_.load(); }
-    virtual bool WaitForMusicLoaded()override;
+
+
+
+
+    //播放音乐相关方法
     virtual void SetLoopMode(bool loop)override;
     virtual void SetRandomMode(bool random)override;
     virtual void SetOnceMode(bool once)override;
@@ -181,38 +204,45 @@ public:
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
 
     virtual bool ScanMusicLibrary(const std::string& music_folder)override;
-    virtual size_t GetMusicCount() const override{ return music_library_.size(); }
+    virtual size_t GetMusicCount() const override{ return ps_music_count_; };
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
-    virtual std::vector<MusicFileInfo> GetMusicLibrary() const override;
+    virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const override;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) override;
-    virtual bool CreatePlaylist(const std::string& playlist_name)override;
-    virtual bool PlayPlaylist(std::string& playlist_name) override;
-    virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files)override;
-    virtual int SearchMusicIndexFromlist(std::string name, const std::string& playlist_name) const override;
 
+    virtual bool PlayPlaylist(std::string& playlist_name) override;
+    virtual int SearchMusicIndexFromlist(std::string name) const override;
+    virtual const std::string GetDefaultList() const override { return default_musiclist_; }
     virtual std::string GetCurrentSongName()override;
     virtual void SetPlayIndex(std::string& playlist_name, int index)override;
     virtual void NextPlayIndexOrder(std::string& playlist_name)override;
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;
-    virtual int GetLastPlayIndex(std::string& playlist_name)override;
-    virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const override;
     virtual void SetCurrentPlayList(const std::string& playlist_name)override;
-    virtual std::string ExtractSongNameFromFileName(const std::string& file_name) const override;
-    virtual int FindPlaylistIndex(const std::string& name) const override;
-    virtual void SavePlaylistsToNVS()override;
-    virtual bool LoadPlaylistsFromNVS()override;
-    virtual void InitializeDefaultPlaylists()override;
+    virtual void ScanAndLoadMusic()override;
     virtual void LoadPlaybackPosition()override;
     virtual void SavePlaybackPosition()override;
     virtual bool ResumeSavedPlayback()override;
+    virtual std::string SearchMusicFromlistByIndex(std::string list) const override;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name, size_t start_offset);
-    virtual bool IfSavedPosition() override{ return has_saved_position_; };
-    virtual std::vector<std::string> SearchSingerFromlist(std::string singer, const std::string& playlist_name) const override;
-    virtual bool DeletePlaylistFromNVS(const std::string& playlist_name)override;
-    virtual bool DeleteAllPlaylistsExceptDefault()override;
+    virtual bool IfSavedMusicPosition() override{ return has_saved_MusicPosition_; };
+    virtual std::vector<std::string> SearchSinger(std::string singer) const override;
+    // 故事索引接口
+    virtual bool ScanStoryLibrary(const std::string& story_folder) override;
+    virtual bool IfSavedStoryPosition() override { return has_saved_story_position_; };
+    virtual std::string GetCurrentStoryName() override{ return current_story_name_; };
+    virtual std::vector<std::string> GetStoryCategories() const;
+    virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const;
+    virtual std::vector<std::string> GetChaptersForStory(const std::string& category, const std::string& story_name) const;
+    // 从已索引中选择并播放某类别/故事/章节（chapter_index 可选，默认 0）
+    virtual bool SelectStoryAndPlay(const std::string& category, const std::string& story_name, size_t chapter_index = 0);
 
+    // 故事断点保存/加载/恢复接口（类似音乐的断点）
+    virtual void SaveStoryPlaybackPosition()override;
+    virtual void LoadStoryPlaybackPosition()override;
+    virtual bool ResumeSavedStoryPlayback()override;
+    virtual void ScanAndLoadStory()override;
+    virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) override;
 };
 
 

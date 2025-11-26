@@ -7,7 +7,7 @@
 #include <cstring>
 #include <arpa/inet.h>
 #include "assets/lang_config.h"
-
+#include "esp32_music.h"
 #define TAG "MQTT"
 
 MqttProtocol::MqttProtocol() {
@@ -79,8 +79,12 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
         if (on_disconnected_ != nullptr) {
             on_disconnected_();
         }
+        auto music = Board::GetInstance().GetMusic();
+        music->StopStreaming();
         auto& app = Application::GetInstance();
         app.PlaySound(Lang::Sounds::OGG_POPUP);
+        app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
+
         ESP_LOGI(TAG, "MQTT disconnected, schedule reconnect in %d seconds", MQTT_RECONNECT_INTERVAL_MS / 1000);
         esp_timer_start_once(reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
     });

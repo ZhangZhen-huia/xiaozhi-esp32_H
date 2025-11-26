@@ -248,3 +248,11 @@ bool CustomWakeWord::GetWakeWordOpus(std::vector<uint8_t>& opus) {
     wake_word_opus_.pop_front();
     return !opus.empty();
 }
+
+
+void CustomWakeWord::SwitchWakeWord(const std::string& new_wake_word) {
+    multinet_->clean(multinet_model_data_);
+    esp_mn_commands_clear();
+    esp_mn_commands_add(1, new_wake_word.c_str());
+    esp_mn_commands_update();
+}

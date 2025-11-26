@@ -69,6 +69,9 @@ public:
 
     void EnableBleWifiConfig(bool enable) { ble_wifi_config_enabled_ = enable; }
     bool IsBleWifiConfigEnabled() const { return ble_wifi_config_enabled_; }
+ 
+    bool Wifi_Offline = false;
+
 private:
     Application();
     ~Application();
@@ -78,6 +81,9 @@ private:
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
+
+    esp_timer_handle_t clock_Offlinetimer_handle_ = nullptr;
+    int Offline_ticks_ = 0;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
@@ -97,6 +103,7 @@ private:
     void CheckAssetsVersion();
     void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
+
 
 };
 

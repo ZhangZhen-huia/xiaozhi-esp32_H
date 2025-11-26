@@ -16,6 +16,15 @@ struct MusicFileInfo {
     std::string artist_norm;  // 规范化后用于匹配（小写、去特殊字符）
 };
 
+struct PSMusicInfo {
+    char *file_path = nullptr;   // NUL 结尾 C 字符串（PSRAM 分配）
+    char *file_name = nullptr;
+    char *song_name = nullptr;
+    char *artist = nullptr;
+    char *artist_norm = nullptr;
+    size_t file_size = 0;
+    int duration = 0;
+};
 enum PlaybackMode {
     PLAYBACK_MODE_ONCE = 0,     // 播放一次
     PLAYBACK_MODE_LOOP = 1,      // 循环播放
@@ -27,53 +36,62 @@ class Music {
 public:
     virtual ~Music() = default;  // 添加虚析构函数
     
-    virtual bool Download(const std::string& song_name, const std::string& artist_name = "") = 0;
-    virtual std::string GetDownloadResult() = 0;
-    
+    std::string category_;
+    std::string story_name_;
+    int chapter_;
+
     // 新增流式播放相关方法
-    virtual bool StartStreaming(const std::string& music_url) = 0;
     virtual bool StopStreaming() = 0;  // 停止流式播放
     virtual size_t GetBufferSize() const = 0;
     virtual bool IsDownloading() const = 0;
-    virtual int16_t* GetAudioData() = 0;
-    virtual std::vector<std::pair<int, std::string>> GetLyrics() const = 0;  // 获取歌词
-    virtual bool WaitForMusicLoaded() = 0;
+    virtual void SetMusicOrStory_(int val) = 0;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "") = 0;
     virtual void SetLoopMode(bool loop) = 0;
     virtual void SetRandomMode(bool random) = 0;
     virtual void SetOnceMode(bool once) = 0;
     virtual void SetOrderMode(bool order) = 0;
+    
     virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
     virtual size_t GetMusicCount() const = 0;
-    virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const = 0;
-    virtual std::vector<MusicFileInfo> GetMusicLibrary() const = 0;
+    virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const =0;
+    
+    virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const =0;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) = 0;
     virtual bool PlayPlaylist(std::string& playlist_name) = 0;
-    virtual void AddMusicToDefaultPlaylists(std::vector<std::string> default_music_files) = 0;
-    virtual int SearchMusicIndexFromlist(std::string name, const std::string& playlist_name) const = 0;
+    virtual int SearchMusicIndexFromlist(std::string name) const = 0;
     virtual void SetPlayIndex(std::string& playlist_name, int index) = 0;
     virtual void NextPlayIndexOrder(std::string& playlist_name) = 0;
     virtual void NextPlayIndexRandom(std::string& playlist_name) = 0;
     virtual std::string GetCurrentPlayList(void) = 0;
     virtual PlaybackMode GetPlaybackMode()  = 0;
-    virtual int GetLastPlayIndex(std::string& playlist_name) = 0;
-    virtual bool CreatePlaylist(const std::string& playlist_name) = 0;
-    virtual std::string SearchMusicPathFromlist(std::string name, const std::string& playlist_name) const = 0;
     virtual void SetCurrentPlayList(const std::string& playlist_name) = 0;
-    virtual std::string ExtractSongNameFromFileName(const std::string& file_name) const = 0;
-    virtual int FindPlaylistIndex(const std::string& name) const = 0;
-    virtual void SavePlaylistsToNVS() = 0;
-    virtual bool LoadPlaylistsFromNVS() = 0;
-    virtual void InitializeDefaultPlaylists() = 0;
+    virtual const std::string GetDefaultList() const =0;
+
+    virtual std::string SearchMusicFromlistByIndex(std::string list) const =0;
+    virtual void ScanAndLoadMusic() = 0;
     virtual void LoadPlaybackPosition() = 0;
     virtual void SavePlaybackPosition() = 0;
     virtual bool ResumeSavedPlayback() = 0;
-    virtual bool IfSavedPosition()  = 0;
-    virtual std::vector<std::string> SearchSingerFromlist(std::string singer, const std::string& playlist_name) const =0;
+    virtual bool IfSavedMusicPosition()  = 0;
+    virtual std::vector<std::string> SearchSinger(std::string singer) const =0;
     virtual std::string GetCurrentSongName() = 0;
-    virtual bool DeletePlaylistFromNVS(const std::string& playlist_name) = 0;
-    virtual bool DeleteAllPlaylistsExceptDefault() = 0;
 
+
+
+    virtual bool ScanStoryLibrary(const std::string& story_folder) = 0;
+    virtual std::vector<std::string> GetStoryCategories() const = 0;
+    virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const = 0;
+    virtual std::vector<std::string> GetChaptersForStory(const std::string& category, const std::string& story_name) const = 0;
+    // 从已索引中选择并播放某类别/故事/章节（chapter_index 可选，默认 0）
+    virtual bool SelectStoryAndPlay(const std::string& category, const std::string& story_name, size_t chapter_index = 0) = 0;
+    virtual bool IfSavedStoryPosition() = 0;
+    virtual void SaveStoryPlaybackPosition() = 0;
+    virtual void LoadStoryPlaybackPosition() = 0;
+    virtual bool ResumeSavedStoryPlayback() = 0;
+    virtual std::string GetCurrentStoryName() = 0;
+    virtual void ScanAndLoadStory()=0;
+    virtual int GetMusicOrStory_() const=0;
+    virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) = 0;
 
 };
 

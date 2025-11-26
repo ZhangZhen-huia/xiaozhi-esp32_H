@@ -26,6 +26,30 @@ WifiBoard::WifiBoard() {
         ESP_LOGI(TAG, "force_ap is set to 1, reset to 0");
         settings.SetInt("force_ap", 0);
     }
+
+    esp_timer_create_args_t clock_timer_args = {
+    .callback = [](void* arg) {
+        auto &app = Application::GetInstance();
+        app.PlaySound(Lang::Sounds::OGG_WIFICONFIG);
+    },
+    .dispatch_method = ESP_TIMER_TASK,
+    .name = "wifi_config_alert_timer",
+    .skip_unhandled_events = true
+    };
+    esp_timer_create(&clock_timer_args, &clock_timer_handle_);
+
+    esp_timer_create_args_t clock_timer_OnConnect_args = {
+    .callback = [](void* arg) {
+        auto &app = Application::GetInstance();
+        app.PlaySound(Lang::Sounds::OGG_CONNECTING);
+    },
+    .dispatch_method = ESP_TIMER_TASK,
+    .name = "wifi_config_connecting_timer",
+    .skip_unhandled_events = true
+    };
+    esp_timer_create(&clock_timer_OnConnect_args, &clock_timer_OnConnecthandle_);
+
+
 }
 
 std::string WifiBoard::GetBoardType() {
@@ -36,17 +60,13 @@ void WifiBoard::EnterWifiConfigMode() {
     auto& application = Application::GetInstance();
     application.SetDeviceState(kDeviceStateWifiConfiguring);
 
-    auto& wifi_ap = WifiConfigurationAp::GetInstance();
-    wifi_ap.SetLanguage(Lang::CODE);
-    wifi_ap.SetSsidPrefix("Hh-xiaozhi");
-    wifi_ap.Start();
     BleWifiIntegration::StartBleWifiConfig();
+
     // 等待 1.5 秒显示开发板信息
     vTaskDelay(pdMS_TO_TICKS(1500));
 
-    
-    // // 播报配置 WiFi 的提示
-    application.Alert(Lang::Strings::WIFI_CONFIG_MODE,"进入蓝牙配网模式","gear", Lang::Sounds::OGG_WIFICONFIG);
+    esp_timer_start_periodic(clock_timer_handle_, 1000000*10); // 每10秒提醒一次
+
 
     
     // Wait forever until reset after configuration
@@ -59,7 +79,6 @@ void WifiBoard::StartNetwork() {
     // User can press BOOT button while starting to enter WiFi configuration mode
     //配网模式
     if (wifi_config_mode_) {
-        ESP_LOGE(TAG, "111111111111111111");
         EnterWifiConfigMode();
         return;
     }
@@ -72,7 +91,6 @@ void WifiBoard::StartNetwork() {
     //如果没有已保存的WiFi SSID，进入WiFi配置模式
     if (ssid_list.empty()) {
         wifi_config_mode_ = true;
-        ESP_LOGE(TAG, "222222222222222222");
 
         EnterWifiConfigMode();
         return;
@@ -90,21 +108,29 @@ void WifiBoard::StartNetwork() {
         notification += ssid;
         notification += "...";
         display->ShowNotification(notification.c_str(), 30000);
+        esp_timer_start_periodic(clock_timer_OnConnecthandle_, 1000000*3); // 每3秒提醒一次
     });
     wifi_station.OnConnected([this](const std::string& ssid) {
+        esp_timer_stop(clock_timer_handle_);
         auto display = Board::GetInstance().GetDisplay();
         std::string notification = Lang::Strings::CONNECTED_TO;
         notification += ssid;
         display->ShowNotification(notification.c_str(), 30000);
+        auto& application = Application::GetInstance();
+        esp_timer_stop(clock_timer_OnConnecthandle_);
+        if(kDeviceStateWifiConfiguring == application.GetDeviceState())
+        {
+            esp_restart();
+        }
+
     });
     wifi_station.Start();
 
     // Try to connect to WiFi, if failed, launch the WiFi configuration AP
     //超时就重新开始配网
-    if (!wifi_station.WaitForConnected(20 * 1000)) {
-        ESP_LOGE(TAG, "333333333333333");
+    if (!wifi_station.WaitForConnected(10 * 1000)) {
 
-        wifi_station.Stop();
+        // wifi_station.Stop();
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
         return;
@@ -123,7 +149,6 @@ const char* WifiBoard::GetNetworkStateIcon() {
     auto& wifi_station = WifiStation::GetInstance();
     auto& app = Application::GetInstance();
     if (!wifi_station.IsConnected()) {
-        app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
         return FONT_AWESOME_WIFI_SLASH;
     }
     int8_t rssi = wifi_station.GetRssi();

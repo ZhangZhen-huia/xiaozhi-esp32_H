@@ -20,7 +20,7 @@
 #include "driver/sdmmc_host.h"
 #include <lvgl.h>
 #include <cmath>
-#include "qmi8658.h"
+
 #define TAG "LichuangDevBoard"
 
 
@@ -78,7 +78,7 @@ private:
     LcdDisplay* display_;
     Pca9557* pca9557_;
     Esp32Camera* camera_;
-    QMI8658 *imu_;
+
     void InitializeI2c() {
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -97,7 +97,7 @@ private:
 
         // Initialize PCA9557
         pca9557_ = new Pca9557(i2c_bus_, 0x19);
-        imu_ = new QMI8658(i2c_bus_,0x6A);
+
     }
 
     void InitializeSpi() {
@@ -305,9 +305,7 @@ public:
     virtual Camera* GetCamera() override {
         return camera_;
     }
-    virtual QMI8658* GetImu() override{
-        return imu_;
-    }
+
 };
 
 DECLARE_BOARD(LichuangDevBoard);
