@@ -29,6 +29,12 @@ static std::function<void(const std::string&, const std::string&)> g_wifi_config
 // C接口实现
 extern "C" {
 
+
+static inline bool wifi_is_started(void)
+{
+    wifi_mode_t mode;
+    return esp_wifi_get_mode(&mode) == ESP_OK && mode != WIFI_MODE_NULL;
+}
 static void ble_evt_handler(ble_evt_t* evt)
 {
     if(evt == NULL) {
@@ -39,10 +45,24 @@ static void ble_evt_handler(ble_evt_t* evt)
         ESP_LOGI(TAG, "BLE connected, conn_id=%d", evt->params.connected.conn_id);
         g_conn_handle = evt->params.connected.conn_id;
         auto& wifi_station = WifiStation::GetInstance();
-        wifi_station.Stop();
+        if(wifi_is_started())
+           {
+                wifi_station.Stop();
+           } 
+
+
+        // esp_wifi_disconnect();   // 不断射频，只断连接
+        auto& wifi_ap = WifiConfigurationAp::GetInstance();
+        wifi_ap.Start();
+
+           
+
     } else if(evt->evt_id == BLE_EVT_DISCONNECTED) {
         ESP_LOGI(TAG, "BLE disconnected, conn_id=%d", evt->params.disconnected.conn_id);
         g_conn_handle = 0xFFFF;
+        auto& wifi_ap = WifiConfigurationAp::GetInstance();
+        wifi_ap.Stop();
+
     }
 }
 

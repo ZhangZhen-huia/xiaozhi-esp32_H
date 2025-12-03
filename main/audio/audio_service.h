@@ -110,8 +110,9 @@ public:
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
     void UpdateOutputTimestamp();
-    // std::unique_ptr<WakeWord> GetWakeWord(){return wake_word_;}
-private:
+    bool SetActiveWakeWord(const std::string& word);
+    std::string GetActiveWakeWord() const;
+    private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
     std::unique_ptr<AudioProcessor> audio_processor_;

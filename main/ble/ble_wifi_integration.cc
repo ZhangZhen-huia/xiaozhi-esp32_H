@@ -39,7 +39,7 @@ void StopBleWifiConfig();
 static void OnWifiConfigChanged(const std::string& ssid, const std::string& password) {
     ESP_LOGI(TAG, "BLE WiFi config changed - SSID: %s", ssid.c_str());
 
-    esp_timer_start_periodic(clock_ConnecttingSound_timer_handle_, 3*1000000); // 2秒后播放连接提示音
+    esp_timer_start_periodic(clock_ConnecttingSound_timer_handle_, 1*1000000); // 1秒后播放连接提示音
     // 尝试连接到新的WiFi网络
     auto& wifi_ap = WifiConfigurationAp::GetInstance();
     bool connected = wifi_ap.ConnectToWifi(ssid, password);
@@ -53,6 +53,7 @@ static void OnWifiConfigChanged(const std::string& ssid, const std::string& pass
         esp_restart();
     } else {
         ESP_LOGW(TAG, "Failed to connect to WiFi: %s", ssid.c_str());
+        esp_timer_stop(clock_ConnecttingSound_timer_handle_);
     }
 }
 

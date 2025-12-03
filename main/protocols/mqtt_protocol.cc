@@ -28,6 +28,20 @@ MqttProtocol::MqttProtocol() {
         .arg = this,
     };
     esp_timer_create(&reconnect_timer_args, &reconnect_timer_);
+
+    esp_timer_create_args_t disconnect_timer_args = {
+        .callback = [](void* arg) {
+            MqttProtocol* protocol = (MqttProtocol*)arg;
+            protocol->disconnect_count++;
+            if( protocol->disconnect_count <= 3 ) {
+                esp_timer_start_once( protocol->disconnect_timer_, 2*1000000 );
+            }
+            auto &app = Application::GetInstance();
+            app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
+        },
+        .arg = this,
+    };
+    esp_timer_create(&disconnect_timer_args, &disconnect_timer_);
 }
 
 MqttProtocol::~MqttProtocol() {
@@ -84,7 +98,8 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
         auto& app = Application::GetInstance();
         app.PlaySound(Lang::Sounds::OGG_POPUP);
         app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
-
+        esp_timer_start_once(disconnect_timer_, 2*1000000 );
+        
         ESP_LOGI(TAG, "MQTT disconnected, schedule reconnect in %d seconds", MQTT_RECONNECT_INTERVAL_MS / 1000);
         esp_timer_start_once(reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
     });
@@ -93,6 +108,7 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
         if (on_connected_ != nullptr) {
             on_connected_();
         }
+        disconnect_count = 0;
         esp_timer_stop(reconnect_timer_);
     });
 

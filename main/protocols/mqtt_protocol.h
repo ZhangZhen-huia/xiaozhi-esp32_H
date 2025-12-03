@@ -48,6 +48,9 @@ private:
     uint32_t remote_sequence_;
     esp_timer_handle_t reconnect_timer_;
 
+    esp_timer_handle_t disconnect_timer_;
+    int disconnect_count = 0;
+    
     bool StartMqttClient(bool report_error=false);
     void ParseServerHello(const cJSON* root);
     std::string DecodeHexString(const std::string& hex_string);

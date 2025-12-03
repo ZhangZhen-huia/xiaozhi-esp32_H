@@ -10,6 +10,30 @@
  * 2024-01-10     LCKFB-lp    first version
  */
 #include "esp32_rc522.h"
+#include "driver/gptimer.h"
+
+static gptimer_handle_t gptimer = NULL;
+
+void delay_us_timer_init(void)
+{
+    gptimer_config_t cfg = {
+        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
+        .direction = GPTIMER_COUNT_UP,
+        .resolution_hz = 1000000, // 1 MHz → 1 µs
+    };
+    gptimer_new_timer(&cfg, &gptimer);
+    gptimer_enable(gptimer);
+}
+
+void delay_us_timer(uint32_t us)
+{
+    uint64_t start, end;
+    gptimer_get_raw_count(gptimer, &start);
+    end = start + us;
+    do {
+        gptimer_get_raw_count(gptimer, &start);
+    } while (start < end);
+}
 
 void delay_ms(unsigned int ms)
 {
@@ -17,7 +41,8 @@ void delay_ms(unsigned int ms)
 }
 void delay_us(unsigned int us)
 {
-    ets_delay_us(us);
+    esp_rom_delay_us(us);
+    // delay_us_timer(us);
 }
 void delay_1ms(unsigned int ms)
 {
@@ -69,11 +94,11 @@ void RC522_SPI_SendByte( uint8_t byte )
                 else
                         RC522_MOSI_0();
 
-                delay_us(200);
+                delay_us(1);
                 RC522_SCK_0();
-                delay_us(200);
+                delay_us(1);
                 RC522_SCK_1();
-                delay_us(200);
+                delay_us(1);
 
                 byte<<=1;
         }
@@ -89,15 +114,15 @@ uint8_t RC522_SPI_ReadByte( void )
         data <<= 1;
 
         RC522_SCK_0();
-        delay_us(200);
+        delay_us(1);
 
         if( RC522_MISO_GET()==1 )
         {
             data|=0x01;
         }
-        delay_us(200);
+        delay_us(1);
         RC522_SCK_1();
-        delay_us(200);
+        delay_us(1);
 
 
     }
@@ -226,8 +251,7 @@ void RC522_Rese( void )
         RC522_Reset_Disable();
         delay_us ( 1 );
         RC522_Write_Register( CommandReg, 0x0F );
-        while( RC522_Read_Register( CommandReg )&0x10 )
-                ;
+        while( RC522_Read_Register( CommandReg )&0x10 );
 
         /* 缓冲一下 */
         delay_us ( 1 );

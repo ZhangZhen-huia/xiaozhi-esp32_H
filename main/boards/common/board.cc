@@ -2,7 +2,6 @@
 #include "system_info.h"
 #include "settings.h"
 #include "display/display.h"
-#include "display/oled_display.h"
 #include "assets/lang_config.h"
 #include "esp32_music.h"
 #include <esp_log.h>
@@ -167,7 +166,7 @@ std::string Board::GetSystemInfoJson() {
     auto display = GetDisplay();
     if (display) {
         json += R"("display":{)";
-        if (dynamic_cast<OledDisplay*>(display)) {
+        if (dynamic_cast<Display*>(display)) {
             json += R"("monochrome":)" + std::string("true") + R"(,)";
         } else {
             json += R"("monochrome":)" + std::string("false") + R"(,)";

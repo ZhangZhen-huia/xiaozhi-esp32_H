@@ -20,7 +20,8 @@ public:
     void OnClick(std::function<void()> callback);
     void OnDoubleClick(std::function<void()> callback);
     void OnMultipleClick(std::function<void()> callback, uint8_t click_count = 3);
-
+    void OnLongPressStart(std::function<void()> cb);   // 长按开始
+    void OnLongPressHold(std::function<void()> cb);    // 按住期间周期性触发
 protected:
     gpio_num_t gpio_num_;
     button_handle_t button_handle_ = nullptr;
@@ -31,6 +32,9 @@ protected:
     std::function<void()> on_click_;
     std::function<void()> on_double_click_;
     std::function<void()> on_multiple_click_;
+    std::function<void()> on_long_start_;
+    std::function<void()> on_long_hold_;
+    std::function<void()> on_up_;
 };
 
 #if CONFIG_SOC_ADC_SUPPORTED

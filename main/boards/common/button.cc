@@ -123,3 +123,24 @@ void Button::OnMultipleClick(std::function<void()> callback, uint8_t click_count
         }
     }, this);
 }
+
+void Button::OnLongPressStart(std::function<void()> callback) {
+    if (!button_handle_) return;
+    on_long_start_ = callback;
+    iot_button_register_cb(button_handle_, BUTTON_LONG_PRESS_START, nullptr,
+        [](void*, void* usr_data) {
+            Button* btn = static_cast<Button*>(usr_data);
+            if (btn->on_long_start_) btn->on_long_start_();
+        }, this);
+}
+
+void Button::OnLongPressHold(std::function<void()> callback) {
+    if (!button_handle_) return;
+    on_long_hold_ = callback;
+    iot_button_register_cb(button_handle_, BUTTON_LONG_PRESS_HOLD, nullptr,
+        [](void*, void* usr_data) {
+            Button* btn = static_cast<Button*>(usr_data);
+            if (btn->on_long_hold_) btn->on_long_hold_();
+        }, this);
+}
+

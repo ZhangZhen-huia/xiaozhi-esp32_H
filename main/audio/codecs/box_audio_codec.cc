@@ -35,10 +35,8 @@ BoxAudioCodec::BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int
     };
     out_ctrl_if_ = audio_codec_new_i2c_ctrl(&i2c_cfg);
     assert(out_ctrl_if_ != NULL);
-
     gpio_if_ = audio_codec_new_gpio();
     assert(gpio_if_ != NULL);
-
     es8311_codec_cfg_t es8311_cfg = {};
     es8311_cfg.ctrl_if = out_ctrl_if_;
     es8311_cfg.gpio_if = gpio_if_;

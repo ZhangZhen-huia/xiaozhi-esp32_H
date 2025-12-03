@@ -137,15 +137,16 @@ esp_err_t ble_protocol_deinit(void)
 
 esp_err_t ble_protocol_register_handler(uint8_t cmd, ble_protocol_handler_t handler, const char* name)
 {
+    ESP_LOGI(TAG, "cpu=%d inIsr=%d", xPortGetCoreID(), xPortInIsrContext());
     if (handler == NULL || name == NULL) {
         ESP_LOGE(TAG, "Invalid parameters for handler registration");
         return ESP_ERR_INVALID_ARG;
     }
     
-    if (xSemaphoreTake(g_handlers_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take handlers mutex");
-        return ESP_ERR_TIMEOUT;
-    }
+    // if (xSemaphoreTake(g_handlers_mutex, pdMS_TO_TICKS(0)) != pdTRUE) {
+    //     ESP_LOGE(TAG, "Failed to take handlers mutex");
+    //     return ESP_ERR_TIMEOUT;
+    // }
     
     esp_err_t ret = ESP_ERR_NO_MEM;
     
@@ -165,16 +166,16 @@ esp_err_t ble_protocol_register_handler(uint8_t cmd, ble_protocol_handler_t hand
         ESP_LOGE(TAG, "No more handler slots available");
     }
     
-    xSemaphoreGive(g_handlers_mutex);
+    // xSemaphoreGive(g_handlers_mutex);
     return ret;
 }
 
 esp_err_t ble_protocol_unregister_handler(uint8_t cmd)
 {
-    if (xSemaphoreTake(g_handlers_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
-        ESP_LOGE(TAG, "Failed to take handlers mutex");
-        return ESP_ERR_TIMEOUT;
-    }
+    // if (xSemaphoreTake(g_handlers_mutex, pdMS_TO_TICKS(1000)) != pdTRUE) {
+    //     ESP_LOGE(TAG, "Failed to take handlers mutex");
+    //     return ESP_ERR_TIMEOUT;
+    // }
     
     esp_err_t ret = ESP_ERR_NOT_FOUND;
     
@@ -192,7 +193,7 @@ esp_err_t ble_protocol_unregister_handler(uint8_t cmd)
         ESP_LOGE(TAG, "Handler for cmd 0x%02X not found", cmd);
     }
     
-    xSemaphoreGive(g_handlers_mutex);
+    // xSemaphoreGive(g_handlers_mutex);
     return ret;
 }
 

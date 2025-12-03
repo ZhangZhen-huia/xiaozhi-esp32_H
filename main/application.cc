@@ -22,6 +22,10 @@
 #include "wifi_station.h"
 #include <esp_netif.h>
 #include "esp_wifi.h"
+#include "adc_battery_monitor.h"
+#include "esp32_rc522.h"
+#include "esp_task_wdt.h"
+#include "esp_tts.h"
 #define TAG "Application"
 
 
@@ -72,11 +76,11 @@ Application::Application() {
         },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
-        .name = "clock_timer",
+        .name = "clock_Offline_timer",
         .skip_unhandled_events = true
     };
     esp_timer_create(&clock_Offlinetimer_args, &clock_Offlinetimer_handle_);
-    
+
 }
 
 Application::~Application() {
@@ -427,6 +431,11 @@ void Application::Start() {
         vTaskDelete(NULL);
     }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
 
+    xTaskCreate([](void* arg) {
+        ((Application*)arg)->RFID_TASK();
+        vTaskDelete(NULL);
+    }, "rfid_task", 2048 * 4, this, 3, &rfid_task_handle_);
+
     /* Start the clock timer to update the status bar */
     //该定时器任务会在定时结束对应的event_group_设置MAIN_EVENT_CLOCK_TICK位
     //然后触发main_event_loop函数中的对应处理
@@ -613,8 +622,9 @@ void Application::Start() {
     if(music) {
         music->ScanAndLoadMusic();
         music->ScanAndLoadStory();
-        // music->DeletePlaylistsFromNVS();
     }
+
+    // audio_service_.SetActiveWakeWord("Hi,lexin");
 }
 
 // Add a async task to MainLoop
@@ -625,11 +635,73 @@ void Application::Schedule(std::function<void()> callback) {
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }
+   
 
+uint8_t read_write_data[16]={0};//读写数据缓存
+uint8_t card_KEY[6] ={0xff,0xff,0xff,0xff,0xff,0xff};//默认密码
+uint8_t ucArray_ID [ 4 ];
+uint8_t ucStatusReturn;    //返回状态
+
+void Application::RFID_TASK()
+{
+    // esp_task_wdt_add(NULL);
+    // esp_task_wdt_timeout(5);
+
+    while(1)
+    {
+        #if !my
+            if ( ( ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID ) ) != MI_OK )
+            {
+                ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID );
+            }
+            if ( ucStatusReturn == MI_OK  )
+            {
+            /* 防冲突操作，被选中的卡片序列传入数组ucArray_ID中 */
+                if ( PcdAnticoll ( ucArray_ID ) == MI_OK )
+                {
+                    //根据卡ID进行后续操作
+                    std::string card_id = std::to_string(ucArray_ID [ 0 ]) + std::to_string(ucArray_ID [ 1 ]) + std::to_string(ucArray_ID [ 2 ]) + std::to_string(ucArray_ID [ 3 ]);
+                    //输出卡ID
+                    ESP_LOGI(TAG,"ID: %s", card_id.c_str());
+                    auto music = Board::GetInstance().GetMusic();
+                    std::string msg = "调用工具Notice";
+                    if(strcmp(card_id.c_str(), CardPlayer_ID) == 0) {
+                        device_Role = Player;
+                        ESP_LOGI(TAG,"Enter Player Mode\r\n");
+                        // if(music) {
+                        //     music->StopStreaming();
+                        // }
+                        SendMessage(msg);
+                    } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0) {
+                        ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
+                        audio_service_.SetActiveWakeWord("你好小智");
+                        device_Role = Role_Xiaozhi;
+                        // if(music) {
+                        //     music->StopStreaming();
+                        // }
+                        SendMessage(msg);
+                    } else if(strcmp(card_id.c_str(), CardRole_ESP_ID) == 0) {
+                        ESP_LOGI(TAG,"ESP Role Activated\r\n");
+                        audio_service_.SetActiveWakeWord("Hi,ESP");
+                        device_Role = Role_ESP;
+                        // if(music) {
+                        //     music->StopStreaming();
+                        // }
+                        // SendMessage(msg);
+                    }
+                }
+            
+            }
+            #else
+            #endif
+            vTaskDelay(50);
+    }
+} 
 // The Main Event Loop controls the chat state and websocket connection
 // If other tasks need to access the websocket or chat state,
 // they should use Schedule to call this function
 void Application::MainEventLoop() {
+    // esp_task_wdt_add(xTaskGetCurrentTaskHandle());   // 1. 注册
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, MAIN_EVENT_SCHEDULE |
             MAIN_EVENT_SEND_AUDIO |
@@ -654,6 +726,11 @@ void Application::MainEventLoop() {
         }
 
         if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
+            // SetDeviceState(kDeviceStateListening);
+            // auto music = Board::GetInstance().GetMusic();
+            // if(music) {
+            //     music->StopStreaming();
+            // }
             OnWakeWordDetected();
         }
 
@@ -672,16 +749,18 @@ void Application::MainEventLoop() {
                 task();
             }
         }
-
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
             auto& wifi_station = WifiStation::GetInstance();
-            if(wifi_station.IsConnected())
+            if(wifi_station.IsConnected() && (clock_ticks_ % 3 == 0))
             {
-                if(wifi_station.GetRssi()<-60)
+                auto Rssi = wifi_station.GetRssi();
+                ESP_LOGI(TAG,"Rssi:%d dBm",Rssi);
+                if(Rssi < -60)
                 {
+                    ESP_LOGI(TAG,"Weak Wifi Signal, Start Scanning");
                     esp_wifi_scan_start(NULL, false);
                 }
             }
@@ -692,7 +771,6 @@ void Application::MainEventLoop() {
             }   
             if(Offline_ticks_>=5)         
             {
-                esp_timer_stop(clock_Offlinetimer_handle_);
                 Offline_ticks_=0;
                 SetDeviceState(kDeviceStateWifiConfiguring);
             }

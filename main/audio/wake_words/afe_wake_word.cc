@@ -119,6 +119,54 @@ size_t AfeWakeWord::GetFeedSize() {
     return afe_iface_->get_feed_chunksize(afe_data_);
 }
 
+bool AfeWakeWord::SetActiveWakeWord(const std::string& word) {
+    {
+        std::lock_guard<std::mutex> lock(active_wake_word_mutex_);
+        if (word.empty()) {
+            active_wake_word_.clear();
+            ESP_LOGI(TAG, "AfeWakeWord: active wake word cleared (accept all)");
+        } else {
+            active_wake_word_ = word;
+            ESP_LOGI(TAG, "AfeWakeWord: active wake word set to '%s'", active_wake_word_.c_str());
+        }
+    }
+
+    if (afe_iface_ && afe_data_) {
+        if (afe_iface_->reset_buffer) {
+            int r = afe_iface_->reset_buffer(afe_data_);
+            if (r > 0) {
+                ESP_LOGI(TAG, "AfeWakeWord: afe feed ringbuffer reset OK");
+            } else {
+                ESP_LOGW(TAG, "AfeWakeWord: afe reset_buffer returned %d", r);
+            }
+        }
+
+        if (afe_iface_->fetch_with_delay) {
+            for (int i = 0; i < 8; ++i) {
+                afe_fetch_result_t* res = afe_iface_->fetch_with_delay(afe_data_, 0); // 0 ticks，不阻塞
+                if (!res) break;
+                if (res->ret_value == ESP_FAIL) {
+                    break;
+                }
+
+                (void)res;
+            }
+        }
+    }
+
+    //设置事件位让 AudioDetectionTask 继续 fetch
+    if (event_group_) {
+        xEventGroupSetBits(event_group_, DETECTION_RUNNING_EVENT);
+    }
+
+    return true;
+}
+
+std::string AfeWakeWord::GetActiveWakeWord() const {
+    std::lock_guard<std::mutex> lock(active_wake_word_mutex_);
+    return active_wake_word_;
+}
+
 void AfeWakeWord::AudioDetectionTask() {
     auto fetch_size = afe_iface_->get_fetch_chunksize(afe_data_);
     auto feed_size = afe_iface_->get_feed_chunksize(afe_data_);
@@ -126,26 +174,49 @@ void AfeWakeWord::AudioDetectionTask() {
         feed_size, fetch_size);
 
     while (true) {
-        xEventGroupWaitBits(event_group_, DETECTION_RUNNING_EVENT, pdFALSE, pdTRUE, portMAX_DELAY);
-
+        // 始终 fetch 数据以消费 AFE 的环形缓冲，避免写满）
         auto res = afe_iface_->fetch_with_delay(afe_data_, portMAX_DELAY);
         if (res == nullptr || res->ret_value == ESP_FAIL) {
-            continue;;
+            // 若 fetch 失败，稍作延时避免忙等
+            vTaskDelay(pdMS_TO_TICKS(5));
+            continue;
         }
 
-        // Store the wake word data for voice recognition, like who is speaking
         StoreWakeWordData(res->data, res->data_size / sizeof(int16_t));
 
+        // 仅在检测被启用时处理唤醒事件，未启用时只是消费数据
+        uint32_t bits = xEventGroupGetBits(event_group_);
+        bool running = (bits & DETECTION_RUNNING_EVENT);
+
+        if (!running) {
+            // 处于停止状态，继续循环以清空缓冲并避免溢出
+            continue;
+        }
+
         if (res->wakeup_state == WAKENET_DETECTED) {
-            Stop();
             last_detected_wake_word_ = wake_words_[res->wakenet_model_index - 1];
 
+            std::string active;
+            {
+                std::lock_guard<std::mutex> lock(active_wake_word_mutex_);
+                active = active_wake_word_;
+            }
+
             if (wake_word_detected_callback_) {
-                wake_word_detected_callback_(last_detected_wake_word_);
+                if (active.empty() || active == last_detected_wake_word_) {
+                    // 匹配
+                    Stop();
+                    wake_word_detected_callback_(last_detected_wake_word_);
+                } else {
+                    // 不匹配：记录并继续 fetch（不要 Stop，否则会产生环形缓冲溢出）
+                    ESP_LOGI(TAG, "Detected wake word '%s' ignored (active='%s')",
+                             last_detected_wake_word_.c_str(), active.c_str());
+                }
             }
         }
     }
 }
+
 
 void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
     // store audio data to wake_word_pcm_

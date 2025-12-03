@@ -16,6 +16,8 @@
 #include "audio_service.h"
 #include "device_state_event.h"
 
+#define my 0
+
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
@@ -32,6 +34,11 @@ enum AecMode {
     kAecOnServerSide,
 };
 
+enum Role{
+    Player,
+    Role_Xiaozhi,
+    Role_ESP,
+};
 class Application {
 public:
     static Application& GetInstance() {
@@ -44,6 +51,7 @@ public:
 
     void Start();
     void MainEventLoop();
+    void RFID_TASK();
     DeviceState GetDeviceState() const { return device_state_; }
     bool IsVoiceDetected() const { return audio_service_.IsVoiceDetected(); }
     void Schedule(std::function<void()> callback);
@@ -63,7 +71,7 @@ public:
     AecMode GetAecMode() const { return aec_mode_; }
     void PlaySound(const std::string_view& sound);
     AudioService& GetAudioService() { return audio_service_; }
-    // 新增：接收外部音频数据（如音乐播放）
+
     void AddAudioData(AudioStreamPacket&& packet);
     void SendMessage(std::string &message);
 
@@ -71,7 +79,7 @@ public:
     bool IsBleWifiConfigEnabled() const { return ble_wifi_config_enabled_; }
  
     bool Wifi_Offline = false;
-
+    Role device_Role = Role_Xiaozhi;
 private:
     Application();
     ~Application();
@@ -81,7 +89,6 @@ private:
     std::unique_ptr<Protocol> protocol_;
     EventGroupHandle_t event_group_ = nullptr;
     esp_timer_handle_t clock_timer_handle_ = nullptr;
-
     esp_timer_handle_t clock_Offlinetimer_handle_ = nullptr;
     int Offline_ticks_ = 0;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
@@ -95,6 +102,7 @@ private:
     int clock_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
+    TaskHandle_t rfid_task_handle_ = nullptr;
 
     bool ble_wifi_config_enabled_ = true;
     

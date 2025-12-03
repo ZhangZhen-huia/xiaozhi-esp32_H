@@ -13,6 +13,7 @@
 #ifndef _BSP_RC522_H
 #define _BSP_RC522_H
 
+extern "C" {
 #include "driver/i2c.h"
 #include "sdkconfig.h"
 #include "freertos/FreeRTOS.h"
@@ -30,6 +31,19 @@
 #include "driver/spi_common.h"
 #include "hal/gpio_types.h"
 
+
+
+
+#define CardPlayer_ID           "9191006"
+#define CardRole_Xiaozhi_ID     "55138795"
+#define CardRole_ESP_ID         "6392086"
+
+
+
+
+
+
+
 #ifndef u8
 #define u8 uint8_t
 #endif
@@ -43,15 +57,15 @@
 #endif
 
 //  SDA/CS
-#define GPIO_CS          GPIO_NUM_1
+#define GPIO_CS          GPIO_NUM_16
 //SCK
-#define GPIO_SCK         GPIO_NUM_2
+#define GPIO_SCK         GPIO_NUM_17
 //MOSI
-#define GPIO_MOSI        GPIO_NUM_3
+#define GPIO_MOSI        GPIO_NUM_18
 //RST
-#define GPIO_RST         GPIO_NUM_5
+#define GPIO_RST         GPIO_NUM_19
 //MISO
-#define GPIO_MISO        GPIO_NUM_4
+#define GPIO_MISO        GPIO_NUM_20
 
 /* IO口操作函数 */
 #define   RC522_CS_Enable()         gpio_set_level(GPIO_CS, 0)
@@ -202,4 +216,5 @@ void delay_ms(unsigned int ms);
 void delay_1us(unsigned int us);
 void delay_us(unsigned int us);
 
+}
 #endif

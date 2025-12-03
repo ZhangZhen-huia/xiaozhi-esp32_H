@@ -41,11 +41,20 @@ WifiBoard::WifiBoard() {
     esp_timer_create_args_t clock_timer_OnConnect_args = {
     .callback = [](void* arg) {
         auto &app = Application::GetInstance();
+        auto &wifi_station = WifiStation::GetInstance();
         app.PlaySound(Lang::Sounds::OGG_CONNECTING);
+
+        if( wifi_station.ContinueScan == true )
+            {
+                wifi_station.ContinueScan = false;
+                return;
+            }
+        esp_timer_start_once( ((WifiBoard*)arg)->clock_timer_OnConnecthandle_, 1000000*2 );
     },
+    .arg = this,
     .dispatch_method = ESP_TIMER_TASK,
     .name = "wifi_config_connecting_timer",
-    .skip_unhandled_events = true
+    .skip_unhandled_events = true,
     };
     esp_timer_create(&clock_timer_OnConnect_args, &clock_timer_OnConnecthandle_);
 
@@ -60,6 +69,8 @@ void WifiBoard::EnterWifiConfigMode() {
     auto& application = Application::GetInstance();
     application.SetDeviceState(kDeviceStateWifiConfiguring);
 
+    esp_timer_stop(clock_timer_OnConnecthandle_);
+    
     BleWifiIntegration::StartBleWifiConfig();
 
     // 等待 1.5 秒显示开发板信息
@@ -83,18 +94,7 @@ void WifiBoard::StartNetwork() {
         return;
     }
 
-    // If no WiFi SSID is configured, enter WiFi configuration mode
-    //从NVS中读取已保存的WiFi SSID
-    auto& ssid_manager = SsidManager::GetInstance();
-    auto ssid_list = ssid_manager.GetSsidList();
 
-    //如果没有已保存的WiFi SSID，进入WiFi配置模式
-    if (ssid_list.empty()) {
-        wifi_config_mode_ = true;
-
-        EnterWifiConfigMode();
-        return;
-    }
 
     //建立wifi客户端并开始连接读取到的wifi ssid
     auto& wifi_station = WifiStation::GetInstance();
@@ -108,7 +108,7 @@ void WifiBoard::StartNetwork() {
         notification += ssid;
         notification += "...";
         display->ShowNotification(notification.c_str(), 30000);
-        esp_timer_start_periodic(clock_timer_OnConnecthandle_, 1000000*3); // 每3秒提醒一次
+        esp_timer_start_once(clock_timer_OnConnecthandle_, 1000000*2); // 每2秒提醒一次
     });
     wifi_station.OnConnected([this](const std::string& ssid) {
         esp_timer_stop(clock_timer_handle_);
@@ -126,9 +126,22 @@ void WifiBoard::StartNetwork() {
     });
     wifi_station.Start();
 
+    // If no WiFi SSID is configured, enter WiFi configuration mode
+    //从NVS中读取已保存的WiFi SSID
+    auto& ssid_manager = SsidManager::GetInstance();
+    auto ssid_list = ssid_manager.GetSsidList();
+
+    //如果没有已保存的WiFi SSID，进入WiFi配置模式
+    if (ssid_list.empty()) {
+        wifi_config_mode_ = true;
+
+        EnterWifiConfigMode();
+        return;
+    }
+    
     // Try to connect to WiFi, if failed, launch the WiFi configuration AP
     //超时就重新开始配网
-    if (!wifi_station.WaitForConnected(10 * 1000)) {
+    if (!wifi_station.WaitForConnected(30 * 1000)) {
 
         // wifi_station.Stop();
         wifi_config_mode_ = true;

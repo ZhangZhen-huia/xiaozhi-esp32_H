@@ -82,7 +82,9 @@ private:
     std::string current_song_name_;
 
     
-    std::atomic<PlaybackMode> playback_mode_ = PLAYBACK_MODE_ORDER;
+    std::atomic<PlaybackMode> MusicPlayback_mode_ = PLAYBACK_MODE_ORDER;
+    std::atomic<PlaybackMode> StoryPlayback_mode_ = PLAYBACK_MODE_ORDER;
+
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_downloading_;
     std::thread play_thread_;
@@ -151,7 +153,8 @@ private:
     size_t ps_story_capacity_ = 0;
     mutable std::mutex story_index_mutex_;
     std::string current_story_name_;
-    // std::string current_category_name_;
+    std::string current_category_name_;
+    int current_chapter_index_ = 0;
 
     // 保存的故事断点（持久化/恢复用）
     std::string saved_story_category_;
@@ -166,7 +169,6 @@ private:
     size_t current_play_file_offset_ = 0;
     std::mutex current_play_file_mutex_;
 
-    std::string current_play_file_path_;
     // 请求在 ReadFromSDCard 时从该偏移开始读取（由 PlayFromSD(..., start_offset) 设置）
     size_t start_play_offset_ = 0;
 
@@ -202,6 +204,7 @@ public:
     virtual void SetOnceMode(bool once)override;
     virtual void SetOrderMode(bool order)override;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
+    virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name, size_t start_offset);
 
     virtual bool ScanMusicLibrary(const std::string& music_folder)override;
     virtual size_t GetMusicCount() const override{ return ps_music_count_; };
@@ -224,18 +227,27 @@ public:
     virtual void SavePlaybackPosition()override;
     virtual bool ResumeSavedPlayback()override;
     virtual std::string SearchMusicFromlistByIndex(std::string list) const override;
-    virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name, size_t start_offset);
     virtual bool IfSavedMusicPosition() override{ return has_saved_MusicPosition_; };
     virtual std::vector<std::string> SearchSinger(std::string singer) const override;
-    // 故事索引接口
+
+
+    // 故事播放相关接口
     virtual bool ScanStoryLibrary(const std::string& story_folder) override;
     virtual bool IfSavedStoryPosition() override { return has_saved_story_position_; };
     virtual std::string GetCurrentStoryName() override{ return current_story_name_; };
+    virtual std::string GetCurrentCategoryName() override{ return current_category_name_; };
+    virtual int GetCurrentChapterIndex() override{ return current_chapter_index_; };
+
+    virtual void SetCurrentCategoryName(const std::string& category)override;
+
+    virtual void SetCurrentStoryName(const std::string& story)override;
+
+    virtual void SetCurrentChapterIndex(int index)override;
     virtual std::vector<std::string> GetStoryCategories() const;
     virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const;
     virtual std::vector<std::string> GetChaptersForStory(const std::string& category, const std::string& story_name) const;
     // 从已索引中选择并播放某类别/故事/章节（chapter_index 可选，默认 0）
-    virtual bool SelectStoryAndPlay(const std::string& category, const std::string& story_name, size_t chapter_index = 0);
+    virtual bool SelectStoryAndPlay()override;
 
     // 故事断点保存/加载/恢复接口（类似音乐的断点）
     virtual void SaveStoryPlaybackPosition()override;
@@ -243,6 +255,7 @@ public:
     virtual bool ResumeSavedStoryPlayback()override;
     virtual void ScanAndLoadStory()override;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) override;
+    virtual bool NextStoryInCategory(const std::string& category) override;
 };
 
 

@@ -36,9 +36,7 @@ class Music {
 public:
     virtual ~Music() = default;  // 添加虚析构函数
     
-    std::string category_;
-    std::string story_name_;
-    int chapter_;
+
 
     // 新增流式播放相关方法
     virtual bool StopStreaming() = 0;  // 停止流式播放
@@ -83,16 +81,22 @@ public:
     virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const = 0;
     virtual std::vector<std::string> GetChaptersForStory(const std::string& category, const std::string& story_name) const = 0;
     // 从已索引中选择并播放某类别/故事/章节（chapter_index 可选，默认 0）
-    virtual bool SelectStoryAndPlay(const std::string& category, const std::string& story_name, size_t chapter_index = 0) = 0;
+    virtual bool SelectStoryAndPlay() = 0;
     virtual bool IfSavedStoryPosition() = 0;
     virtual void SaveStoryPlaybackPosition() = 0;
     virtual void LoadStoryPlaybackPosition() = 0;
     virtual bool ResumeSavedStoryPlayback() = 0;
     virtual std::string GetCurrentStoryName() = 0;
+    virtual std::string GetCurrentCategoryName() =0;
+    virtual int GetCurrentChapterIndex() =0;
+
     virtual void ScanAndLoadStory()=0;
     virtual int GetMusicOrStory_() const=0;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) = 0;
-
+    virtual void SetCurrentCategoryName(const std::string& category) = 0;
+    virtual void SetCurrentStoryName(const std::string& story) =0;
+    virtual void SetCurrentChapterIndex(int index) = 0;
+    virtual bool NextStoryInCategory(const std::string& category) = 0;
 };
 
 #endif // MUSIC_H 

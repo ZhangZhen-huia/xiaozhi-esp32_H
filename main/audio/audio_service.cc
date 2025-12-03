@@ -688,3 +688,23 @@ bool AudioService::IsAfeWakeWord() {
 void AudioService::UpdateOutputTimestamp() {
     last_output_time_ = std::chrono::steady_clock::now();
 }
+
+bool AudioService::SetActiveWakeWord(const std::string& word) {
+    if (!wake_word_) {
+        ESP_LOGW(TAG, "SetActiveWakeWord: wake_word_ not initialized");
+        return false;
+    }
+    
+    bool r = wake_word_->SetActiveWakeWord(word);
+    if (r) {
+        ESP_LOGI(TAG, "AudioService: active wake word set to '%s'", word.c_str());
+    } else {
+        ESP_LOGW(TAG, "AudioService: failed to set active wake word '%s'", word.c_str());
+    }
+    return r;
+}
+
+std::string AudioService::GetActiveWakeWord() const {
+    if (!wake_word_) return std::string();
+    return wake_word_->GetActiveWakeWord();
+}
