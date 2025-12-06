@@ -25,6 +25,7 @@ public:
     virtual AudioCodec* GetAudioCodec() override { return nullptr; }
     virtual std::string GetDeviceStatusJson() override;
     virtual void EnterWifiConfigMode() override{return;};
+    virtual AdcBatteryMonitor* GetBatteryMonitor() override { return nullptr; }
 };
 
 #endif // ML307_BOARD_H

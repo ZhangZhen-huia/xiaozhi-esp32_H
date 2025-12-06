@@ -13,7 +13,7 @@
 #include "camera.h"
 #include "assets.h"
 #include "music.h"
-
+#include "adc_battery_monitor.h"
 
 void* create_board();
 class AudioCodec;
@@ -43,6 +43,8 @@ public:
     virtual Backlight* GetBacklight() { return nullptr; }
     virtual Led* GetLed();
     virtual AudioCodec* GetAudioCodec() = 0;
+    virtual AdcBatteryMonitor* GetBatteryMonitor()=0;
+
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();

@@ -18,8 +18,7 @@ extern "C" {
 #include "mp3dec.h"
 }
 
-#define MUSIC_EVENT_LOADED (1 << 0)
-#define MUSIC_EVENT_COMPLETED (1 << 1)
+
 
 #define STORY 1
 #define MUSIC 0
@@ -76,8 +75,6 @@ public:
     };
 
 private:
-    EventGroupHandle_t event_group_ = nullptr; 
-
     std::string last_downloaded_data_;
     std::string current_song_name_;
 

@@ -198,6 +198,11 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
         //     app.ToggleChatState();
         // });
 
+
+        boot_button_Boot_IO0.OnClick([this](){
+            auto& app = Application::GetInstance();
+            app.ToggleChatState();
+        });
         //Boot按键
         boot_button_Boot_IO0.OnLongPressStart([this](){
             auto& app = Application::GetInstance();
@@ -254,7 +259,7 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
     }
 
     void InitializeBatteryMonitor() {
-        adc_battery_monitor_ = new AdcBatteryMonitor(ADC_UNIT_1, ADC_CHANNEL_6, 100000, 100000, GPIO_NUM_7);
+        adc_battery_monitor_ = new AdcBatteryMonitor(ADC_UNIT_1, ADC_CHANNEL_6, 680000, 680000, GPIO_NUM_6);
         adc_battery_monitor_->OnChargingStatusChanged([this](bool is_charging) {
             if (is_charging) {
                 // sleep_timer_->SetEnabled(false);
@@ -300,7 +305,15 @@ public:
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
     }
-
+    virtual AdcBatteryMonitor* GetBatteryMonitor() override {
+        return adc_battery_monitor_;
+    }
+    virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging)override{
+        level = adc_battery_monitor_->GetBatteryLevel();
+        charging = adc_battery_monitor_->IsCharging();
+        discharging = adc_battery_monitor_->IsDischarging();
+        return true;
+    };
 };
 
 DECLARE_BOARD(LichuangDevBoard);

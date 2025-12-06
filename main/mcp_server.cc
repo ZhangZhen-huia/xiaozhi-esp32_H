@@ -140,7 +140,7 @@ void McpServer::AddCommonTools() {
         //             return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
         //         });
         AddTool("playmusic",
-                "用于播放音乐，当用户说播放音乐时调用该函数，你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1\n"
+                "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1\n"
                 "参数:\n"
                 "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
                 "  `singer`: 歌手名称，可选，默认为空字符串。\n"
@@ -362,6 +362,7 @@ void McpServer::AddCommonTools() {
         [music](const PropertyList& properties) -> ReturnValue {
             auto singer = properties["singer"].value<std::string>();
             auto song_name = properties["songname"].value<std::string>();
+            ESP_LOGI(TAG, "Search music: singer='%s', songname='%s'", singer.c_str(), song_name.c_str());
             size_t out_count = 0;
             auto all_music = music->GetMusicLibrary(out_count);                    
             std::string result = "{\"success\": true, \"message\": \"我可以播放以下歌曲: \", \"songs\": [";

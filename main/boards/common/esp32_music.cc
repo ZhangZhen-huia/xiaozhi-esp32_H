@@ -33,7 +33,6 @@ Esp32Music::Esp32Music() : last_downloaded_data_(), current_song_name_(),
                          buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
                          mp3_decoder_initialized_(false) {
     ESP_LOGI(TAG, "Music player initialized with default spectrum display mode");
-    event_group_ = xEventGroupCreate();
     InitializeMp3Decoder();
 
 
@@ -253,8 +252,7 @@ void Esp32Music::PlayAudioStream() {
         is_playing_ = false;
         return;
     }
-    
-    
+
     // 等待缓冲区有足够数据开始播放
     {
         std::unique_lock<std::mutex> lock(buffer_mutex_);
@@ -283,13 +281,12 @@ void Esp32Music::PlayAudioStream() {
     bool id3_processed = false;
     
     
-    xEventGroupSetBits(event_group_, MUSIC_EVENT_LOADED);
     while (is_playing_) {
         // 检查设备状态，只有在空闲状态才播放音乐
         auto& app = Application::GetInstance();
         DeviceState current_state = app.GetDeviceState();
-
-        // 等小智把话说完了，变成聆听状态之后，马上转成待机状态，进入音乐播放
+        
+        // 状态转换：说话中-》聆听中-》待机状态-》播放音乐
         if (current_state == kDeviceStateListening || current_state == kDeviceStateSpeaking) {
             if (current_state == kDeviceStateSpeaking) {
                 ESP_LOGI(TAG, "Device is in speaking state, switching to listening state for music playback");
@@ -1461,7 +1458,7 @@ int Esp32Music::SearchMusicIndexFromlist(std::string name) const {
         std::string artist_key = info.artist_norm;
         std::string combined_key = artist_key + "-" + song_key;
         name = NormalizeForSearch(name);
-        ESP_LOGI(TAG, "Searching name :%s ,for song '%s' (artist: '%s')--------combined: %s", name.c_str(), song_key.c_str(), artist_key.c_str(), combined_key.c_str());
+        ESP_LOGD(TAG, "Searching name :%s ,for song '%s' (artist: '%s')--------combined: %s", name.c_str(), song_key.c_str(), artist_key.c_str(), combined_key.c_str());
         if (song_key == name || combined_key == name) {
             ESP_LOGI(TAG, "Found song '%s' in playlist defaultlist at index %d", name.c_str(), (int)i);
             return static_cast<int>(i);
