@@ -28,7 +28,7 @@ set(SOURCES "audio/audio_codec.cc"
             "device_state_event.cc"
             "assets.cc"
             "main.cc"
-           
+            "boards/common/bat_monitor.c"
             )
 
 set(INCLUDE_DIRS "." "display" "audio" "protocols" "ble")

@@ -248,5 +248,3 @@ bool CustomWakeWord::GetWakeWordOpus(std::vector<uint8_t>& opus) {
     wake_word_opus_.pop_front();
     return !opus.empty();
 }
-
-

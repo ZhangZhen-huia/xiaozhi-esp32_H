@@ -78,67 +78,8 @@ void McpServer::AddCommonTools() {
                 return true;
             });
     }
-
-    AddTool("self.led.turn_on",
-            "Turn on the LED.",
-            PropertyList(),
-            [](const PropertyList& properties) -> ReturnValue {
-                ESP_LOGI(TAG, "Turn on the LED");
-                return true;
-            });
-            
-    AddTool("self.led.turn_off",
-            "Turn off the LED.",
-            PropertyList(),
-            [](const PropertyList& properties) -> ReturnValue {
-                ESP_LOGI(TAG, "Turn off the LED");
-                return true;
-            });
-            auto display = board.GetDisplay();
-
     auto music = board.GetMusic();
     if (music) {
-        // AddTool("self.musicSDCard.play_song",
-        //         "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件。\n"
-        //         "参数:\n"
-        //         "  `songname`: 要播放的本地音乐文件名（必需）。\n"
-        //         "  `mode`: 播放模式，可选：、`循环播放`、`播放一次`(默认)。\n"
-        //         "返回:\n"
-        //         "  播放状态信息，立刻开始播放。",
-        //         PropertyList({
-        //             Property("songname", kPropertyTypeString), // 本地音乐文件名（必需）
-        //             Property("mode", kPropertyTypeString, "播放一次") // 播放模式（可选）
-        //         }),
-        //         [music,display](const PropertyList& properties) -> ReturnValue {
-        //             auto name = properties["songname"].value<std::string>();
-        //             std::string filepath = "/sdcard/音乐/" + name + ".mp3";
-        //             ESP_LOGI(TAG, "Play local music file: %s", filepath.c_str());
-
-        //             // 解析播放模式（支持中文与常见英文）
-        //             auto mode_str = properties["mode"].value<std::string>();
-        //             auto normalize = [](std::string s) {
-        //                 // 简单去除首尾空白
-        //                 while (!s.empty() && isspace((unsigned char)s.front())) s.erase(s.begin());
-        //                 while (!s.empty() && isspace((unsigned char)s.back())) s.pop_back();
-        //                 // 转小写（对英文有效，对中文无影响）
-        //                 std::transform(s.begin(), s.end(), s.begin(), [](unsigned char c){ return std::tolower(c); });
-        //                 return s;
-        //             };
-        //             std::string m = normalize(mode_str);
-        //             if (m == "循环播放" || m == "循环" || m == "loop") {
-        //                 music->SetLoopMode(true);
-        //                 if (!music->PlayFromSD(filepath, name)) {
-        //                     return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
-        //                 }
-        //             }
-        //             else if(m=="播放一次" || m=="一次" || m=="once" || m=="single") 
-        //             {
-        //                 if (!music->PlayFromSD(filepath, name)) {
-        //                     return "{\"success\": false, \"message\": \"播放本地音乐失败\"}";
-        //                 }
-        //             }
-        //             return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
-        //         });
         AddTool("playmusic",
                 "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1\n"
                 "参数:\n"
@@ -300,21 +241,19 @@ void McpServer::AddCommonTools() {
                         bool found = false;
                         auto need_title = NormalizeForSearch(song_name);
                         auto need_artist = NormalizeForSearch(singer);
-                        for (size_t i = 0; i < out_count; ++i) {
-                            const char* path = all_music[i].file_path;
-                            if (!path) continue;
-                            auto meta = ParseSongMeta(path);
-                            if (meta.norm_title == need_title && meta.norm_artist == need_artist) {
-                                // 找到匹配的歌曲和歌手
-                                if (!music->PlayFromSD(path, song_name)) {
-                                    return "{\"success\": false, \"message\": \"播放失败\"}";
-                                }
-                                music->SetCurrentPlayList(music->GetDefaultList());
-                                now_playing = singer + " - " + song_name;
-                                found = true;
-                                break;
+                        auto index = music->SearchMusicIndexFromlistByArtSong(need_title,need_artist);
+                        const char* path = all_music[index].file_path;
+                        auto meta = ParseSongMeta(path);
+                        if (meta.norm_title == need_title && meta.norm_artist == need_artist) {
+                            // 找到匹配的歌曲和歌手
+                            if (!music->PlayFromSD(path, song_name)) {
+                                return "{\"success\": false, \"message\": \"播放失败\"}";
                             }
+                            music->SetCurrentPlayList(music->GetDefaultList());
+                            now_playing = singer + " - " + song_name;
+                            found = true;
                         }
+                        
                         if (!found) {
                             return "{\"success\": false, \"message\": \"未找到匹配的歌曲和歌手\"}";
                         }
@@ -364,24 +303,31 @@ void McpServer::AddCommonTools() {
             auto song_name = properties["songname"].value<std::string>();
             ESP_LOGI(TAG, "Search music: singer='%s', songname='%s'", singer.c_str(), song_name.c_str());
             size_t out_count = 0;
-            auto all_music = music->GetMusicLibrary(out_count);                    
+            // size_t max_count = 5;
+            auto all_music = music->GetMusicLibrary(out_count);        
+            // max_count = min(max_count, out_count);            
             std::string result = "{\"success\": true, \"message\": \"我可以播放以下歌曲: \", \"songs\": [";
             if(!singer.empty() && song_name.empty()) {
 
                 ESP_LOGI(TAG, "Search songs by singer: %s", singer.c_str());
                 auto norm_singer = NormalizeForSearch(singer);
                 std::vector<std::pair<std::string,std::string>> hits; // (title, artist)
-                for (size_t i = 0; i < out_count; ++i) {
-                    const char* path = all_music[i].file_path;
-                    if (!path) continue;
-                    auto meta = ParseSongMeta(path);
-                    if (meta.norm_artist.find(norm_singer) != std::string::npos) {
+                auto Searchresult = music->SearchMusicIndexBySingerRand5(norm_singer);
+                for(auto i : Searchresult)
+                    {
+                        // ESP_LOGI(TAG, "Found song index: %d", i);
+                        const char* path = all_music[i].file_path;
+                         if (!path) continue;
+                         auto meta = ParseSongMeta(path);
+                        if (meta.norm_artist.find(norm_singer) != std::string::npos) {
                         hits.emplace_back(meta.title, meta.artist);
+                        }
                     }
-                }
+
                 if (hits.empty()) {
                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
                 }
+                
                 // 构建返回的 JSON 字符串
                 for (size_t i = 0; i < hits.size(); ++i) {
                     result += "{\"title\": \"" + hits[i].first + "\", \"artist\": \"" + hits[i].second + "\"}";
@@ -411,17 +357,15 @@ void McpServer::AddCommonTools() {
                 ESP_LOGI(TAG, "Search song: %s by singer: %s", song_name.c_str(), singer.c_str());
                 auto need_title = NormalizeForSearch(song_name);
                 auto need_artist = NormalizeForSearch(singer);
+                auto index = music->SearchMusicIndexFromlistByArtSong(need_title,need_artist);
                 bool found = false;
-                for (size_t i = 0; i < out_count; ++i) {
-                    const char* path = all_music[i].file_path;
-                    if (!path) continue;
+                if(index >=0 )
+                {
+                    const char* path = all_music[index].file_path;
                     auto meta = ParseSongMeta(path);
-                    if (meta.norm_title == need_title && meta.norm_artist == need_artist) {
-                        // 找到匹配的歌曲和歌手
-                        result += "{\"title\": \"" + meta.title + "\", \"artist\": \"" + meta.artist + "\"}";
-                        found = true;
-                        break;
-                    }
+                    // 找到匹配的歌曲和歌手
+                    result += "{\"title\": \"" + meta.title + "\", \"artist\": \"" + meta.artist + "\"}";
+                    found = true;
                 }
                 if (!found) {
                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲和歌手\"}";

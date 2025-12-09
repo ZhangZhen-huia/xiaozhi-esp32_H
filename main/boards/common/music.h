@@ -57,6 +57,8 @@ public:
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) = 0;
     virtual bool PlayPlaylist(std::string& playlist_name) = 0;
     virtual int SearchMusicIndexFromlist(std::string name) const = 0;
+    virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const =0;
+    virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const =0;
     virtual void SetPlayIndex(std::string& playlist_name, int index) = 0;
     virtual void NextPlayIndexOrder(std::string& playlist_name) = 0;
     virtual void NextPlayIndexRandom(std::string& playlist_name) = 0;

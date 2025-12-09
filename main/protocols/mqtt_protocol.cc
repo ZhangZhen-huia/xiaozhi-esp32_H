@@ -34,7 +34,7 @@ MqttProtocol::MqttProtocol() {
             MqttProtocol* protocol = (MqttProtocol*)arg;
             protocol->disconnect_count++;
             if( protocol->disconnect_count <= 3 ) {
-                esp_timer_start_once( protocol->disconnect_timer_, 2*1000000 );
+                esp_timer_start_once( protocol->disconnect_timer_, 5*1000000 );
             }
             auto &app = Application::GetInstance();
             app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);

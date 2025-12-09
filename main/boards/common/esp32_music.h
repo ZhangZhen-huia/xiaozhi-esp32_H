@@ -75,6 +75,16 @@ public:
     };
 
 private:
+
+    struct MusicView {
+        const char *song_name;   // 指向 ps_music_library_[i].song_name
+        const char *artist_norm; // 指向 ps_music_library_[i].artist_norm
+        uint16_t    idx;         // 原数组下标
+    };
+    MusicView *music_view_ = nullptr;   // PSRAM 分配
+    MusicView *music_view_art_song_ = nullptr; // artist-song 有序
+    MusicView *music_view_singer_ = nullptr; // 仅歌手有序
+
     std::string last_downloaded_data_;
     std::string current_song_name_;
 
@@ -211,6 +221,8 @@ public:
 
     virtual bool PlayPlaylist(std::string& playlist_name) override;
     virtual int SearchMusicIndexFromlist(std::string name) const override;
+    virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const override;
+    virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const override;
     virtual const std::string GetDefaultList() const override { return default_musiclist_; }
     virtual std::string GetCurrentSongName()override;
     virtual void SetPlayIndex(std::string& playlist_name, int index)override;

@@ -21,8 +21,8 @@
 #include <lvgl.h>
 #include <cmath>
 #include "esp32_music.h"
-#include "adc_battery_monitor.h"
 #include "esp32_rc522.h"
+#include "bat_monitor.h"
 
 #define TAG "LichuangDevBoard"
 
@@ -124,7 +124,7 @@ private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_Boot_IO0;
     Button boot_button_IO6;
-    AdcBatteryMonitor* adc_battery_monitor_ = nullptr;
+
     #if my
  Pca9557* pca9557_;
  #else
@@ -192,16 +192,11 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
             
         });
         
-        // boot_button_IO6.OnLongPress([this]() {
-        //     auto& app = Application::GetInstance();
-        //     // ResetWifiConfiguration();
-        //     app.ToggleChatState();
-        // });
 
 
         boot_button_Boot_IO0.OnClick([this](){
-            auto& app = Application::GetInstance();
-            app.ToggleChatState();
+            auto music = Board::GetMusic();
+            music->StopStreaming();            
         });
         //Boot按键
         boot_button_Boot_IO0.OnLongPressStart([this](){
@@ -231,8 +226,8 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
         
         sdmmc_card_t *card;
         const char mount_point[] = MOUNT_POINT;
-        // ESP_LOGI(TAG, "Initializing SD card");
-        // ESP_LOGI(TAG, "Using SDMMC peripheral");
+        ESP_LOGD(TAG, "Initializing SD card");
+        ESP_LOGD(TAG, "Using SDMMC peripheral");
     
         sdmmc_host_t host = SDMMC_HOST_DEFAULT(); // SDMMC主机接口配置
         sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT(); // SDMMC插槽配置
@@ -259,15 +254,44 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
     }
 
     void InitializeBatteryMonitor() {
-        adc_battery_monitor_ = new AdcBatteryMonitor(ADC_UNIT_1, ADC_CHANNEL_6, 680000, 680000, GPIO_NUM_6);
-        adc_battery_monitor_->OnChargingStatusChanged([this](bool is_charging) {
-            if (is_charging) {
-                // sleep_timer_->SetEnabled(false);
-            } else {
-                // sleep_timer_->SetEnabled(true);
-            }
-        });
-    }
+        bat_monitor_config_t config = {
+        .adc_ch = ADC_CHANNEL_6,     // ADC通道6
+        .charge_io = GPIO_NUM_NC,    // 充电检测IO引脚，如不使用配置为-1
+        .v_div_ratio = 1.0f,         // 电压分压比
+        .v_min = 2.0f,               // 电池亏点电压2.0V
+        .v_max = 3.7f,               // 电池满电电压3.7V
+        .low_thresh = 10.0f,         // 低电量阈值10%
+        .report_ms = 1000            // 1秒报告间隔
+        };
+        bat_monitor_handle_t handle = bat_monitor_create(&config);
+        if (!handle) {
+            ESP_LOGE(TAG, "电池监测初始化失败");
+            return;
+        }
+        
+        // 设置事件回调
+        bat_monitor_set_event_cb(handle, 
+                    [](bat_monitor_event_t event, float voltage, void *user_data) {
+                    switch (event) {
+                        case BAT_EVENT_VOLTAGE_REPORT:
+                            ESP_LOGI(TAG, "电池电压: %.2fV", voltage);
+                            break;
+                        case BAT_EVENT_FULL:
+                            ESP_LOGI(TAG, "电池已充满 (%.2fV)", voltage);
+                            break;
+                        case BAT_EVENT_LOW:
+                            ESP_LOGI(TAG, "电池电量低 (%.2fV)", voltage);
+                            break;
+                        case BAT_EVENT_CHARGING_BEGIN:
+                            ESP_LOGI(TAG, "开始充电");
+                            break;
+                        case BAT_EVENT_CHARGING_STOP:
+                            ESP_LOGI(TAG, "停止充电");
+                            break;
+                    }
+                }, NULL);
+        ESP_LOGI(TAG, "电池监测已启动");
+    };
 
 public:
     LichuangDevBoard() : boot_button_Boot_IO0(BOOT_BUTTON_GPIO),
@@ -281,7 +305,10 @@ public:
         InitializeSpi();
         InitializeSdcard();
         InitializeButtons();
+        #if !my
         InitializeBatteryMonitor();
+        #else
+        #endif
         GetBacklight()->RestoreBrightness();
         RC522_Init();
         RC522_Rese( );//复位RC522
@@ -305,15 +332,6 @@ public:
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
     }
-    virtual AdcBatteryMonitor* GetBatteryMonitor() override {
-        return adc_battery_monitor_;
-    }
-    virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging)override{
-        level = adc_battery_monitor_->GetBatteryLevel();
-        charging = adc_battery_monitor_->IsCharging();
-        discharging = adc_battery_monitor_->IsDischarging();
-        return true;
-    };
 };
 
 DECLARE_BOARD(LichuangDevBoard);
