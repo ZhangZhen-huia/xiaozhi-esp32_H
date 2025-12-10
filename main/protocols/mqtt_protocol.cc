@@ -18,6 +18,7 @@ MqttProtocol::MqttProtocol() {
         .callback = [](void* arg) {
             MqttProtocol* protocol = (MqttProtocol*)arg;
             auto& app = Application::GetInstance();
+            app.SetDeviceState(kDeviceStateIdle);
             if (app.GetDeviceState() == kDeviceStateIdle) {
                 ESP_LOGI(TAG, "Reconnecting to MQTT server");
                 app.Schedule([protocol]() {
@@ -98,13 +99,14 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
         auto& app = Application::GetInstance();
         app.PlaySound(Lang::Sounds::OGG_POPUP);
         app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
-        esp_timer_start_once(disconnect_timer_, 2*1000000 );
+        esp_timer_start_once(disconnect_timer_, 5*1000000 );
         
         ESP_LOGI(TAG, "MQTT disconnected, schedule reconnect in %d seconds", MQTT_RECONNECT_INTERVAL_MS / 1000);
         esp_timer_start_once(reconnect_timer_, MQTT_RECONNECT_INTERVAL_MS * 1000);
     });
 
     mqtt_->OnConnected([this]() {
+        esp_timer_stop(disconnect_timer_);
         if (on_connected_ != nullptr) {
             on_connected_();
         }

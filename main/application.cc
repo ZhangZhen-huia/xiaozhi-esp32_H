@@ -64,7 +64,7 @@ Application::Application() {
             Application* app = (Application*)arg;
             xEventGroupSetBits(app->event_group_, MAIN_EVENT_CLOCK_TICK);
         },
-        .arg = this,//这里this就i是Application实例
+        .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
         .name = "clock_timer",
         .skip_unhandled_events = true
@@ -74,6 +74,7 @@ Application::Application() {
     esp_timer_create_args_t clock_Offlinetimer_args = {
         .callback = [](void* arg) {
             Application* app = (Application*)arg;
+            ESP_LOGI(TAG, "Offline tick");
             app->Offline_ticks_++;
         },
         .arg = this,
@@ -486,10 +487,13 @@ void Application::Start() {
         DismissAlert();
         esp_timer_stop(clock_Offlinetimer_handle_);
         Offline_ticks_ = 0;
+        if(this->GetDeviceState() == kDeviceStateWifiConfiguring)
+        this->SetDeviceState(kDeviceStateIdle);
     });
 
     protocol_->OnNetworkError([this](const std::string& message) {
         last_error_message_ = message;
+        ESP_LOGE(TAG, "Network error: %s", message.c_str());
         xEventGroupSetBits(event_group_, MAIN_EVENT_ERROR);
     });
     protocol_->OnIncomingAudio([this](std::unique_ptr<AudioStreamPacket> packet) {
@@ -625,7 +629,10 @@ void Application::Start() {
         music->ScanAndLoadMusic();
         music->ScanAndLoadStory();
     }
-    // audio_service_.SetActiveWakeWord("Hi,lexin");
+    audio_service_.SetActiveWakeWord("你好小智");
+    device_Role = Role_Xiaozhi;
+    std::string msg = "静默调用notice工具";
+    SendMessage(msg);
 }
 
 // Add a async task to MainLoop
@@ -664,7 +671,7 @@ void Application::RFID_TASK()
                     //输出卡ID
                     ESP_LOGI(TAG,"ID: %s", card_id.c_str());
                     auto music = Board::GetInstance().GetMusic();
-                    std::string msg = "调用工具Notice";
+                    std::string msg = "静默调用工具Notice";
                     if(strcmp(card_id.c_str(), CardPlayer_ID) == 0) {
                         device_Role = Player;
                         ESP_LOGI(TAG,"Enter Player Mode\r\n");
@@ -687,7 +694,7 @@ void Application::RFID_TASK()
                         // if(music) {
                         //     music->StopStreaming();
                         // }
-                        // SendMessage(msg);
+                        SendMessage(msg);
                     }
                 }
             
@@ -726,11 +733,7 @@ void Application::MainEventLoop() {
         }
 
         if (bits & MAIN_EVENT_WAKE_WORD_DETECTED) {
-            // SetDeviceState(kDeviceStateListening);
-            // auto music = Board::GetInstance().GetMusic();
-            // if(music) {
-            //     music->StopStreaming();
-            // }
+
             OnWakeWordDetected();
         }
 

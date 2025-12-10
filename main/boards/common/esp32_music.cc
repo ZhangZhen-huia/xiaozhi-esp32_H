@@ -23,6 +23,8 @@
 #include <freertos/FreeRTOS.h>
 #include <freertos/task.h>
 #include "settings.h"
+#include <queue>
+
 #define TAG "Esp32Music"
 
 
@@ -1492,6 +1494,7 @@ int Esp32Music::SearchMusicIndexFromlist(std::string name) const
 
     name = NormalizeForSearch(name);
 
+    //先进行精确匹配
     auto cmp = [](const void *k, const void *e){
         return strcmp((const char*)k,
                       ((const MusicView*)e)->song_name);
@@ -1499,7 +1502,45 @@ int Esp32Music::SearchMusicIndexFromlist(std::string name) const
 
     void *found = bsearch(name.c_str(), music_view_,
                           ps_music_count_, sizeof(MusicView), cmp);
-    return found ? ((MusicView*)found)->idx : -1;
+    //找到了
+    if(found)
+    {
+        ESP_LOGI(TAG, "Found music '%s' at index %d", name.c_str(), ((MusicView*)found)->idx);
+        return ((MusicView*)found)->idx;
+    }
+    // 未找到，进行模糊打分：子串+编辑距离 混合
+    else
+    { 
+        struct Score { size_t idx; int score; };
+        std::vector<Score> vec;
+        vec.reserve(ps_music_count_);
+
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            const auto& m = ps_music_library_[i];
+            int score = 0;
+
+            //子串匹配：歌名 or 歌手 包含 key 直接给高分 
+            if (strstr(m.song_name, name.c_str()))
+                score += 100;
+
+            //编辑距离：≤5 给 80-distance*20 分
+            int d1 = levenshtein_threshold(name.c_str(), m.song_name, 3);
+            if (d1 <= 2) score += 80 - d1 * 20;
+
+            if (score > 0) vec.push_back({i, score});
+        }
+
+        if (vec.empty()) {
+            ESP_LOGW(TAG, "no fuzzy match for: %s", name.c_str());
+            return -1;
+        }
+
+        //取最高分
+        auto best = *std::max_element(vec.begin(), vec.end(),
+                                    [](auto& a, auto& b){ return a.score < b.score; });
+        ESP_LOGI(TAG, "fuzzy best=%s score=%d", ps_music_library_[best.idx].song_name, best.score);
+        return best.idx;
+    }
 }
 
 
@@ -1520,8 +1561,54 @@ int Esp32Music::SearchMusicIndexFromlistByArtSong(std::string songname,std::stri
         return strcmp(key, tmp);
     };
     void *f = bsearch(query, music_view_art_song_, ps_music_count_, sizeof(MusicView), cmp);
-    return f ? ((MusicView*)f)->idx : -1;
+    if(f)
+    {
+        return ((MusicView*)f)->idx;
+    }
+    else
+    {
+    
+        const int DIST_MAX = 5;
+        int best_score = -1;
+        int best_idx   = -1;
+
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            const auto& m = ps_music_library_[i];
+            int score = 0;
+
+            // 歌手部分：原权重
+            if (!artist.empty() && m.artist_norm) {
+                if (strstr(m.artist_norm, artist.c_str())) score += 100;
+                int d = levenshtein_threshold(artist.c_str(), m.artist_norm, DIST_MAX);
+                if (d <= DIST_MAX) score += 80 - d * 20;
+            }
+
+            // 歌曲部分：权重 ×2
+            if (!songname.empty()) {
+                if (strstr(m.song_name, songname.c_str())) score += 200;        // ×2
+                int d = levenshtein_threshold(songname.c_str(), m.song_name, DIST_MAX);
+                if (d <= DIST_MAX) score += (80 - d * 20) * 2;                // ×2
+            }
+
+            if (score > best_score) {
+                best_score = score;
+                best_idx   = static_cast<int>(i);
+            }
+        }
+
+        if (best_idx >= 0)
+            ESP_LOGI(TAG, "best hit: %s - %s  score=%d",
+                    ps_music_library_[best_idx].artist_norm,
+                    ps_music_library_[best_idx].song_name, best_score);
+        return best_idx;
+    }
+
 }
+
+
+
+
+
 
 
 /* 返回 5 个随机索引（不足则全返回）*/
@@ -1543,74 +1630,93 @@ std::vector<int> Esp32Music::SearchMusicIndexBySingerRand5(std::string singer) c
     void *f = bsearch(&key, music_view_singer_, ps_music_count_,
                       sizeof(MusicView), cmp);
         
-    // 歌手不存在
-    if (!f)
+    // 歌手存在
+    if (f)
     {
-        ESP_LOGI(TAG, "Singer '%s' not found in library", singer.c_str());
-        return res;                   
+        size_t left = (MusicView*)f - music_view_singer_;
+        ESP_LOGI(TAG, "Singer '%s' found at index %d, searching range...", singer.c_str(), (int)left);
+        //向左追到头
+        while (left > 0 &&
+            strcmp(music_view_singer_[left - 1].artist_norm, singer.c_str()) == 0)
+            --left;
+
+        ESP_LOGI(TAG, "Singer '%s' range starts at index %d", singer.c_str(), (int)left);
+        //向右统计总数
+        size_t right = left;
+        while (right < ps_music_count_ &&
+            strcmp(music_view_singer_[right].artist_norm, singer.c_str()) == 0)
+            ++right;
+
+        size_t cnt = right - left;
+        if (cnt == 0) 
+        {
+            ESP_LOGI(TAG, "Singer '%s' not found in library :cnt = 0", singer.c_str());
+            return res;
+        }
+        //收集所有 idx
+        std::vector<uint16_t> pool;
+        pool.reserve(cnt);
+        for (size_t i = left; i < right; ++i)
+            {
+                pool.push_back(music_view_singer_[i].idx);
+                ESP_LOGI(TAG, "Found song by singer '%s': index=%d", singer.c_str(), music_view_singer_[i].idx);
+            }
+
+        /* 5. 随机洗牌（Fisher-Yates）*/
+        static bool rand_init = false;
+        if (!rand_init) {
+            srand((unsigned)time(NULL));
+            rand_init = true;
+        }
+        if (cnt <= 5) {
+            res.assign(pool.begin(), pool.end());
+        } else {
+            for (size_t i = cnt - 1; i > 0; --i) {
+                size_t j = rand() % (i + 1);
+                std::swap(pool[i], pool[j]);
+            }
+            res.assign(pool.begin(), pool.begin() + 5);
+        }
+        return res;                 
     }
-    size_t left = (MusicView*)f - music_view_singer_;
-    ESP_LOGI(TAG, "Singer '%s' found at index %d, searching range...", singer.c_str(), (int)left);
-    //向左追到头
-    while (left > 0 &&
-           strcmp(music_view_singer_[left - 1].artist_norm, singer.c_str()) == 0)
-        --left;
-
-    ESP_LOGI(TAG, "Singer '%s' range starts at index %d", singer.c_str(), (int)left);
-    //向右统计总数
-    size_t right = left;
-    while (right < ps_music_count_ &&
-           strcmp(music_view_singer_[right].artist_norm, singer.c_str()) == 0)
-        ++right;
-
-    size_t cnt = right - left;
-    if (cnt == 0) 
+    else
     {
-        ESP_LOGI(TAG, "Singer '%s' not found in library :cnt = 0", singer.c_str());
+        /* 小顶堆：堆顶是当前 5 个里分数最小的，方便替换 */
+        using Item = std::pair<int, int>;   // <score, lib_index>
+        auto cmp = [](const Item& a, const Item& b) { return a.first > b.first; };
+        std::priority_queue<Item, std::vector<Item>, decltype(cmp)> pq(cmp);
+
+        /* 遍历歌手视图打分 */
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            const auto& mv = music_view_singer_[i];   // 已按 artist_norm 排序，但不影响打分
+            const char* artist = mv.artist_norm;
+            if (!artist) continue;
+
+            int score = 0;
+            /* 子串匹配 */
+            if (strstr(artist, singer.c_str())) score += 100;
+            /* 编辑距离 */
+            int d = levenshtein_threshold(singer.c_str(), artist, 4);
+            if (d <= 2) score += 80 - d * 20;
+
+            if (score == 0) continue;
+
+            int lib_idx = static_cast<int>(mv.idx);
+            pq.emplace(score, lib_idx);
+            if (pq.size() > 5) pq.pop();   // 只留 top 5
+        }
+
+        /* 取出堆中结果，分数降序 */
+        res.reserve(pq.size());
+        while (!pq.empty()) {
+            res.push_back(pq.top().second);
+            pq.pop();
+        }
+        std::reverse(res.begin(), res.end());
         return res;
     }
-    //收集所有 idx
-    std::vector<uint16_t> pool;
-    pool.reserve(cnt);
-    for (size_t i = left; i < right; ++i)
-        {
-            pool.push_back(music_view_singer_[i].idx);
-            ESP_LOGI(TAG, "Found song by singer '%s': index=%d", singer.c_str(), music_view_singer_[i].idx);
-        }
-
-    /* 5. 随机洗牌（Fisher-Yates）*/
-    static bool rand_init = false;
-    if (!rand_init) {
-        srand((unsigned)time(NULL));
-        rand_init = true;
-    }
-    if (cnt <= 5) {
-        res.assign(pool.begin(), pool.end());
-    } else {
-        for (size_t i = cnt - 1; i > 0; --i) {
-            size_t j = rand() % (i + 1);
-            std::swap(pool[i], pool[j]);
-        }
-        res.assign(pool.begin(), pool.begin() + 5);
-    }
-    return res;
 }
 
-std::vector<std::string> Esp32Music::SearchSinger(std::string singer) const {
-    // 规范化输入
-    std::string target = NormalizeForSearch(singer);
-    std::vector<std::string> results;
-    for (size_t i = 0; i < ps_music_count_; ++i) {
-        MusicFileInfo info = GetMusicInfo(ps_music_library_[i].file_path);
-        if (info.file_path.empty()) continue;
-
-        std::string artist_key = info.artist_norm;
-        if (artist_key == target) {
-            results.push_back(info.song_name);
-        }
-    }
-    return results;
-}
 
 
 
@@ -1737,7 +1843,6 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     // 使用已有逻辑开始播放（原来的 PlayFromSD 会调用 StartSDCardStreaming）
     return PlayFromSD(file_path, song_name);
 }
-
 
 
 //----------------------------------------------故事----------------------------------------------------

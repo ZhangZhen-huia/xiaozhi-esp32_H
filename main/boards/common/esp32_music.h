@@ -13,12 +13,16 @@
 #include "lvgl.h"
 #include "music.h"
 #include <esp_lvgl_port.h>
+#include "cstring"
+
+
 // MP3解码器支持
 extern "C" {
 #include "mp3dec.h"
 }
 
-
+#define MIN3(a, b, c)  ((a) < (b) ? ((a) < (c) ? (a) : (c)) \
+                                    : ((b) < (c) ? (b) : (c)))
 
 #define STORY 1
 #define MUSIC 0
@@ -75,6 +79,37 @@ public:
     };
 
 private:
+
+    // 返回 str1 与 str2 的编辑距离；max 为提前剪枝阈值
+    int levenshtein_threshold(const char *str1, const char *str2, int max)const
+    {
+        int len1 = strlen(str1);
+        int len2 = strlen(str2);
+        if (len1 < len2) { const char *t=str1; str1=str2; str2=t; int l=len1; len1=len2; len2=l; }
+        if (len1 - len2 > max) return max + 1;
+
+        static uint16_t col[128];          // 仅保留前一列，最大歌名长度 128
+        for (int i = 0; i <= len2; ++i) col[i] = i;
+
+        for (int x = 1; x <= len1; ++x) {
+            col[0] = x;
+            int lastDiag = x - 1;
+            int minCol = x;
+            for (int y = 1; y <= len2; ++y) {
+                int oldDiag = col[y];
+                col[y] = MIN3(
+                    col[y] + 1,                 // del
+                    col[y-1] + 1,               // ins
+                    lastDiag + (str1[x-1]!=str2[y-1]) // sub
+                );
+                lastDiag = oldDiag;
+                if (col[y] < minCol) minCol = col[y];
+            }
+            if (minCol > max) return max + 1;   // 提前剪枝
+        }
+        return col[len2];
+    }
+
 
     struct MusicView {
         const char *song_name;   // 指向 ps_music_library_[i].song_name
@@ -218,7 +253,6 @@ public:
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
     virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const override;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) override;
-
     virtual bool PlayPlaylist(std::string& playlist_name) override;
     virtual int SearchMusicIndexFromlist(std::string name) const override;
     virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const override;
@@ -237,7 +271,6 @@ public:
     virtual bool ResumeSavedPlayback()override;
     virtual std::string SearchMusicFromlistByIndex(std::string list) const override;
     virtual bool IfSavedMusicPosition() override{ return has_saved_MusicPosition_; };
-    virtual std::vector<std::string> SearchSinger(std::string singer) const override;
 
 
     // 故事播放相关接口

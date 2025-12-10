@@ -66,14 +66,12 @@ public:
     virtual PlaybackMode GetPlaybackMode()  = 0;
     virtual void SetCurrentPlayList(const std::string& playlist_name) = 0;
     virtual const std::string GetDefaultList() const =0;
-
     virtual std::string SearchMusicFromlistByIndex(std::string list) const =0;
     virtual void ScanAndLoadMusic() = 0;
     virtual void LoadPlaybackPosition() = 0;
     virtual void SavePlaybackPosition() = 0;
     virtual bool ResumeSavedPlayback() = 0;
     virtual bool IfSavedMusicPosition()  = 0;
-    virtual std::vector<std::string> SearchSinger(std::string singer) const =0;
     virtual std::string GetCurrentSongName() = 0;
 
 

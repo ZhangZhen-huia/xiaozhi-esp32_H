@@ -80,7 +80,7 @@ void McpServer::AddCommonTools() {
     }
     auto music = board.GetMusic();
     if (music) {
-        AddTool("playmusic",
+        AddTool("music.play",
                 "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1\n"
                 "参数:\n"
                 "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
@@ -262,7 +262,7 @@ void McpServer::AddCommonTools() {
                 });
 
         AddTool("actually.2",
-        "调用完 playmusic后，如果函数返回内容里出现{\"call_tool\":\"actually.2\"}，请立即再调用 actually.2，参数留空。",
+        "调用完 music.play后，如果函数返回内容里出现{\"call_tool\":\"actually.2\"}，请立即再调用 actually.2，参数留空。",
         PropertyList(),
         [music](const PropertyList& properties) -> ReturnValue {
             auto &app = Application::GetInstance();
@@ -277,7 +277,7 @@ void McpServer::AddCommonTools() {
         });
 
         AddTool("actually.1",
-        "调用完 playmusic 或 next 后，如果函数返回内容里出现{\"call_tool\":\"actually.1\"}，请立即再调用 actually.1，参数留空。",
+        "调用完 music.play或 next 后，如果函数返回内容里出现{\"call_tool\":\"actually.1\"}，请立即再调用 actually.1，参数留空。",
         PropertyList(),
         [music](const PropertyList& properties) -> ReturnValue {
             auto &app = Application::GetInstance();
@@ -315,25 +315,24 @@ void McpServer::AddCommonTools() {
                 auto Searchresult = music->SearchMusicIndexBySingerRand5(norm_singer);
                 for(auto i : Searchresult)
                     {
-                        // ESP_LOGI(TAG, "Found song index: %d", i);
                         const char* path = all_music[i].file_path;
                          if (!path) continue;
                          auto meta = ParseSongMeta(path);
                         if (meta.norm_artist.find(norm_singer) != std::string::npos) {
                         hits.emplace_back(meta.title, meta.artist);
+                        ESP_LOGI(TAG, "Found song: %s by %s", meta.title.c_str(), meta.artist.c_str());
                         }
                     }
 
                 if (hits.empty()) {
                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
                 }
-                
                 // 构建返回的 JSON 字符串
                 for (size_t i = 0; i < hits.size(); ++i) {
                     result += "{\"title\": \"" + hits[i].first + "\", \"artist\": \"" + hits[i].second + "\"}";
                     if (i != hits.size() - 1) result += ", ";
                 }
-                result += "],需要我播放哪一首吗?\"}";
+                result += "],需要我播放哪一首吗?,歌手: \"" + hits[0].second + "\"}";
             }
             else if(singer.empty() && !song_name.empty())
             {
@@ -709,6 +708,13 @@ void McpServer::AddCommonTools() {
                 });
                 }
 
+            // AddTool("hello",
+            // "无",
+            // PropertyList(),
+            // [](const PropertyList& properties) -> ReturnValue {
+
+            //     return "{\"success\": true, \"message\": \"你好！有什么我可以帮你的吗？\"}";
+            // });
             AddTool("Notice",
                 "无",
                 PropertyList(),
@@ -721,11 +727,11 @@ void McpServer::AddCommonTools() {
                     }
                     else if(app.device_Role == Role_Xiaozhi)
                     {
-                        return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的名字叫做小智，可以与用户进行深入的对话和互动\"}";
+                        return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的角色叫做小智，可以与用户进行深入的对话和互动，现在主动向用户进行问候吧\"}";
                     }
                     else if(app.device_Role == Role_ESP)
                     {
-                        return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的名字叫做ESP，可以与用户进行深入的对话和互动\"}";
+                        return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的角色叫做ESP，可以与用户进行深入的对话和互动，现在主动向用户进行问候吧\"}";
                     }
                     return "{\"success\": true, \"message\": \"系统提示：未知的设备角色\"}";
                 });
