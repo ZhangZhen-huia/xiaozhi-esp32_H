@@ -629,6 +629,31 @@ void Application::Start() {
         music->ScanAndLoadMusic();
         music->ScanAndLoadStory();
     }
+    esp_reset_reason_t reason = esp_reset_reason();
+
+    switch (reason) {
+    case ESP_RST_POWERON:
+    ESP_LOGW(TAG,"复位原因: 上电复位\n");
+    break;
+    case ESP_RST_SW:
+    ESP_LOGW(TAG,"复位原因: 软件复位\n");
+    break;
+    case ESP_RST_PANIC:
+    ESP_LOGW(TAG,"复位原因: 异常或崩溃复位\n");
+    break;
+    case ESP_RST_INT_WDT:
+    ESP_LOGW(TAG,"复位原因: 中断看门狗复位\n");
+    break;
+    case ESP_RST_TASK_WDT:
+    ESP_LOGW(TAG,"复位原因: 任务看门狗复位\n");
+    break;
+    case ESP_RST_DEEPSLEEP:
+    ESP_LOGW(TAG,"复位原因: 深度睡眠唤醒\n");
+    break;
+    default:
+    ESP_LOGW(TAG,"复位原因: 未知或其他类型\n");
+    }
+    
     audio_service_.SetActiveWakeWord("你好小智");
     device_Role = Role_Xiaozhi;
     std::string msg = "静默调用notice工具";

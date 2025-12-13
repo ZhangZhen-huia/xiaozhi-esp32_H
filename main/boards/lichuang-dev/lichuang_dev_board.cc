@@ -261,7 +261,7 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
         .v_min = 2.0f,               // 电池亏点电压2.0V
         .v_max = 3.7f,               // 电池满电电压3.7V
         .low_thresh = 10.0f,         // 低电量阈值10%
-        .report_ms = 1000            // 1秒报告间隔
+        .report_ms = 5000            // 5秒报告间隔
         };
         bat_monitor_handle_t handle = bat_monitor_create(&config);
         if (!handle) {

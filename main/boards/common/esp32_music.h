@@ -14,7 +14,7 @@
 #include "music.h"
 #include <esp_lvgl_port.h>
 #include "cstring"
-
+#include "esp_log.h"
 
 // MP3解码器支持
 extern "C" {
@@ -34,6 +34,14 @@ struct AudioChunk {
     
     AudioChunk() : data(nullptr), size(0) {}
     AudioChunk(uint8_t* d, size_t s) : data(d), size(s) {}
+};
+
+struct Music_Record_Info {
+    int index;
+    std::string song_name;
+    std::string artist;
+    Music_Record_Info *next;
+    Music_Record_Info *last;
 };
 
 // 播放列表结构
@@ -119,6 +127,9 @@ private:
     MusicView *music_view_ = nullptr;   // PSRAM 分配
     MusicView *music_view_art_song_ = nullptr; // artist-song 有序
     MusicView *music_view_singer_ = nullptr; // 仅歌手有序
+    
+    //音乐记录链表
+    Music_Record_Info *music_record_ = nullptr;
 
     std::string last_downloaded_data_;
     std::string current_song_name_;
@@ -158,7 +169,6 @@ private:
     // ID3标签处理
     size_t SkipId3Tag(uint8_t* data, size_t size);
 
-    int16_t* final_pcm_data_fft = nullptr;
 
     PSMusicInfo *ps_music_library_ = nullptr; // 分配在 PSRAM（heap_caps_malloc）的音乐库数组
     int play_index_ = 0;
@@ -184,8 +194,9 @@ private:
     bool ps_add_story_locked(const StoryEntry &e);
     void free_ps_music_library_locked();
     void free_ps_story_index_locked();
+
     
-    
+
     char* ps_strdup(const std::string &s);
     void ps_free_str(char *p);
 
@@ -220,11 +231,12 @@ private:
     size_t saved_file_offset_ = 0;
     std::string saved_file_path_;
     bool has_saved_MusicPosition_ = false;
-
+    bool SaveMusicRecord_ = true;
 
 public:
     Esp32Music();
     ~Esp32Music();
+    Music_Record_Info* NowNode = nullptr;
 
     virtual void SetMusicOrStory_(int val) override{
         MusicOrStory_ = val;
@@ -259,9 +271,10 @@ public:
     virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const override;
     virtual const std::string GetDefaultList() const override { return default_musiclist_; }
     virtual std::string GetCurrentSongName()override;
-    virtual void SetPlayIndex(std::string& playlist_name, int index)override;
+    virtual void SetPlayIndex(const std::string& playlist_name, int index)override;
     virtual void NextPlayIndexOrder(std::string& playlist_name)override;
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
+
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;
     virtual void SetCurrentPlayList(const std::string& playlist_name)override;
@@ -271,8 +284,41 @@ public:
     virtual bool ResumeSavedPlayback()override;
     virtual std::string SearchMusicFromlistByIndex(std::string list) const override;
     virtual bool IfSavedMusicPosition() override{ return has_saved_MusicPosition_; };
+    virtual void UpdateMusicRecordList(const std::string& artist, const std::string& song_name)override;
+    virtual void EnableRecord(bool x) override{SaveMusicRecord_ = x;};
+    virtual bool GetIfRecordEnabled() const override { return SaveMusicRecord_; };
+    virtual bool IfNodeIsEnd() const override {
+        return (NowNode->next == nullptr);
+    }
+    virtual int NextNodeIndex() override {
+        if(NowNode == nullptr)
+            return -1; 
+        if (NowNode->next)
+        {
+            NowNode = NowNode->next;
+            ESP_LOGI("Esp32Music", "Next node index: %d", NowNode->index);
+            return NowNode->index;
+        } 
+        else
+            return -1; // No next node
+    }
 
-
+    virtual int LastNodeIndex() override {
+        if(NowNode == nullptr)
+            return -1;
+        if (NowNode->last)
+        {
+            NowNode = NowNode->last;
+            ESP_LOGI("Esp32Music", "Last node index: %d", NowNode->index);
+            return NowNode->index;
+        } 
+        else
+        {
+            ESP_LOGI("Esp32Music", "No last node, Replay Current.");
+            ESP_LOGI("Esp32Music", "Last node index: %d", NowNode->index);
+            return NowNode->index;
+        }
+    }
     // 故事播放相关接口
     virtual bool ScanStoryLibrary(const std::string& story_folder) override;
     virtual bool IfSavedStoryPosition() override { return has_saved_story_position_; };
@@ -298,6 +344,8 @@ public:
     virtual void ScanAndLoadStory()override;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) override;
     virtual bool NextStoryInCategory(const std::string& category) override;
+
+
 };
 
 

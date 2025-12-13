@@ -234,9 +234,6 @@ void Esp32Music::PlayAudioStream() {
     last_frame_time_ms_ = 0;
     total_frames_decoded_ = 0;
     
-    //     // 新增：周期性保存播放位置
-    // auto last_pos_save_time = std::chrono::steady_clock::now();
-    // const int kSaveIntervalMs = 10000 ; // 每10秒保存一次（可按需调整）
 
     auto codec = Board::GetInstance().GetAudioCodec();
     if (!codec || !codec->output_enabled()) {
@@ -244,6 +241,8 @@ void Esp32Music::PlayAudioStream() {
             ESP_LOGE(TAG, "Audio codec instance is null");
         } else{
             ESP_LOGE(TAG, "Audio codec output not enabled");
+            codec->EnableOutput(true);
+            ESP_LOGI(TAG, "Current codec output enabled state: %d", codec->output_enabled());
         }
         is_playing_ = false;
         return;
@@ -424,33 +423,17 @@ void Esp32Music::PlayAudioStream() {
                 continue;
             }
             
-            // 计算当前帧的持续时间(毫秒)
-            int frame_duration_ms = (mp3_frame_info_.outputSamps * 1000) / 
-                                  (mp3_frame_info_.samprate * mp3_frame_info_.nChans);
+            // 修复：正确的帧时长计算
+            // outputSamps是总样本数（声道数 × 每声道样本数）
+            int samples_per_channel = mp3_frame_info_.outputSamps / mp3_frame_info_.nChans;
+            int frame_duration_ms = (samples_per_channel * 1000) / mp3_frame_info_.samprate;
             
             // 更新当前播放时间
             current_play_time_ms_ += frame_duration_ms;
-            
-            // // 新增：周期性保存播放位置，避免过于频繁写 NVS
-            // {
-            //     auto now = std::chrono::steady_clock::now();
-            //     auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(now - last_pos_save_time).count();
-            //     if (elapsed >= kSaveIntervalMs) {
-            //         // 异步/快速的保存函数已实现为线程安全且尽量合并写操作
-            //         if (MusicOrStory_ == MUSIC) {
-            //             SavePlaybackPosition();
-            //         } else {
-            //             SaveStoryPlaybackPosition();
-            //         }
-            //         last_pos_save_time = now;
-            //     }
-            // }
 
             ESP_LOGD(TAG, "Frame %d: time=%lldms, duration=%dms, rate=%d, ch=%d", 
                     total_frames_decoded_, current_play_time_ms_, frame_duration_ms,
                     mp3_frame_info_.samprate, mp3_frame_info_.nChans);
-            
-
             
             // 将PCM数据发送到Application的音频解码队列
             if (mp3_frame_info_.outputSamps > 0) {
@@ -470,7 +453,10 @@ void Esp32Music::PlayAudioStream() {
                         // 混合左右声道 (L + R) / 2
                         int left = pcm_buffer[i * 2];      // 左声道
                         int right = pcm_buffer[i * 2 + 1]; // 右声道
-                        mono_buffer[i] = (int16_t)((left + right) / 2);
+                        // 使用int32_t避免溢出
+                        int32_t mixed = static_cast<int32_t>(left) + static_cast<int32_t>(right);
+                        mixed /= 2;
+                        mono_buffer[i] = static_cast<int16_t>(mixed);
                     }
                     
                     final_pcm_data = mono_buffer.data();
@@ -484,31 +470,19 @@ void Esp32Music::PlayAudioStream() {
                 } else {
                     ESP_LOGW(TAG, "Unsupported channel count: %d, treating as mono", 
                             mp3_frame_info_.nChans);
+                    // 对于不支持的声道数，可以按单声道处理或跳过
                 }
                 
                 // 创建AudioStreamPacket
                 AudioStreamPacket packet;
                 packet.sample_rate = mp3_frame_info_.samprate;
-                packet.frame_duration = 60;  // 使用Application默认的帧时长
-                packet.timestamp = 0;
+                packet.frame_duration = frame_duration_ms;  // 使用实际计算的帧时长
+                packet.timestamp = current_play_time_ms_;   // 使用累计时间作为时间戳
                 
                 // 将int16_t PCM数据转换为uint8_t字节数组
                 size_t pcm_size_bytes = final_sample_count * sizeof(int16_t);
                 packet.payload.resize(pcm_size_bytes);
                 memcpy(packet.payload.data(), final_pcm_data, pcm_size_bytes);
-
-                if (final_pcm_data_fft == nullptr) {
-                    final_pcm_data_fft = (int16_t*)heap_caps_malloc(
-                        final_sample_count * sizeof(int16_t),
-                        MALLOC_CAP_SPIRAM
-                    );
-                }
-                
-                memcpy(
-                    final_pcm_data_fft,
-                    final_pcm_data,
-                    final_sample_count * sizeof(int16_t)
-                );
                 
                 ESP_LOGD(TAG, "Sending %d PCM samples (%d bytes, rate=%d, channels=%d->1) to Application", 
                         final_sample_count, pcm_size_bytes, mp3_frame_info_.samprate, mp3_frame_info_.nChans);
@@ -517,21 +491,73 @@ void Esp32Music::PlayAudioStream() {
                 app.AddAudioData(std::move(packet));
                 total_played += pcm_size_bytes;
                 
-                // 打印播放进度
-                if (total_played % (128 * 1024) == 0) {
+                // 改进的进度打印：避免整数溢出问题
+                static int last_reported = 0;
+                if (total_played - last_reported >= (128 * 1024)) {
                     ESP_LOGI(TAG, "Played %d bytes, buffer size: %d", total_played, buffer_size_);
+                    last_reported = total_played;
                 }
             }
             
         } else {
-            // 解码失败
-            ESP_LOGW(TAG, "MP3 decode failed with error: %d", decode_result);
-            
-            // 跳过一些字节继续尝试
-            if (bytes_left > 1) {
-                read_ptr++;
-                bytes_left--;
+            /* 解码失败：打印原因并找下一个同步字 */
+            switch (decode_result) {
+            case ERR_MP3_INDATA_UNDERFLOW:        
+                ESP_LOGW(TAG, "MP3Decode: -1 (输入数据不足)");
+                break;
+            case ERR_MP3_MAINDATA_UNDERFLOW:     
+                ESP_LOGW(TAG, "MP3Decode: -2 (主数据不足)");
+                break;
+            case ERR_MP3_FREE_BITRATE_SYNC:       
+                ESP_LOGW(TAG, "MP3Decode: -3 (自由码率同步失败)");
+                break;
+            case ERR_MP3_OUT_OF_MEMORY:           
+                ESP_LOGE(TAG, "MP3Decode: -4 (内存不足)");
+                break;
+            case ERR_MP3_NULL_POINTER:          
+                ESP_LOGE(TAG, "MP3Decode: -5 (空指针)");
+                break;
+            case ERR_MP3_INVALID_FRAMEHEADER:    
+                ESP_LOGW(TAG, "MP3Decode: -6 (帧头非法)");
+                break;
+            case ERR_MP3_INVALID_SIDEINFO:        
+                ESP_LOGW(TAG, "MP3Decode: -7 (边信息非法)");
+                break;
+            case ERR_MP3_INVALID_SCALEFACT:      
+                ESP_LOGW(TAG, "MP3Decode: -8 (比例因子非法)");
+                break;
+            case ERR_MP3_INVALID_HUFFCODES:     
+                ESP_LOGW(TAG, "MP3Decode: -9 (Huffman 码表非法)");
+                break;
+            case ERR_MP3_INVALID_DEQUANTIZE:     
+                ESP_LOGW(TAG, "MP3Decode: -10 (反量化错误)");
+                break;
+            case ERR_MP3_INVALID_IMDCT:          
+                ESP_LOGW(TAG, "MP3Decode: -11 (IMDCT 错误)");
+                break;
+            case ERR_MP3_INVALID_SUBBAND:        
+                ESP_LOGW(TAG, "MP3Decode: -12 (子带合成错误)");
+                break;
+            case ERR_UNKNOWN:                     
+            default:
+                ESP_LOGE(TAG, "MP3Decode: %d (未知错误)", decode_result);
+            }
+
+            // 正常情况：寻找下一个同步字
+            int sync_offset = MP3FindSyncWord(read_ptr, bytes_left);
+            if (sync_offset > 0) {
+                read_ptr += sync_offset;
+                bytes_left -= sync_offset;
+                ESP_LOGW(TAG, "Skip to next sync: offset=%d, left=%d", sync_offset, bytes_left);
+            } else if (sync_offset == 0) {
+                // 找到了同步字但在当前位置，可能是假同步
+                // 跳过至少1字节避免死循环
+                read_ptr += 1;
+                bytes_left -= 1;
+                ESP_LOGW(TAG, "False sync at current position, skipping 1 byte");
             } else {
+                // 没有找到同步字
+                ESP_LOGW(TAG, "No sync word found in %d remaining bytes", bytes_left);
                 bytes_left = 0;
             }
         }
@@ -810,6 +836,21 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
             if (pos != std::string::npos)
                 current_song_name_ = current_song_name_.substr(0, pos);
         }
+        auto pos = current_song_name_.find_first_of('-');
+        if(SaveMusicRecord_ == true)
+        {
+            ESP_LOGI(TAG, "Updating music record list for song: %s", current_song_name_.c_str());
+            if(pos != std::string::npos)
+            {
+                UpdateMusicRecordList(current_song_name_.substr(0, pos),current_song_name_.substr(pos + 1));
+            }
+            else
+                UpdateMusicRecordList("",current_song_name_);
+
+            SaveMusicRecord_ = false;
+        }
+
+
     }
     else
     {
@@ -1396,16 +1437,18 @@ bool Esp32Music::CreatePlaylist(const std::string& playlist_name, const std::vec
 }
 
 
-void Esp32Music::SetPlayIndex(std::string& playlist_name, int index) {
+void Esp32Music::SetPlayIndex(const std::string& playlist_name, int index) {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
     if(playlist_name == default_musiclist_)
     {
+        last_play_index_ = play_index_;
         play_index_ = index;
         if(play_index_ >= ps_music_count_)
             play_index_ = ps_music_count_;
     }
     else
     {
+        playlist_.last_play_index = playlist_.play_index;
         playlist_.play_index = index;
         if(playlist_.play_index >= playlist_.file_paths.size())
             playlist_.play_index = playlist_.file_paths.size();
@@ -1466,6 +1509,7 @@ void Esp32Music::NextPlayIndexRandom(std::string& playlist_name) {
     }
     ESP_LOGI(TAG, "Random next play index: %d", index);
 }
+
 
 
 void Esp32Music::SetCurrentPlayList(const std::string& playlist_name) {
@@ -1547,7 +1591,11 @@ int Esp32Music::SearchMusicIndexFromlist(std::string name) const
 
 int Esp32Music::SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const
 {
-    if (!music_view_art_song_) return -1;
+    if (!music_view_art_song_) 
+    {
+        ESP_LOGI(TAG, "music_view_art_song_ is null");
+        return -1;
+    }
     songname = NormalizeForSearch(songname);
     artist   = NormalizeForSearch(artist);
     char query[256];
@@ -1563,6 +1611,7 @@ int Esp32Music::SearchMusicIndexFromlistByArtSong(std::string songname,std::stri
     void *f = bsearch(query, music_view_art_song_, ps_music_count_, sizeof(MusicView), cmp);
     if(f)
     {
+        ESP_LOGI(TAG, "Found music '%s - %s' at index %d", artist.c_str(), songname.c_str(), ((MusicView*)f)->idx);
         return ((MusicView*)f)->idx;
     }
     else
@@ -1764,8 +1813,15 @@ void Esp32Music::SavePlaybackPosition() {
     if (pos != std::string::npos)
         current_song_name_ = current_song_name_.substr(0, pos);
 
-    // 先读取需要保存的状态
-    saved_play_index_ = SearchMusicIndexFromlist(current_song_name_);
+    pos = current_song_name_.find_last_of("-");
+    if(pos != std::string::npos)
+    {
+        saved_play_index_ = SearchMusicIndexFromlistByArtSong(current_song_name_.substr(pos+1),current_song_name_.substr(0,pos));
+    }
+    else
+    {
+        saved_play_index_ = SearchMusicIndexFromlist(current_song_name_);
+    }
 
     // 读取 current_play_file_offset_
     size_t file_offset = 0;
@@ -1844,6 +1900,67 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     return PlayFromSD(file_path, song_name);
 }
 
+void Esp32Music::UpdateMusicRecordList(const std::string& artist, const std::string& song_name)
+{
+    const size_t kMaxRecent = 5;  // 最多保存最近 5 首
+    // std::lock_guard<std::mutex> lock(music_library_mutex_);
+
+    // 直接使用当前 play_index_ 作为索引（如果非默认歌单则尝试解析）
+    int idx = play_index_;
+    if (current_playlist_name_ != default_musiclist_) {
+        ESP_LOGW(TAG, "UpdateMusicRecordList: current playlist is not default, try resolve index");
+        if (artist.empty()) {
+            idx = SearchMusicIndexFromlistByArtSong(song_name, artist);
+        } else {
+            idx = SearchMusicIndexFromlist(song_name);
+        }
+    }
+
+    // 创建新节点（尾插入）
+    Music_Record_Info* node = new Music_Record_Info();
+    node->index = idx;
+    node->song_name = song_name;
+    node->artist = artist;
+    node->next = nullptr;
+    node->last = nullptr;
+
+    if (!music_record_) {
+        // 空表，直接成为头（也是尾）
+        music_record_ = node;
+    } else {
+        // 找到尾部并追加
+        Music_Record_Info* tail = music_record_;
+        while (tail->next) tail = tail->next;
+        tail->next = node;
+        node->last = tail;
+    }
+
+    // NowNode 指向最新插入的节点
+    NowNode = node;
+
+    // 限长：若超过 kMaxRecent，删除最早（表头）节点直到长度 <= kMaxRecent
+    size_t count = 0;
+    Music_Record_Info* cur = music_record_;
+    while (cur) { ++count; cur = cur->next; }
+
+    while (count > kMaxRecent) {
+        // 删除头节点
+        Music_Record_Info* old_head = music_record_;
+        music_record_ = old_head->next;
+        if (music_record_) music_record_->last = nullptr;
+        // 如果 NowNode 指向被删除节点（极少发生），重新指向新尾
+        if (NowNode == old_head) {
+            Music_Record_Info* new_tail = music_record_;
+            while (new_tail && new_tail->next) new_tail = new_tail->next;
+            NowNode = new_tail;
+        }
+        delete old_head;
+        --count;
+    }
+
+    ESP_LOGI(TAG, "UpdateMusicRecordList: appended idx=%d title='%s' artist='%s' recent_count=%u",
+             idx, song_name.c_str(), artist.c_str(), (unsigned)count);
+}
 
 //----------------------------------------------故事----------------------------------------------------
 
@@ -2245,6 +2362,7 @@ bool Esp32Music::ResumeSavedStoryPlayback() {
     }
 }
 
+
 bool Esp32Music::NextChapterInStory(const std::string& category, const std::string& story_name) {
     // 查找 story 在 PSRAM 索引中的位置
     std::string ncat = NormalizeForSearch_local(category);
@@ -2407,3 +2525,4 @@ bool Esp32Music::NextStoryInCategory(const std::string& category) {
     current_chapter_index_ = index;
     ESP_LOGI(TAG,"Current Index:%d",current_chapter_index_+1);
 }
+

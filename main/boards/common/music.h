@@ -59,7 +59,7 @@ public:
     virtual int SearchMusicIndexFromlist(std::string name) const = 0;
     virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const =0;
     virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const =0;
-    virtual void SetPlayIndex(std::string& playlist_name, int index) = 0;
+    virtual void SetPlayIndex(const std::string& playlist_name, int index) = 0;
     virtual void NextPlayIndexOrder(std::string& playlist_name) = 0;
     virtual void NextPlayIndexRandom(std::string& playlist_name) = 0;
     virtual std::string GetCurrentPlayList(void) = 0;
@@ -73,9 +73,12 @@ public:
     virtual bool ResumeSavedPlayback() = 0;
     virtual bool IfSavedMusicPosition()  = 0;
     virtual std::string GetCurrentSongName() = 0;
-
-
-
+    virtual void UpdateMusicRecordList(const std::string& artist, const std::string& song_name) = 0;
+    virtual void EnableRecord(bool x)=0;
+    virtual bool GetIfRecordEnabled() const =0;
+    virtual bool IfNodeIsEnd() const =0;
+    virtual int NextNodeIndex() =0;
+    virtual int LastNodeIndex() =0;
     virtual bool ScanStoryLibrary(const std::string& story_folder) = 0;
     virtual std::vector<std::string> GetStoryCategories() const = 0;
     virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const = 0;
@@ -93,6 +96,7 @@ public:
     virtual void ScanAndLoadStory()=0;
     virtual int GetMusicOrStory_() const=0;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) = 0;
+
     virtual void SetCurrentCategoryName(const std::string& category) = 0;
     virtual void SetCurrentStoryName(const std::string& story) =0;
     virtual void SetCurrentChapterIndex(int index) = 0;
