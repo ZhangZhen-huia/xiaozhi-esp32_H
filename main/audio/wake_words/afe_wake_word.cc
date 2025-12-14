@@ -40,6 +40,7 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     codec_ = codec;
     int ref_num = codec_->input_reference() ? 1 : 0;
 
+    // 如果没有提供模型列表，则初始化默认模型
     if (models_list == nullptr) {
         models_ = esp_srmodel_init("model");
     } else {
@@ -50,18 +51,50 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
         ESP_LOGE(TAG, "Failed to initialize wakenet model");
         return false;
     }
+
+    // 创建一个新的模型列表，只包含符合条件的模型
+    srmodel_list_t filtered_models = {0};
+    filtered_models.model_name = nullptr;
+    filtered_models.model_info = nullptr;
+    filtered_models.model_data = nullptr;
+
     for (int i = 0; i < models_->num; i++) {
         ESP_LOGI(TAG, "Model %d: %s", i, models_->model_name[i]);
         if (strstr(models_->model_name[i], ESP_WN_PREFIX) != NULL) {
-            wakenet_model_ = models_->model_name[i];
-            auto words = esp_srmodel_get_wake_words(models_, wakenet_model_);
-            // split by ";" to get all wake words
-            std::stringstream ss(words);
-            std::string word;
-            while (std::getline(ss, word, ';')) {
-                wake_words_.push_back(word);
+            // 获取唤醒词
+            char* words = esp_srmodel_get_wake_words(models_, models_->model_name[i]);
+
+            // 检查是否包含特定唤醒词 "你好小智"
+            if (strstr(words, "你好小智") != NULL || strstr(words, "小明同学") != NULL) {
+                // 如果包含 "你好小智"，则添加到新模型列表中
+                filtered_models.model_name = (char**)realloc(filtered_models.model_name, (filtered_models.num + 1) * sizeof(char*));
+                filtered_models.model_info = (char**)realloc(filtered_models.model_info, (filtered_models.num + 1) * sizeof(char*));
+                filtered_models.model_data = (srmodel_data_t**)realloc(filtered_models.model_data, (filtered_models.num + 1) * sizeof(srmodel_data_t*));
+
+                filtered_models.model_name[filtered_models.num] = strdup(models_->model_name[i]);
+                filtered_models.model_info[filtered_models.num] = strdup(models_->model_info[i]);
+                filtered_models.model_data[filtered_models.num] = models_->model_data[i];
+
+                filtered_models.num++;
+
+                ESP_LOGI(TAG, "Using wakenet model: %s", models_->model_name[i]);
+
+                // 添加唤醒词到容器
+                std::stringstream ss((words)); // 确保这里正确初始化 stringstream
+                std::string word;
+                while (std::getline(ss, word, ';')) {
+                    ESP_LOGI(TAG, "Wake word: %s", word.c_str());
+                    wake_words_.push_back(word);
+                }
+            } else {
+                ESP_LOGW(TAG, "Skipping model without '你好小智': %s", models_->model_name[i]);
             }
         }
+    }
+
+    if (filtered_models.num == 0) {
+        ESP_LOGE(TAG, "No valid wakenet model found");
+        return false;
     }
 
     std::string input_format;
@@ -71,13 +104,15 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
     for (int i = 0; i < ref_num; i++) {
         input_format.push_back('R');
     }
-    afe_config_t* afe_config = afe_config_init(input_format.c_str(), models_, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
+
+    // 使用筛选后的模型列表初始化音频前端配置
+    afe_config_t* afe_config = afe_config_init(input_format.c_str(), &filtered_models, AFE_TYPE_SR, AFE_MODE_HIGH_PERF);
     afe_config->aec_init = codec_->input_reference();
     afe_config->aec_mode = AEC_MODE_SR_HIGH_PERF;
     afe_config->afe_perferred_core = 1;
     afe_config->afe_perferred_priority = 1;
     afe_config->memory_alloc_mode = AFE_MEMORY_ALLOC_MORE_PSRAM;
-    
+
     afe_iface_ = esp_afe_handle_from_config(afe_config);
     afe_data_ = afe_iface_->create_from_config(afe_config);
 
@@ -86,6 +121,15 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
         this_->AudioDetectionTask();
         vTaskDelete(NULL);
     }, "audio_detection", 4096, this, 3, nullptr);
+
+    // 释放动态分配的内存
+    for (int i = 0; i < filtered_models.num; i++) {
+        free(filtered_models.model_name[i]);
+        free(filtered_models.model_info[i]);
+    }
+    free(filtered_models.model_name);
+    free(filtered_models.model_info);
+    free(filtered_models.model_data);
 
     return true;
 }
@@ -119,54 +163,6 @@ size_t AfeWakeWord::GetFeedSize() {
     return afe_iface_->get_feed_chunksize(afe_data_);
 }
 
-bool AfeWakeWord::SetActiveWakeWord(const std::string& word) {
-    {
-        std::lock_guard<std::mutex> lock(active_wake_word_mutex_);
-        if (word.empty()) {
-            active_wake_word_.clear();
-            ESP_LOGI(TAG, "AfeWakeWord: active wake word cleared (accept all)");
-        } else {
-            active_wake_word_ = word;
-            ESP_LOGI(TAG, "AfeWakeWord: active wake word set to '%s'", active_wake_word_.c_str());
-        }
-    }
-
-    if (afe_iface_ && afe_data_) {
-        if (afe_iface_->reset_buffer) {
-            int r = afe_iface_->reset_buffer(afe_data_);
-            if (r > 0) {
-                ESP_LOGI(TAG, "AfeWakeWord: afe feed ringbuffer reset OK");
-            } else {
-                ESP_LOGW(TAG, "AfeWakeWord: afe reset_buffer returned %d", r);
-            }
-        }
-
-        if (afe_iface_->fetch_with_delay) {
-            for (int i = 0; i < 8; ++i) {
-                afe_fetch_result_t* res = afe_iface_->fetch_with_delay(afe_data_, 0); // 0 ticks，不阻塞
-                if (!res) break;
-                if (res->ret_value == ESP_FAIL) {
-                    break;
-                }
-
-                (void)res;
-            }
-        }
-    }
-
-    //设置事件位让 AudioDetectionTask 继续 fetch
-    if (event_group_) {
-        xEventGroupSetBits(event_group_, DETECTION_RUNNING_EVENT);
-    }
-
-    return true;
-}
-
-std::string AfeWakeWord::GetActiveWakeWord() const {
-    std::lock_guard<std::mutex> lock(active_wake_word_mutex_);
-    return active_wake_word_;
-}
-
 void AfeWakeWord::AudioDetectionTask() {
     auto fetch_size = afe_iface_->get_fetch_chunksize(afe_data_);
     auto feed_size = afe_iface_->get_feed_chunksize(afe_data_);
@@ -174,49 +170,26 @@ void AfeWakeWord::AudioDetectionTask() {
         feed_size, fetch_size);
 
     while (true) {
-        // 始终 fetch 数据以消费 AFE 的环形缓冲，避免写满）
+        xEventGroupWaitBits(event_group_, DETECTION_RUNNING_EVENT, pdFALSE, pdTRUE, portMAX_DELAY);
+
         auto res = afe_iface_->fetch_with_delay(afe_data_, portMAX_DELAY);
         if (res == nullptr || res->ret_value == ESP_FAIL) {
-            // 若 fetch 失败，稍作延时避免忙等
-            vTaskDelay(pdMS_TO_TICKS(5));
-            continue;
+            continue;;
         }
 
+        // Store the wake word data for voice recognition, like who is speaking
         StoreWakeWordData(res->data, res->data_size / sizeof(int16_t));
 
-        // 仅在检测被启用时处理唤醒事件，未启用时只是消费数据
-        uint32_t bits = xEventGroupGetBits(event_group_);
-        bool running = (bits & DETECTION_RUNNING_EVENT);
-
-        if (!running) {
-            // 处于停止状态，继续循环以清空缓冲并避免溢出
-            continue;
-        }
-
         if (res->wakeup_state == WAKENET_DETECTED) {
+            Stop();
             last_detected_wake_word_ = wake_words_[res->wakenet_model_index - 1];
 
-            std::string active;
-            {
-                std::lock_guard<std::mutex> lock(active_wake_word_mutex_);
-                active = active_wake_word_;
-            }
-
             if (wake_word_detected_callback_) {
-                if (active.empty() || active == last_detected_wake_word_) {
-                    // 匹配
-                    Stop();
-                    wake_word_detected_callback_(last_detected_wake_word_);
-                } else {
-                    // 不匹配：记录并继续 fetch（不要 Stop，否则会产生环形缓冲溢出）
-                    ESP_LOGI(TAG, "Detected wake word '%s' ignored (active='%s')",
-                             last_detected_wake_word_.c_str(), active.c_str());
-                }
+                wake_word_detected_callback_(last_detected_wake_word_);
             }
         }
     }
 }
-
 
 void AfeWakeWord::StoreWakeWordData(const int16_t* data, size_t samples) {
     // store audio data to wake_word_pcm_

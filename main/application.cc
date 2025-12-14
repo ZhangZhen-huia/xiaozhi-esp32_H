@@ -654,7 +654,6 @@ void Application::Start() {
     ESP_LOGW(TAG,"复位原因: 未知或其他类型\n");
     }
     
-    audio_service_.SetActiveWakeWord("你好小智");
     device_Role = Role_Xiaozhi;
     std::string msg = "静默调用notice工具";
     SendMessage(msg);
@@ -706,7 +705,6 @@ void Application::RFID_TASK()
                         SendMessage(msg);
                     } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0) {
                         ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
-                        audio_service_.SetActiveWakeWord("你好小智");
                         device_Role = Role_Xiaozhi;
                         // if(music) {
                         //     music->StopStreaming();
@@ -714,7 +712,6 @@ void Application::RFID_TASK()
                         SendMessage(msg);
                     } else if(strcmp(card_id.c_str(), CardRole_ESP_ID) == 0) {
                         ESP_LOGI(TAG,"ESP Role Activated\r\n");
-                        audio_service_.SetActiveWakeWord("Hi,ESP");
                         device_Role = Role_ESP;
                         // if(music) {
                         //     music->StopStreaming();
@@ -782,7 +779,7 @@ void Application::MainEventLoop() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
             auto& wifi_station = WifiStation::GetInstance();
-            if(wifi_station.IsConnected() && (clock_ticks_ % 3 == 0))
+            if(wifi_station.IsConnected() && (clock_ticks_ % 60 == 0))
             {
                 auto Rssi = wifi_station.GetRssi();
                 ESP_LOGI(TAG,"Rssi:%d dBm",Rssi);

@@ -148,9 +148,22 @@ bool Esp32Music::StopStreaming() {
     ESP_LOGI(TAG, "Stopping music streaming - current state: downloading=%d, playing=%d", 
             is_downloading_.load(), is_playing_.load());
 
-    // 重置采样率到原始值
-    ResetSampleRate();
-    
+    // // 重置采样率到原始值
+    // ResetSampleRate();
+
+    // 先让音频编解码器输出静音
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        // 停止输出
+        codec->EnableOutput(false);
+        vTaskDelay(pdMS_TO_TICKS(50));
+        
+        // 重置采样率
+        ResetSampleRate();
+
+        // 重新启用输出（但此时没有数据，所以是静音）
+        codec->EnableOutput(true);
+    }
     // 检查是否有流式播放正在进行
     if (!is_playing_ && !is_downloading_) {
         ESP_LOGW(TAG, "No streaming in progress");
@@ -165,7 +178,6 @@ bool Esp32Music::StopStreaming() {
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
     if (display) {
-        // display->SetMusicInfo("");  // 清空歌名显示
         ESP_LOGI(TAG, "Cleared song name display");
     }
     
@@ -218,8 +230,11 @@ bool Esp32Music::StopStreaming() {
             }
         }
     }
-    
-    
+
+    auto& app = Application::GetInstance();
+    auto& audio_service = app.GetAudioService();
+    audio_service.ResetDecoder();
+    vTaskDelay(pdMS_TO_TICKS(50));
     ESP_LOGI(TAG, "Music streaming stop signal sent");
     return true;
 }

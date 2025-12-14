@@ -33,12 +33,11 @@ public:
     void EncodeWakeWordData();
     bool GetWakeWordOpus(std::vector<uint8_t>& opus);
     const std::string& GetLastDetectedWakeWord() const { return last_detected_wake_word_; }
-    // 新增：设置/获取当前激活的唤醒词
-    // 传入空字符串表示接受所有唤醒词
-    bool SetActiveWakeWord(const std::string& word)override;
-    std::string GetActiveWakeWord() const override;
+
 private:
     srmodel_list_t *models_ = nullptr;
+    srmodel_list_t *finalmodels_ = nullptr;
+
     esp_afe_sr_iface_t* afe_iface_ = nullptr;
     esp_afe_sr_data_t* afe_data_ = nullptr;
     char* wakenet_model_ = NULL;
@@ -55,10 +54,6 @@ private:
     std::deque<std::vector<uint8_t>> wake_word_opus_;
     std::mutex wake_word_mutex_;
     std::condition_variable wake_word_cv_;
-
-    // 新增：当前激活的唤醒词与保护互斥量
-    std::string active_wake_word_;
-    mutable std::mutex active_wake_word_mutex_;
 
     void StoreWakeWordData(const int16_t* data, size_t size);
     void AudioDetectionTask();
