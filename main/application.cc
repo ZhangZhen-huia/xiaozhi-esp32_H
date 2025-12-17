@@ -723,7 +723,7 @@ void Application::RFID_TASK()
             }
             #else
             #endif
-            vTaskDelay(50);
+            vTaskDelay(1000);
     }
 } 
 // The Main Event Loop controls the chat state and websocket connection
@@ -874,24 +874,24 @@ void Application::SetDeviceState(DeviceState state) {
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 
-    // Send the state change event
-    DeviceStateEventManager::GetInstance().PostStateChangeEvent(previous_state, state);
+
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
 
-     // 当从idle状态变成其他任何状态时，停止音乐播放
-    if (previous_state == kDeviceStateIdle && state != kDeviceStateIdle) {
-        auto music = board.GetMusic();
-        if (music) {
-            ESP_LOGI(TAG, "Stopping music streaming due to state change: %s -> %s", 
-                    STATE_STRINGS[previous_state], STATE_STRINGS[state]);
-            music->StopStreaming();
-        }
-    }
-    auto codec = Board::GetInstance().GetAudioCodec();
+    //  // 当从idle状态变成其他任何状态时，停止音乐播放
+    // if (previous_state == kDeviceStateIdle && state != kDeviceStateIdle) {
+    //     auto music = board.GetMusic();
+    //     if (music->IsPlaying()) {
+    //         ESP_LOGI(TAG, "Stopping music streaming due to state change: %s -> %s", 
+    //                 STATE_STRINGS[previous_state], STATE_STRINGS[state]);
+    //         music->StopStreaming();
+    //     }
+    // }
+    
+    // auto codec = Board::GetInstance().GetAudioCodec();
     switch (state) {
         case kDeviceStateUnknown:
         case kDeviceStateIdle:

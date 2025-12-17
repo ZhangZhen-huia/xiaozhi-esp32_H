@@ -34,12 +34,7 @@ void Backlight::RestoreBrightness() {
     Settings settings("display");  
     int saved_brightness = settings.GetInt("brightness", 75);
     
-    // 检查亮度值是否为0或过小，设置默认值
-    if (saved_brightness <= 0) {
-        ESP_LOGW(TAG, "Brightness value (%d) is too small, setting to default (10)", saved_brightness);
-        saved_brightness = 10;  // 设置一个较低的默认值
-    }
-    
+    ESP_LOGI(TAG, "Restoring brightness to %d", saved_brightness);
     SetBrightness(saved_brightness);
 }
 
@@ -117,5 +112,6 @@ void PwmBacklight::SetBrightnessImpl(uint8_t brightness) {
     uint32_t duty_cycle = (1023 * brightness) / 100;
     ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, duty_cycle);
     ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    // ESP_LOGI(TAG, "PWM Backlight set to brightness %d (duty %d)", brightness, duty_cycle);
 }
 

@@ -179,16 +179,17 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
         //IO6按键
         boot_button_IO6.OnClick([this]() {
             auto& app = Application::GetInstance();
-        
+            int i = 0;
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
             }
         //    
             auto music = Board::GetMusic();
+            // music->SetMusicEventNextPlay();
             // music->StopStreaming();
             std::string msg = "播放下一首";
-            // app.SetDeviceState(kDeviceStateIdle);
             app.SendMessage(msg);
+            // ESP_LOGI(TAG,"%d",++i);
             
         });
         

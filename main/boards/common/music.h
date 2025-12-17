@@ -22,8 +22,19 @@ struct PSMusicInfo {
     char *song_name = nullptr;
     char *artist = nullptr;
     char *artist_norm = nullptr;
+    char *token_norm; // 新增：保留空格的小写 token-normalized 字符串（存放于 SPIRAM）
     size_t file_size = 0;
     int duration = 0;
+};
+
+struct PSStoryEntry {
+    char *category = nullptr;    // PSRAM 分配的 NUL-终止字符串
+    char *story_name = nullptr;  // PSRAM 分配的 NUL-终止字符串
+    char **chapters = nullptr;   // PSRAM 分配的 char* 数组（每个元素也是 PSRAM 分配的字符串）
+    size_t chapter_count = 0;
+    std::string norm_category;   // 保留规范化用于快速比较（DRAM，轻量）
+    std::string norm_story;      // 保留规范化用于快速比较（DRAM，轻量）
+    char *token_norm = nullptr;  // 保留空格的小写 token-normalized 字符串（存放于 SPIRAM）
 };
 enum PlaybackMode {
     PLAYBACK_MODE_ONCE = 0,     // 播放一次
@@ -42,6 +53,7 @@ public:
     virtual bool StopStreaming() = 0;  // 停止流式播放
     virtual size_t GetBufferSize() const = 0;
     virtual bool IsDownloading() const = 0;
+    virtual bool IsPlaying() const =0;
     virtual void SetMusicOrStory_(int val) = 0;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "") = 0;
     virtual void SetLoopMode(bool loop) = 0;
@@ -52,10 +64,12 @@ public:
     virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
     virtual size_t GetMusicCount() const = 0;
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const =0;
-    
+    virtual void SetPauseState(bool play) = 0;
+    virtual bool is_paused(void)=0;
+    virtual void SetMusicEventNextPlay(void)=0;
     virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const =0;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) = 0;
-    virtual bool PlayPlaylist(std::string& playlist_name) = 0;
+    virtual bool PlayPlaylist(const std::string& playlist_name) = 0;
     virtual int SearchMusicIndexFromlist(std::string name) const = 0;
     virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const =0;
     virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const =0;
@@ -92,6 +106,7 @@ public:
     virtual std::string GetCurrentStoryName() = 0;
     virtual std::string GetCurrentCategoryName() =0;
     virtual int GetCurrentChapterIndex() =0;
+    virtual const PSStoryEntry* GetStoryLibrary(size_t &out_count) const =0;
 
     virtual void ScanAndLoadStory()=0;
     virtual int GetMusicOrStory_() const=0;
@@ -101,6 +116,8 @@ public:
     virtual void SetCurrentStoryName(const std::string& story) =0;
     virtual void SetCurrentChapterIndex(int index) = 0;
     virtual bool NextStoryInCategory(const std::string& category) = 0;
+    virtual size_t FindStoryIndexInCategory(const std::string& category, const std::string& story_name) const = 0;
+    virtual size_t FindStoryIndexFuzzy(const std::string& story_name) const = 0;
 };
 
 #endif // MUSIC_H 

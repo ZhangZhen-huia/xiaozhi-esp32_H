@@ -150,9 +150,9 @@ void SystemInfo::PrintHeapStats() {
     int min_free_sram = heap_caps_get_minimum_free_size(MALLOC_CAP_INTERNAL);
     ESP_LOGI(TAG, "free sram: %u minimal sram: %u", free_sram, min_free_sram);
 
-    size_t used_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) -
-                    heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    ESP_LOGI("PSRAM", "used %u  / %u ",
-        used_psram,
-        heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+    // size_t used_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) -
+    //                 heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
+    // ESP_LOGI("PSRAM", "used %u  / %u ",
+    //     used_psram,
+    //     heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
 }

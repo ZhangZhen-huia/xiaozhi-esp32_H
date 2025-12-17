@@ -15,7 +15,10 @@
 #include <esp_lvgl_port.h>
 #include "cstring"
 #include "esp_log.h"
-
+#include <freertos/FreeRTOS.h>
+#include <freertos/event_groups.h>
+#include <freertos/task.h>
+#include <esp_timer.h>
 // MP3解码器支持
 extern "C" {
 #include "mp3dec.h"
@@ -26,7 +29,7 @@ extern "C" {
 
 #define STORY 1
 #define MUSIC 0
-
+#define PLAY_EVENT_NEXT (1 << 0)
 // 音频数据块结构
 struct AudioChunk {
     uint8_t* data;
@@ -38,8 +41,8 @@ struct AudioChunk {
 
 struct Music_Record_Info {
     int index;
-    std::string song_name;
-    std::string artist;
+    const char* song_name;   // 指向 ps_music_library_ 中的 char*（不复制）
+    const char* artist;      // 指向 ps_music_library_ 中的 char*（不复制）
     Music_Record_Info *next;
     Music_Record_Info *last;
 };
@@ -69,14 +72,7 @@ struct StoryEntry {
     std::string norm_category;
     std::string norm_story;
 };
-struct PSStoryEntry {
-    char *category = nullptr;    // PSRAM 分配的 NUL-终止字符串
-    char *story_name = nullptr;  // PSRAM 分配的 NUL-终止字符串
-    char **chapters = nullptr;   // PSRAM 分配的 char* 数组（每个元素也是 PSRAM 分配的字符串）
-    size_t chapter_count = 0;
-    std::string norm_category;   // 保留规范化用于快速比较（DRAM，轻量）
-    std::string norm_story;      // 保留规范化用于快速比较（DRAM，轻量）
-};
+
 
 class Esp32Music : public Music {
 public:
@@ -87,7 +83,7 @@ public:
     };
 
 private:
-
+    int kMaxRecent = 5;
     // 返回 str1 与 str2 的编辑距离；max 为提前剪枝阈值
     int levenshtein_threshold(const char *str1, const char *str2, int max)const
     {
@@ -131,7 +127,7 @@ private:
     //音乐记录链表
     Music_Record_Info *music_record_ = nullptr;
 
-    std::string last_downloaded_data_;
+
     std::string current_song_name_;
 
     
@@ -139,6 +135,8 @@ private:
     std::atomic<PlaybackMode> StoryPlayback_mode_ = PLAYBACK_MODE_ORDER;
 
     std::atomic<bool> is_playing_;
+    std::atomic<bool> is_paused_;
+
     std::atomic<bool> is_downloading_;
     std::thread play_thread_;
     std::thread download_thread_;
@@ -194,13 +192,18 @@ private:
     bool ps_add_story_locked(const StoryEntry &e);
     void free_ps_music_library_locked();
     void free_ps_story_index_locked();
-
-    
-
+    std::string NormalizeForToken(const std::string &s)const;
+    bool IsSubsequence(const char* q, const char* t) const;
+    std::vector<std::string> SplitTokensNoAlloc(const std::string &token_norm)const;
+    bool TokenSeqMatchUsingTokenNormNoAlloc(const char* tgt_token_norm, const std::vector<std::string>& qtokens)const;
+    void ComputeFreqVector(const char* s, std::vector<int>& freq)const; 
+    int OverlapScoreFromFreq(const std::vector<int>& freq_q, const std::vector<int>& freq_t, int qlen)const;
     char* ps_strdup(const std::string &s);
     void ps_free_str(char *p);
-
-
+    void NextPlayTask(void* arg);
+    void SetPauseState(bool play)override{ is_paused_ = play; };
+    void SetMusicEventNextPlay(void)override;
+    bool is_paused(void)override{return is_paused_;};
     PSStoryEntry *ps_story_index_ = nullptr; // PSRAM 分配的数组
     size_t ps_story_count_ = 0;
     size_t ps_story_capacity_ = 0;
@@ -233,6 +236,8 @@ private:
     bool has_saved_MusicPosition_ = false;
     bool SaveMusicRecord_ = true;
 
+    TaskHandle_t NextPlay_task_handle_ = nullptr;
+    EventGroupHandle_t event_group_ = nullptr;
 public:
     Esp32Music();
     ~Esp32Music();
@@ -248,7 +253,7 @@ public:
     virtual bool StopStreaming() override;  // 停止流式播放
     virtual size_t GetBufferSize() const override { return buffer_size_; }
     virtual bool IsDownloading() const override { return is_downloading_; }
-
+    virtual bool IsPlaying() const override { return is_playing_; }
 
 
 
@@ -265,7 +270,7 @@ public:
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
     virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const override;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) override;
-    virtual bool PlayPlaylist(std::string& playlist_name) override;
+    virtual bool PlayPlaylist(const std::string& playlist_name) override;
     virtual int SearchMusicIndexFromlist(std::string name) const override;
     virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const override;
     virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const override;
@@ -288,6 +293,8 @@ public:
     virtual void EnableRecord(bool x) override{SaveMusicRecord_ = x;};
     virtual bool GetIfRecordEnabled() const override { return SaveMusicRecord_; };
     virtual bool IfNodeIsEnd() const override {
+        if(NowNode == nullptr)
+            return true;
         return (NowNode->next == nullptr);
     }
     virtual int NextNodeIndex() override {
@@ -344,7 +351,9 @@ public:
     virtual void ScanAndLoadStory()override;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) override;
     virtual bool NextStoryInCategory(const std::string& category) override;
-
+    size_t FindStoryIndexInCategory(const std::string& category, const std::string& story_name) const override;
+    virtual const PSStoryEntry* GetStoryLibrary(size_t &out_count) const override;
+    size_t FindStoryIndexFuzzy(const std::string& story_name) const override;
 
 };
 
