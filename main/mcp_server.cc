@@ -62,7 +62,7 @@ void McpServer::AddCommonTools() {
         [&board,music](const PropertyList& properties) -> ReturnValue {
             auto codec = board.GetAudioCodec();
             codec->SetOutputVolume(properties["volume"].value<int>());
-            music->SetPauseState(false);
+            music->ResumePlayback();
             return true;
         });
     
@@ -76,7 +76,8 @@ void McpServer::AddCommonTools() {
             [backlight,music](const PropertyList& properties) -> ReturnValue {
                 uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
                 backlight->SetBrightness(brightness, true);
-                music->SetPauseState(false);
+                // music->SetPauseState(false);
+                music->ResumePlayback();
                 return true;
             });
     }
@@ -149,12 +150,11 @@ void McpServer::AddCommonTools() {
 
                     if((song_name.empty() && singer.empty()) || !goon.empty()) {
                         
-                        // if(music->is_paused())
-                        // {
-                        //     music->SetPauseState(false);
-                        //     return true;
-                        // }
-                        music->StopStreaming(); // 停止当前播放
+                        if(music->is_paused())
+                        {
+                            music->ResumePlayback();
+                            return true;
+                        }
                         if (music->IfSavedMusicPosition()) {
                             ESP_LOGI(TAG, "Resuming saved playback position");
                             std::string ai_instr_json = std::string("{\"call_tool\":\"actually.2\"}");
@@ -174,7 +174,10 @@ void McpServer::AddCommonTools() {
                     }
                     else if(!song_name.empty() && singer.empty())
                     {
-                        music->StopStreaming(); // 停止当前播放
+                        if(music->is_paused())
+                        {
+                            music->StopStreaming(); // 停止当前播放
+                        }
                         ESP_LOGI(TAG, "Playing song: %s", song_name.c_str());
                         auto index = music->SearchMusicIndexFromlist(song_name);
                         auto playlist_name = music->GetDefaultList();
@@ -200,7 +203,10 @@ void McpServer::AddCommonTools() {
                     }
                     else if(!singer.empty() && song_name.empty())
                     {
-                        music->StopStreaming(); // 停止当前播放
+                        if(music->is_paused())
+                        {
+                            music->StopStreaming(); // 停止当前播放
+                        }
                         // 直接使用 PSRAM 中的音乐库，避免大拷贝
                         size_t out_count = 0;
                         auto all_music = (music)->GetMusicLibrary(out_count);
@@ -246,7 +252,10 @@ void McpServer::AddCommonTools() {
                     }
                     else
                     {
-                        music->StopStreaming(); // 停止当前播放
+                        if(music->is_paused())
+                        {
+                            music->StopStreaming(); // 停止当前播放
+                        }
                         ESP_LOGI(TAG, "Playing song: %s by singer: %s", song_name.c_str(), singer.c_str());
                         // 直接在 PSRAM 中查找匹配项并播放
                         size_t out_count = 0;
@@ -487,7 +496,10 @@ void McpServer::AddCommonTools() {
                     std::string now_playing; // 要返回给调用方的播放提示
                     if(MusicOrStory_ == MUSIC)
                     {
-                        music->StopStreaming(); // 停止当前播放
+                        if(music->is_paused())
+                        {
+                            music->StopStreaming(); // 停止当前播放
+                        }
                         if(music->IfNodeIsEnd())
                         {                        
                             auto list = music->GetCurrentPlayList();
@@ -609,7 +621,10 @@ void McpServer::AddCommonTools() {
                     std::string now_playing; // 要返回给调用方的播放提示
                     if(MusicOrStory_ == MUSIC)
                     {
-                        music->StopStreaming(); // 停止当前播放
+                        if(music->is_paused())
+                        {
+                            music->StopStreaming(); // 停止当前播放
+                        }
                         auto list = music->GetDefaultList();
                         auto index = music->LastNodeIndex();
                         if(index == -1)

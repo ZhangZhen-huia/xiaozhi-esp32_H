@@ -217,8 +217,8 @@ void Application::CheckNewVersion(Ota& ota) {
         }
 
         // This will block the loop until the activation is done or timeout
-        for (int i = 0; i < 10; ++i) {
-            ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 10);
+        for (int i = 0; i < 1; ++i) {
+            ESP_LOGI(TAG, "Activating... %d/%d", i + 1, 1);
             esp_err_t err = ota.Activate();
             if (err == ESP_OK) {
                 xEventGroupSetBits(event_group_, MAIN_EVENT_CHECK_NEW_VERSION_DONE);
@@ -226,7 +226,7 @@ void Application::CheckNewVersion(Ota& ota) {
             } else if (err == ESP_ERR_TIMEOUT) {
                 vTaskDelay(pdMS_TO_TICKS(3000));
             } else {
-                vTaskDelay(pdMS_TO_TICKS(10000));
+                vTaskDelay(pdMS_TO_TICKS(500));
             }
             if (device_state_ == kDeviceStateIdle) {
                 break;
@@ -428,24 +428,22 @@ void Application::Start() {
     };
     audio_service_.SetCallbacks(callbacks);
 
-    // Start the main event loop task with priority 3
+    // Start the main event loop task with priority 5
     xTaskCreate([](void* arg) {
         ((Application*)arg)->MainEventLoop();
         vTaskDelete(NULL);
-    }, "main_event_loop", 2048 * 4, this, 3, &main_event_loop_task_handle_);
+    }, "main_event_loop", 2048 * 4, this, 5, &main_event_loop_task_handle_);
 
-    xTaskCreate([](void* arg) {
+    xTaskCreate([](void* arg) { 
         ((Application*)arg)->RFID_TASK();
         vTaskDelete(NULL);
-    }, "rfid_task", 2048 * 4, this, 3, &rfid_task_handle_);
+    }, "rfid_task", 2048 * 4, this, 2, &rfid_task_handle_);
 
     /* Start the clock timer to update the status bar */
     //该定时器任务会在定时结束对应的event_group_设置MAIN_EVENT_CLOCK_TICK位
     //然后触发main_event_loop函数中的对应处理
     esp_timer_start_periodic(clock_timer_handle_, 1000000);
 
-    // if(en && ble_wifi_config_enabled_)
-        // BleWifiIntegration::StartBleWifiConfig();
     /* Wait for the network to be ready */
     board.StartNetwork();
 
@@ -730,7 +728,7 @@ void Application::RFID_TASK()
 // If other tasks need to access the websocket or chat state,
 // they should use Schedule to call this function
 void Application::MainEventLoop() {
-    // esp_task_wdt_add(xTaskGetCurrentTaskHandle());   // 1. 注册
+    
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, MAIN_EVENT_SCHEDULE |
             MAIN_EVENT_SEND_AUDIO |
@@ -819,6 +817,7 @@ void Application::OnWakeWordDetected() {
     }
 
     if (device_state_ == kDeviceStateIdle) {
+        audio_service_.EnableWakeWordDetection(false);
         audio_service_.EncodeWakeWord();
 
         if (!protocol_->IsAudioChannelOpened()) {
@@ -844,6 +843,7 @@ void Application::OnWakeWordDetected() {
         SetListeningMode(aec_mode_ == kAecOff ? kListeningModeAutoStop : kListeningModeRealtime);
         // Play the pop up sound to indicate the wake word is detected
         audio_service_.PlaySound(Lang::Sounds::OGG_POPUP);
+        
 #endif
     } else if (device_state_ == kDeviceStateSpeaking) {
         AbortSpeaking(kAbortReasonWakeWordDetected);

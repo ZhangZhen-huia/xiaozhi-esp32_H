@@ -307,7 +307,7 @@ public:
         InitializeSdcard();
         InitializeButtons();
         #if !my
-        InitializeBatteryMonitor();
+        // InitializeBatteryMonitor();
         #else
         #endif
         GetBacklight()->RestoreBrightness();

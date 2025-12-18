@@ -136,7 +136,7 @@ private:
 
     std::atomic<bool> is_playing_;
     std::atomic<bool> is_paused_;
-
+    std::atomic<bool> is_first_play_;
     std::atomic<bool> is_downloading_;
     std::thread play_thread_;
     std::thread download_thread_;
@@ -202,6 +202,8 @@ private:
     void ps_free_str(char *p);
     void NextPlayTask(void* arg);
     void SetPauseState(bool play)override{ is_paused_ = play; };
+    void PausePlayback()override;
+    void ResumePlayback()override;
     void SetMusicEventNextPlay(void)override;
     bool is_paused(void)override{return is_paused_;};
     PSStoryEntry *ps_story_index_ = nullptr; // PSRAM 分配的数组

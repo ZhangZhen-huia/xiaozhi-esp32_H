@@ -298,28 +298,102 @@ void Esp32Music::PlayAudioStream() {
     bool id3_processed = false;
     static DeviceState current_state = app.GetDeviceState();
     is_paused_ = false;
+    is_first_play_ = true;
+    using namespace std::chrono;
+    steady_clock::time_point listening_start = steady_clock::time_point::min();
     while (is_playing_) {
         // 检查设备状态，只有在空闲状态才播放音乐
-        
-        if(is_paused_)
-        {
-            current_state = app.GetDeviceState();
-            if(current_state == kDeviceStateIdle)
-            {
-                ESP_LOGI(TAG, "Device state is IDLE, resuming playback");
-                is_paused_ = false;
-            }
-            vTaskDelay(pdMS_TO_TICKS(500));
-            continue;
-        }
-
         DeviceState previous_state = current_state;
         current_state = app.GetDeviceState();
-        if(previous_state == kDeviceStateIdle && current_state != kDeviceStateIdle)
+        if(is_first_play_)
         {
-            ESP_LOGI(TAG, "Device state changed from IDLE to %d, stopping playback", current_state);
-            is_paused_ = true;
-            vTaskDelay(pdMS_TO_TICKS(500)); // 确保状态切换完成
+            // 状态转换：说话中-》聆听中-》待机状态-》播放音乐
+            if (current_state == kDeviceStateListening || current_state == kDeviceStateSpeaking) {
+                if (current_state == kDeviceStateSpeaking) {
+                    ESP_LOGI(TAG, "Device is in speaking state, switching to listening state for music playback");
+                }
+                if (current_state == kDeviceStateListening) {
+                    ESP_LOGI(TAG, "Device is in listening state, switching to idle state for music playback");
+                }
+                // 切换状态
+                app.ToggleChatState(); // 变成待机状态
+                vTaskDelay(pdMS_TO_TICKS(300));
+                continue;
+            } else if (current_state != kDeviceStateIdle) { // 不是待机状态，就一直卡在这里，不让播放音乐
+                ESP_LOGD(TAG, "Device state is %d, pausing music playback", current_state);
+                // 如果不是空闲状态，暂停播放
+                vTaskDelay(pdMS_TO_TICKS(50));
+                continue;
+            }
+            
+            is_first_play_ = false;
+        }
+        {
+            std::unique_lock<std::mutex> lk(buffer_mutex_);
+            if (is_paused_) {
+                ESP_LOGI(TAG, "Playback paused, entering timed wait (2s)");
+                // 带超时循环等待，周期性检查聆听超时（10s）以自动恢复
+                while (is_paused_) {
+                    if (!is_playing_) {
+                        ESP_LOGI(TAG, "Playback stopping while paused");
+                        break;
+                    }
+
+                    // 检查当前设备状态并维护聆听计时器
+                    current_state = app.GetDeviceState();
+
+                    // 优化：如果设备变为 IDLE，立即恢复播放（无需等待超时）
+                    if (current_state == kDeviceStateIdle) {
+                        ESP_LOGI(TAG, "Device state is IDLE, auto-resuming playback immediately");
+                        // 先解锁再调用 ResumePlayback()（ResumePlayback 内部会加锁并 notify）
+                        lk.unlock();
+                        ResumePlayback();
+                        lk.lock();
+                        listening_start = steady_clock::time_point::min();
+                        break;
+                    }
+
+                    if (current_state == kDeviceStateListening) {
+                        if (listening_start == steady_clock::time_point::min()) {
+                            listening_start = steady_clock::now();
+                        } else {
+                            auto dur = duration_cast<seconds>(steady_clock::now() - listening_start).count();
+                            if (dur >= 10) {
+                                ESP_LOGI(TAG, "Listening timeout %llds exceeded, auto-resuming playback", (long long)dur);
+                                lk.unlock();
+                                ResumePlayback();
+                                lk.lock();
+                                listening_start = steady_clock::time_point::min();
+                                break;
+                            }
+                        }
+                    } else {
+                        // 非聆听状态时重置计时器
+                        listening_start = steady_clock::time_point::min();
+                    }
+
+                    // 周期性唤醒检查，避免永久阻塞
+                    auto status = buffer_cv_.wait_for(lk, std::chrono::seconds(2));
+                    if (status == std::cv_status::timeout) {
+                        ESP_LOGI(TAG, "Still paused after 2s");
+                    } else {
+                        ESP_LOGI(TAG, "Woken from pause wait");
+                    }
+                }
+                if (!is_playing_) {
+                    ESP_LOGI(TAG, "Playback stopping while paused");
+                    break;
+                }
+                ESP_LOGI(TAG, "Playback resumed after pause");
+                // codec/采样率恢复由 ResumePlayback() 负责
+            }
+        }
+
+
+        if (previous_state == kDeviceStateIdle && current_state != kDeviceStateIdle) {
+            ESP_LOGI(TAG, "Device state changed from IDLE to %d, pausing playback", current_state);
+            PausePlayback();
+            vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
 
@@ -976,6 +1050,28 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     return StartSDCardStreaming(file_path);
 }
 
+
+void Esp32Music::ResumePlayback() {
+    std::lock_guard<std::mutex> lk(buffer_mutex_);
+    if (!is_paused_) return;
+    is_paused_ = false;
+    // 确保 codec 输出及采样率恢复
+    auto codec = Board::GetInstance().GetAudioCodec();
+    if (codec) {
+        codec->EnableOutput(true);
+        ResetSampleRate();
+    }
+    buffer_cv_.notify_all();
+    ESP_LOGI(TAG, "ResumePlayback: resumed and notified");
+}
+
+void Esp32Music::PausePlayback() {
+    std::lock_guard<std::mutex> lk(buffer_mutex_);
+    if (is_paused_) return;
+    is_paused_ = true;
+    ESP_LOGI(TAG, "PausePlayback: paused");
+}
+
 /**
  * @brief 开始SD卡流式播放
  * @param file_path SD卡文件路径
@@ -1083,8 +1179,28 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
     
     size_t total_read = 0;
     bool first_resume = true;
+    auto& app = Application::GetInstance();
+
     while (is_downloading_ && is_playing_) {
-        size_t bytes_read = fread(buffer, 1, chunk_size, file);
+        
+        // 在真正做文件 I/O 前，如果处于暂停则等待（避免 pause 时继续 fread/分配导致缓冲溢满）
+        {
+            std::unique_lock<std::mutex> lk(buffer_mutex_);
+            if (is_paused_) {
+                ESP_LOGI(TAG, "Read thread paused, waiting for resume");
+                buffer_cv_.wait(lk, [this]{ return !is_paused_ || !is_downloading_ || !is_playing_; });
+                if (!is_downloading_ || !is_playing_) break;
+                ESP_LOGI(TAG, "Read thread resumed");
+            }
+        }
+        
+        // 保护 file I/O，避免 concurrent fclose 导致 crash
+        size_t bytes_read = 0;
+        {
+            std::lock_guard<std::mutex> f_lock(current_play_file_mutex_);
+            if (!file) break;
+            bytes_read = fread(buffer, 1, chunk_size, file);
+        }
         if (bytes_read == 0) {
             if (feof(file)) {
                 // 如果当前文件偏移已经达到文件大小，则从头开始播放（回绕）
@@ -1131,19 +1247,23 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
         }
         memcpy(chunk_data, buffer, bytes_read);
        
+
         // 等待缓冲区有空间
         {
             std::unique_lock<std::mutex> lock(buffer_mutex_);
+
+            // // 改为显式循环 + 带超时的 wait_for，避免把日志放在 predicate 内
+            // auto wait_pred = [this]() {
+            //     return (buffer_size_ < MAX_BUFFER_SIZE) || (!is_downloading_);
+            // };
             buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_; });
-            
             if (is_downloading_) {
                 audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
                 buffer_size_ += bytes_read;
                 total_read += bytes_read;
-                
+
                 // 通知播放线程有新数据
                 buffer_cv_.notify_one();
-                
                 if (total_read % (256 * 1024) == 0) {
                     ESP_LOGI(TAG, "Read %d bytes from SD, buffer size: %d", total_read, buffer_size_);
                 }
