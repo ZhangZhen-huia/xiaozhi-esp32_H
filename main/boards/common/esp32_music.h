@@ -83,6 +83,22 @@ public:
     };
 
 private:
+
+    // 固定池（环形/slot）用于存放从SD读到的原始块，避免频繁malloc/free导致碎片
+    std::vector<uint8_t*> chunk_pool_all_;
+    std::vector<uint8_t*> chunk_pool_free_;
+    size_t chunk_pool_slot_size_ = 0;
+    size_t chunk_pool_slot_count_ = 0;
+    std::mutex chunk_pool_mutex_;
+
+    // chunk pool 管理
+    bool InitChunkPool(size_t count, size_t slot_size);
+    void DestroyChunkPool();
+    uint8_t* AllocChunkFromPool(size_t need_size);
+    void ReturnChunkToPool(uint8_t* p);
+
+
+
     int kMaxRecent = 5;
     // 返回 str1 与 str2 的编辑距离；max 为提前剪枝阈值
     int levenshtein_threshold(const char *str1, const char *str2, int max)const
@@ -141,7 +157,6 @@ private:
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
-    int64_t last_frame_time_ms_;    // 上一帧的时间戳
     int total_frames_decoded_;      // 已解码的帧数
 
     // 音频缓冲区
@@ -156,7 +171,6 @@ private:
     HMP3Decoder mp3_decoder_;
     MP3FrameInfo mp3_frame_info_;
     bool mp3_decoder_initialized_;
-    
     // 私有方法
     void PlayAudioStream();
     void ClearAudioBuffer();
@@ -201,11 +215,13 @@ private:
     char* ps_strdup(const std::string &s);
     void ps_free_str(char *p);
     void NextPlayTask(void* arg);
-    void SetPauseState(bool play)override{ is_paused_ = play; };
-    void PausePlayback()override;
-    void ResumePlayback()override;
-    void SetMusicEventNextPlay(void)override;
-    bool is_paused(void)override{return is_paused_;};
+    void SetPauseState(bool play){ is_paused_ = play; };
+    void PausePlayback();
+    void ResumePlayback();
+    void SetMusicEventNextPlay(void);
+    bool is_paused(void){return is_paused_;};
+    int FindValidMp3SyncWord(uint8_t* data, int data_len);
+    bool IsValidMp3FrameHeader(uint8_t* header);
     PSStoryEntry *ps_story_index_ = nullptr; // PSRAM 分配的数组
     size_t ps_story_count_ = 0;
     size_t ps_story_capacity_ = 0;

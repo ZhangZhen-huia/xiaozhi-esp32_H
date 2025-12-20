@@ -44,6 +44,64 @@ Esp32Music::Esp32Music() : current_song_name_(),
 
 }
 
+// 初始化 chunk 池，返回是否成功
+bool Esp32Music::InitChunkPool(size_t count, size_t slot_size) {
+    std::lock_guard<std::mutex> lk(chunk_pool_mutex_);
+    if (!chunk_pool_all_.empty()) return true; // 已初始化
+    if (count == 0 || slot_size == 0) return false;
+    chunk_pool_slot_size_ = slot_size;
+    chunk_pool_slot_count_ = count;
+    chunk_pool_all_.reserve(count);
+    chunk_pool_free_.reserve(count);
+    for (size_t i = 0; i < count; ++i) {
+        uint8_t* p = (uint8_t*)heap_caps_malloc(slot_size, MALLOC_CAP_SPIRAM);
+        if (!p) {
+            ESP_LOGW(TAG, "InitChunkPool: allocation failed at %zu/%zu", i, count);
+            break;
+        }
+        chunk_pool_all_.push_back(p);
+        chunk_pool_free_.push_back(p);
+    }
+    ESP_LOGI(TAG, "InitChunkPool: slots=%zu slot_size=%zu allocated=%zu", count, slot_size, chunk_pool_all_.size());
+    return !chunk_pool_all_.empty();
+}
+
+void Esp32Music::DestroyChunkPool() {
+    std::lock_guard<std::mutex> lk(chunk_pool_mutex_);
+    for (auto p : chunk_pool_all_) {
+        if (p) heap_caps_free(p);
+    }
+    chunk_pool_all_.clear();
+    chunk_pool_free_.clear();
+    chunk_pool_slot_size_ = 0;
+    chunk_pool_slot_count_ = 0;
+    ESP_LOGI(TAG, "DestroyChunkPool: freed pool");
+}
+
+uint8_t* Esp32Music::AllocChunkFromPool(size_t need_size) {
+    // 优先从池里取一个足够大的slot，否则回退到直接分配
+    if (need_size == 0) return nullptr;
+    std::lock_guard<std::mutex> lk(chunk_pool_mutex_);
+    if (!chunk_pool_free_.empty() && need_size <= chunk_pool_slot_size_) {
+        uint8_t* p = chunk_pool_free_.back();
+        chunk_pool_free_.pop_back();
+        return p;
+    }
+    // 池空或请求更大，回退到直接分配 SPIRAM
+    return (uint8_t*)heap_caps_malloc(need_size, MALLOC_CAP_SPIRAM);
+}
+
+void Esp32Music::ReturnChunkToPool(uint8_t* p) {
+    if (!p) return;
+    std::lock_guard<std::mutex> lk(chunk_pool_mutex_);
+    // 若 p 属于池则放回；否则 free
+    auto it = std::find(chunk_pool_all_.begin(), chunk_pool_all_.end(), p);
+    if (it != chunk_pool_all_.end()) {
+        chunk_pool_free_.push_back(p);
+    } else {
+        heap_caps_free(p);
+    }
+}
 
 Esp32Music::~Esp32Music() {
     ESP_LOGI(TAG, "Destroying music player - stopping all operations");
@@ -241,13 +299,75 @@ void Esp32Music::SetMusicEventNextPlay(void)
 {
     xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
 }
+
+
+
+// 添加一个简单的帧头验证函数
+bool Esp32Music::IsValidMp3FrameHeader(uint8_t* header) {
+    if (!header) return false;
+    
+    // 同步字检查 (0xFFF?)
+    if (header[0] != 0xFF || (header[1] & 0xE0) != 0xE0) {
+        return false;
+    }
+    
+    // 检查MPEG版本 (不能是保留值01)
+    uint8_t version = (header[1] >> 3) & 0x03;
+    if (version == 0x01) return false;
+    
+    // 检查层 (不能是保留值00)
+    uint8_t layer = (header[1] >> 1) & 0x03;
+    if (layer == 0x00) return false;
+    
+    // 检查比特率索引 (不能是0000或1111)
+    uint8_t bitrate_index = (header[2] >> 4) & 0x0F;
+    if (bitrate_index == 0x00 || bitrate_index == 0x0F) return false;
+    
+    // 检查采样率索引 (不能是11)
+    uint8_t samplerate_index = (header[2] >> 2) & 0x03;
+    if (samplerate_index == 0x03) return false;
+    
+    return true;
+}
+
+// 修改寻找同步字的逻辑
+int Esp32Music::FindValidMp3SyncWord(uint8_t* data, int data_len) {
+    if (!data || data_len < 4) return -1;
+    
+    // 先尝试原生的 MP3FindSyncWord
+    int sync_offset = MP3FindSyncWord(data, data_len);
+    
+    // 如果找到了，验证帧头
+    if (sync_offset >= 0 && (sync_offset + 4) <= data_len) {
+        if (IsValidMp3FrameHeader(&data[sync_offset])) {
+            return sync_offset;
+        }
+        
+        // 帧头无效，尝试在附近寻找真正的同步字
+        ESP_LOGW(TAG, "Found sync but header invalid, searching nearby...");
+    }
+    
+    // 如果没有找到或者无效，自己搜索
+    for (int i = 0; i <= data_len - 4; i++) {
+        // 快速检查
+        if (data[i] == 0xFF && (data[i+1] & 0xE0) == 0xE0) {
+            // 详细验证
+            if (IsValidMp3FrameHeader(&data[i])) {
+                ESP_LOGI(TAG, "Found valid sync at offset %d (previous was invalid)", i);
+                return i;
+            }
+        }
+    }
+    
+    return -1;
+}
+
 // 流式播放音频数据
 void Esp32Music::PlayAudioStream() {
     ESP_LOGI(TAG, "Starting audio stream playback");
     
     // 初始化时间跟踪变量
     current_play_time_ms_ = 0;
-    last_frame_time_ms_ = 0;
     total_frames_decoded_ = 0;
     
 
@@ -503,13 +623,43 @@ void Esp32Music::PlayAudioStream() {
             }
         }
         
-        // 尝试找到MP3帧同步
-        int sync_offset = MP3FindSyncWord(read_ptr, bytes_left);
+        int sync_offset = FindValidMp3SyncWord(read_ptr, bytes_left);
+        static int resume_fail_count = 0;
         if (sync_offset < 0) {
-            ESP_LOGW(TAG, "No MP3 sync word found, skipping %d bytes", bytes_left);
-            bytes_left = 0;
+            ESP_LOGW(TAG, "No valid MP3 sync word found in %d bytes", bytes_left);
+            
+            // 在断点恢复模式下，更积极地跳过数据
+            
+            
+            if (start_play_offset_ > 0) { // 断点恢复模式
+                resume_fail_count++;
+                
+                if (resume_fail_count > 5) {
+                    ESP_LOGW(TAG, "多次找不到有效同步字，放弃断点恢复");
+                    // 从头开始播放的逻辑
+                    break;
+                }
+                
+                // 跳过更多数据
+                int skip = std::min(2048, bytes_left);
+                if (skip == 0 && bytes_left == 0) {
+                    // 没有数据，等待
+                    std::this_thread::sleep_for(std::chrono::milliseconds(10));
+                    continue;
+                }
+                
+                read_ptr += skip;
+                bytes_left -= skip;
+                ESP_LOGW(TAG, "断点恢复：跳过 %d 字节寻找有效同步字", skip);
+            } else {
+                // 正常播放模式
+                bytes_left = 0;
+            }
             continue;
         }
+
+        // 重置失败计数
+        resume_fail_count = 0;
         
         // 跳过到同步位置
         if (sync_offset > 0) {
@@ -1141,22 +1291,26 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
     }
 
     // 在打开后，如果有请求的 start_play_offset_ 则 seek 到该位置
+    // 断点恢复处理
     {
         std::lock_guard<std::mutex> lock(current_play_file_mutex_);
         if (start_play_offset_ > 0) {
-            ESP_LOGI(TAG, "Seeking SD file %s to offset %d", file_path.c_str(), start_play_offset_);
-            if (fseek(file, start_play_offset_, SEEK_SET) == 0) {
-                current_play_file_offset_ = start_play_offset_;
-                ESP_LOGI(TAG, "Seeked SD file %s to offset %d", file_path.c_str(), start_play_offset_);
+            // 从保存位置回退2KB（为了确保从帧边界开始）
+            size_t safe_offset = (start_play_offset_ > 2048) ? 
+                                start_play_offset_ - 2048 : 0;
+            
+            ESP_LOGI(TAG, "断点恢复：从 %d 回退到 %d", start_play_offset_, safe_offset);
+            
+            if (fseek(file, safe_offset, SEEK_SET) == 0) {
+                current_play_file_offset_ = safe_offset;
             } else {
-                ESP_LOGW(TAG, "Failed to seek SD file to offset %d, starting at 0", start_play_offset_);
+                ESP_LOGW(TAG, "回退失败，从头开始");
                 current_play_file_offset_ = 0;
             }
             start_play_offset_ = 0;
         } else {
             current_play_file_offset_ = 0;
         }
-
         current_play_file_ = file;
     }
     
@@ -2200,18 +2354,20 @@ void Esp32Music::SavePlaybackPosition() {
         std::lock_guard<std::mutex> lock(current_play_file_mutex_);
         file_offset = current_play_file_offset_;
     }
-
+// 对齐到1KB边界（大多数MP3帧是1KB的倍数）
+    size_t aligned_offset = (file_offset / 1024) * 1024;
     int64_t play_ms = current_play_time_ms_;
+    current_play_file_offset_ = aligned_offset;
     Settings settings("music", true);
     settings.SetInt("last_play_index", saved_play_index_);
     settings.SetInt("last_play_ms", static_cast<int32_t>(play_ms));
-    settings.SetInt64("lastfileoffset", (int64_t)file_offset);
+    settings.SetInt64("lastfileoffset", (int64_t)aligned_offset);
     settings.SetString("last_music_name", current_song_name_);
 
     settings.Commit();
 
     ESP_LOGI(TAG, "Saved playback pos: name=%s index=%d ms=%d offset=%d ",
-              current_song_name_.c_str(), saved_play_index_, play_ms, file_offset);
+              current_song_name_.c_str(), saved_play_index_, play_ms, aligned_offset);
 }
 
 bool Esp32Music::ResumeSavedPlayback() {
@@ -2221,8 +2377,7 @@ bool Esp32Music::ResumeSavedPlayback() {
     }
 
     std::string file_path;
-
-
+    
     if (saved_play_index_ < 0 || saved_play_index_ >= ps_music_count_) {
         ESP_LOGW(TAG, "Saved play index out of range: %d", saved_play_index_);
         return false;
@@ -2230,29 +2385,36 @@ bool Esp32Music::ResumeSavedPlayback() {
     file_path = ps_music_library_[saved_play_index_].file_path;
     
 
-    // 优先按字节偏移恢复
-    if (saved_file_offset_ > 0) {
-        ESP_LOGI(TAG, "Resuming '%s' at offset %d", file_path.c_str(), saved_file_offset_);
-        return PlayFromSD(file_path,"", saved_file_offset_);
-    }
+    if(current_play_file_offset_ == 0)
+    {    
+        // 优先按字节偏移恢复
+        if (saved_file_offset_ > 0) {
+            ESP_LOGI(TAG, "Resuming '%s' at offset %d", file_path.c_str(), saved_file_offset_);
+            return PlayFromSD(file_path,"", saved_file_offset_);
+        }
 
-    // 没有偏移但有时间，尝试按时间估算偏移
-    if (saved_play_ms_ > 0) {
-        ESP_LOGI(TAG, "Resuming '%s' at approx time %lld ms", file_path.c_str(), (long long)saved_play_ms_);
-        size_t file_size = get_file_size(file_path);
-        MusicFileInfo info = GetMusicInfo(file_path);
-        int duration_ms = 0;
-        if (info.duration > 0) duration_ms = info.duration * 1000;
-        if (duration_ms > 0 && file_size > 0) {
-            double ratio = double(saved_play_ms_) / double(duration_ms);
-            if (ratio < 0) ratio = 0;
-            if (ratio > 0.99) ratio = 0.99;
-            size_t approx_offset = static_cast<size_t>(file_size * ratio);
-            ESP_LOGI(TAG, "Approximated offset %d (file_size=%zu duration_ms=%d)", approx_offset, file_size, duration_ms);
-            return PlayFromSD(file_path, "", approx_offset);
+        // 没有偏移但有时间，尝试按时间估算偏移
+        if (saved_play_ms_ > 0) {
+            ESP_LOGI(TAG, "Resuming '%s' at approx time %lld ms", file_path.c_str(), (long long)saved_play_ms_);
+            size_t file_size = get_file_size(file_path);
+            MusicFileInfo info = GetMusicInfo(file_path);
+            int duration_ms = 0;
+            if (info.duration > 0) duration_ms = info.duration * 1000;
+            if (duration_ms > 0 && file_size > 0) {
+                double ratio = double(saved_play_ms_) / double(duration_ms);
+                if (ratio < 0) ratio = 0;
+                if (ratio > 0.99) ratio = 0.99;
+                size_t approx_offset = static_cast<size_t>(file_size * ratio);
+                ESP_LOGI(TAG, "Approximated offset %d (file_size=%d duration_ms=%d)", approx_offset, file_size, duration_ms);
+                return PlayFromSD(file_path, "", approx_offset);
+            }
         }
     }
-
+    else
+    {
+        ESP_LOGI(TAG, "Resuming '%s' at current offset %d", file_path.c_str(), current_play_file_offset_);
+        return PlayFromSD(file_path,"", current_play_file_offset_);
+    }
     // 否则从头开始播放
     ESP_LOGI(TAG, "Resume fallback: start from beginning of %s", file_path.c_str());
 
