@@ -379,4 +379,5 @@ public:
 // 全局辅助函数：从文件名或输入中解析出 SongMeta
 SongMeta ParseSongMeta(const std::string& filename);
 std::string NormalizeForSearch(std::string s) ;
+
 #endif // ESP32_MUSIC_H

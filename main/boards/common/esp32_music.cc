@@ -56,21 +56,37 @@ bool Esp32Music::InitChunkPool(size_t count, size_t slot_size) {
     for (size_t i = 0; i < count; ++i) {
         uint8_t* p = (uint8_t*)heap_caps_malloc(slot_size, MALLOC_CAP_SPIRAM);
         if (!p) {
-            ESP_LOGW(TAG, "InitChunkPool: allocation failed at %zu/%zu", i, count);
+            ESP_LOGW(TAG, "InitChunkPool: allocation failed at %d/%d", i, count);
             break;
         }
         chunk_pool_all_.push_back(p);
         chunk_pool_free_.push_back(p);
     }
-    ESP_LOGI(TAG, "InitChunkPool: slots=%zu slot_size=%zu allocated=%zu", count, slot_size, chunk_pool_all_.size());
+    ESP_LOGI(TAG, "InitChunkPool: slots=%d slot_size=%d allocated=%d", count, slot_size, chunk_pool_all_.size());
     return !chunk_pool_all_.empty();
 }
 
 void Esp32Music::DestroyChunkPool() {
     std::lock_guard<std::mutex> lk(chunk_pool_mutex_);
-    for (auto p : chunk_pool_all_) {
-        if (p) heap_caps_free(p);
+
+    if (chunk_pool_all_.empty()) {
+        chunk_pool_slot_size_ = 0;
+        chunk_pool_slot_count_ = 0;
+        ESP_LOGI(TAG, "DestroyChunkPool: pool already empty");
+        return;
     }
+
+    ESP_LOGI(TAG, "DestroyChunkPool: freeing %d slots", chunk_pool_all_.size());
+
+    // 以引用方式释放并把条目标记为 nullptr，避免二次 free
+    for (auto &p : chunk_pool_all_) {
+        if (p) {
+            ESP_LOGD(TAG, "DestroyChunkPool: free %p", p);
+            heap_caps_free(p);
+            p = nullptr;
+        }
+    }
+
     chunk_pool_all_.clear();
     chunk_pool_free_.clear();
     chunk_pool_slot_size_ = 0;
@@ -85,9 +101,11 @@ uint8_t* Esp32Music::AllocChunkFromPool(size_t need_size) {
     if (!chunk_pool_free_.empty() && need_size <= chunk_pool_slot_size_) {
         uint8_t* p = chunk_pool_free_.back();
         chunk_pool_free_.pop_back();
+        // ESP_LOGW(TAG, "AllocChunkFromPool: allocated from pool, need_size=%d", need_size);
         return p;
     }
     // 池空或请求更大，回退到直接分配 SPIRAM
+    ESP_LOGE(TAG, "AllocChunkFromPool: 内存池不足, need_size=%d", need_size);
     return (uint8_t*)heap_caps_malloc(need_size, MALLOC_CAP_SPIRAM);
 }
 
@@ -199,7 +217,8 @@ Esp32Music::~Esp32Music() {
     // 清理缓冲区和MP3解码器
     ClearAudioBuffer();
     CleanupMp3Decoder();
-    
+        // 释放 chunk 池（如果还在）
+    DestroyChunkPool();
     ESP_LOGI(TAG, "Music player destroyed successfully");
 }
 
@@ -290,6 +309,9 @@ bool Esp32Music::StopStreaming() {
     }
         // 清空缓冲区
     ClearAudioBuffer();
+    // 销毁 chunk 池（释放预分配内存）
+    DestroyChunkPool();
+
     ESP_LOGI(TAG, "Music streaming stop signal sent");
     return true;
 }
@@ -619,7 +641,8 @@ void Esp32Music::PlayAudioStream() {
                 }
                 
                 // 释放chunk内存
-                heap_caps_free(chunk.data);
+                // heap_caps_free(chunk.data);
+                ReturnChunkToPool(chunk.data);
             }
         }
         
@@ -939,7 +962,8 @@ void Esp32Music::ClearAudioBuffer() {
         AudioChunk chunk = audio_buffer_.front();
         audio_buffer_.pop();
         if (chunk.data) {
-            heap_caps_free(chunk.data);
+            // heap_caps_free(chunk.data);
+            ReturnChunkToPool(chunk.data);
         }
     }
     
@@ -1256,8 +1280,9 @@ bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
         }
         play_thread_.join();
     }
-    
 
+    // 初始化 chunk 池，减少 heap 分配碎片（70 个 4KB 槽）
+    InitChunkPool(70, 4096+1024);
     
     // 配置线程栈大小
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
@@ -1393,10 +1418,9 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
             current_play_file_offset_ += bytes_read;
         }
 
-        // 创建音频数据块
-        uint8_t* chunk_data = (uint8_t*)heap_caps_malloc(bytes_read, MALLOC_CAP_SPIRAM);
+        uint8_t* chunk_data = AllocChunkFromPool(bytes_read);
         if (!chunk_data) {
-            ESP_LOGE(TAG, "Failed to allocate memory for audio chunk");
+            ESP_LOGE(TAG, "Failed to allocate memory for audio chunk (pool and fallback)");
             break;
         }
         memcpy(chunk_data, buffer, bytes_read);
@@ -1406,10 +1430,6 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
         {
             std::unique_lock<std::mutex> lock(buffer_mutex_);
 
-            // // 改为显式循环 + 带超时的 wait_for，避免把日志放在 predicate 内
-            // auto wait_pred = [this]() {
-            //     return (buffer_size_ < MAX_BUFFER_SIZE) || (!is_downloading_);
-            // };
             buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_; });
             if (is_downloading_) {
                 audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
@@ -1422,7 +1442,7 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
                     ESP_LOGI(TAG, "Read %d bytes from SD, buffer size: %d", total_read, buffer_size_);
                 }
             } else {
-                heap_caps_free(chunk_data);
+                ReturnChunkToPool(chunk_data);
                 break;
             }
         }
