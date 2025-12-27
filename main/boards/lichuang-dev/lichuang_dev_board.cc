@@ -155,12 +155,6 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
 #else
 
 #endif
-        // gpio_config_t io11_conf;
-        // io11_conf.mode = GPIO_MODE_OUTPUT;
-        // io11_conf.pin_bit_mask = 11<<GPIO_NUM_0;
-
-        // // 根据上面的配置 设置GPIO
-        // gpio_config(&io11_conf);
     }
 
     void InitializeSpi() {
@@ -176,44 +170,71 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
 
     void InitializeButtons() {
 
-        //IO6按键
         boot_button_IO6.OnClick([this]() {
             auto& app = Application::GetInstance();
-            int i = 0;
             if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
                 ResetWifiConfiguration();
             }
-        //    
-            auto music = Board::GetMusic();
-            // music->SetMusicEventNextPlay();
-            // music->StopStreaming();
-            std::string msg = "播放下一首";
-            app.SendMessage(msg);
-            // ESP_LOGI(TAG,"%d",++i);
-            
+
+            // 限流：防止连续快速触发导致并发问题（可调整间隔 ms）
+            static std::atomic<int64_t> last_trigger_ms{0};
+            const int64_t min_interval_ms = 3000; // 3000ms 限流
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            int64_t prev = last_trigger_ms.load(std::memory_order_relaxed);
+
+            bool should_send = false;
+            if (now_ms - prev >= min_interval_ms) {
+                // 达到间隔，允许触发并更新时间戳
+                last_trigger_ms.store(now_ms, std::memory_order_relaxed);
+                should_send = true;
+            } else {
+                ESP_LOGW(TAG, "NextPlay ignored due to rapid press");
+                // 不 return，继续执行该回调的其余逻辑（如果有）
+            }
+
+            // 仅在允许时发送“下一首”消息，回调本身不会提前返回
+            if (should_send) {
+                auto music = Board::GetMusic();
+                if (music && music->ReturnMode()) {
+
+                    music->SetMusicEventNextPlay();
+                }
+                else {
+                    app.ToggleChatState();
+                }
+            }
+
+            // 回调其余逻辑（如需）继续放在这里，不会因为限流而被跳过
         });
-        
+                
 
-
+#if !my
         boot_button_Boot_IO0.OnClick([this](){
-            auto music = Board::GetMusic();
-            music->StopStreaming();            
-        });
-        //Boot按键
-        boot_button_Boot_IO0.OnLongPressStart([this](){
             auto& app = Application::GetInstance();
-            app.StartListening();
+            app.ToggleChatState();            
         });
-        boot_button_Boot_IO0.OnPressUp([this](){
-            auto& app = Application::GetInstance();
-            app.StopListening();
-        });
+#endif
+        // //Boot按键
+        // boot_button_Boot_IO0.OnLongPressStart([this](){
+        //     auto& app = Application::GetInstance();
+        //     app.StartListening();
+        // });
+        // boot_button_Boot_IO0.OnPressUp([this](){
+        //     auto& app = Application::GetInstance();
+        //     app.StopListening();
+        // });
 #if CONFIG_USE_DEVICE_AEC
         boot_button_Boot_IO0.OnDoubleClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateIdle) {
-                app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
-            }
+
+                auto music = Board::GetMusic();
+                if (music && music->ReturnMode()) {
+
+                    music->SetMusicEventNextPlay();
+                }
+            // auto& app = Application::GetInstance();
+            // if (app.GetDeviceState() == kDeviceStateIdle) {
+            //     app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
+            // }
         });
 #endif
     }

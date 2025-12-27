@@ -24,6 +24,7 @@ protected:
     uint8_t brightness_ = 0;
     uint8_t target_brightness_ = 0;
     uint8_t step_ = 1;
+    uint8_t init_ = 0;
 };
 
 

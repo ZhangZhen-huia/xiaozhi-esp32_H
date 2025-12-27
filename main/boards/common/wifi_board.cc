@@ -18,7 +18,7 @@
 #include "afsk_demod.h"
 #include "esp_mac.h"
 #include "blufi_wificfg.h"
-#include "ble/ble_wifi_integration.h"
+
 static const char *TAG = "WifiBoard";
 
 WifiBoard::WifiBoard() {
@@ -67,259 +67,241 @@ std::string WifiBoard::GetBoardType() {
     return "wifi";
 }
 
-void WifiBoard::EnterWifiConfigMode() {
-    //     auto& application = Application::GetInstance();
-    // ESP_LOGI(TAG, "Entering WiFi config mode via BLUFI");
-    // application.SetDeviceState(kDeviceStateWifiConfiguring);
-    
-    // application.Alert(Lang::Strings::WIFI_CONFIG_MODE, "请使用赛博星球小程序配网", "", Lang::Sounds::OGG_WIFICONFIG);
-    
-    // vTaskDelay(pdMS_TO_TICKS(2000));
-    // bool is_got_ip = false;
-    // esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, [](void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
-    //     bool *is_got_ip = (bool *)arg;
-    //     *is_got_ip = true;
-    //     auto got_ip = static_cast<ip_event_got_ip_t*>(event_data);
-    //     ESP_LOGI(TAG, "Got IP: " IPSTR ", netmask: " IPSTR ", gw: " IPSTR,
-    //              IP2STR(&got_ip->ip_info.ip), IP2STR(&got_ip->ip_info.netmask), IP2STR(&got_ip->ip_info.gw));
-    // }, &is_got_ip);
-    
-    // uint8_t mac[6];
-    // static char blufi_device_name[20];
-    // esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    // snprintf(blufi_device_name, sizeof(blufi_device_name), "CYBER_%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
-    // ESP_LOGI(TAG, "BLUFI device name: %s", blufi_device_name);
-    
-    // // 用于控制配网流程的状态变量
-    // static bool wifi_config_completed = false;
-    // static bool ota_check_completed = false;
-    // wifi_config_completed = false;
-    // ota_check_completed = false;
-    
-    // blufi_wificfg_cbs_t cbs = {
-    //     .sta_config_cb = [](const wifi_config_t *config, void *arg) {
-    //         ESP_LOGI(TAG, "Received sta config, ssid: %s, password: %s", config->sta.ssid, config->sta.password);
-    //         std::string ssid(reinterpret_cast<const char*>(config->sta.ssid));
-    //         std::string password(reinterpret_cast<const char*>(config->sta.password));
-    //         SsidManager::GetInstance().AddSsid(ssid, password);
-    //         ESP_LOGI(TAG, "SSID stored. Total known SSIDs: %u",
-    //                  static_cast<unsigned>(SsidManager::GetInstance().GetSsidList().size()));
-    //     },
-    //     .custom_data_cb = [](const uint8_t *data, size_t len, void *arg) {
-    //         ESP_LOGI(TAG, "Received custom data (len=%d): %.*s", (int)len, (int)len, data);
-    //         if (strncmp((char *)data, "AT+OTA=", 7) == 0) {
-    //             std::string url(reinterpret_cast<const char*>(data+7), len-7);
-    //             ESP_LOGI(TAG, "ota_url: %s", url.c_str());
-    //             Settings settings("wifi", true);
-    //             settings.SetString("ota_url", url);
-    //         } else if (strncmp((char *)data, "ERROR:", 6) == 0) {
-    //             // 处理从BLUFI层传来的错误消息
-    //             ESP_LOGE(TAG, "BLUFI error: %.*s", (int)(len-6), data+6);
-    //         } else {
-    //             ESP_LOGW(TAG, "Unknown custom data, ignored");
-    //         }
-    //     },
-    //     .error_cb = [](blufi_wificfg_error_t error, const char *message, void *arg) {
-    //         ESP_LOGE(TAG, "BLUFI error callback: error=%d, message=%s", error, message ? message : "NULL");
-    //         // Send error code to app via BLUFI (unified format similar to OTA_CHECK_TIMEOUT)
-    //         if (blufi_wificfg_is_ble_connected()) {
-    //             char error_msg[128];
-    //             switch (error) {
-    //                 case BLUFI_ERROR_WIFI_PASSWORD_WRONG:
-    //                     snprintf(error_msg, sizeof(error_msg), "WIFI_AUTH_FAILED");
-    //                     break;
-    //                 case BLUFI_ERROR_WIFI_NETWORK_UNAVAILABLE:
-    //                     snprintf(error_msg, sizeof(error_msg), "WIFI_NETWORK_UNAVAILABLE");
-    //                     break;
-    //                 case BLUFI_ERROR_WIFI_CONNECTION_TIMEOUT:
-    //                     snprintf(error_msg, sizeof(error_msg), "WIFI_CONNECTION_TIMEOUT");
-    //                     break;
-    //                 case BLUFI_ERROR_BLE_DISCONNECTED:
-    //                     snprintf(error_msg, sizeof(error_msg), "BLE_DISCONNECTED");
-    //                     break;
-    //                 default:
-    //                     snprintf(error_msg, sizeof(error_msg), "WIFI_CONFIG_FAILED");
-    //                     break;
-    //             }
-    //             blufi_wificfg_send_error_message(error_msg);
-    //         }
-    //     }
-    // };
-    // esp_netif_t* existing_sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    // if (existing_sta) {
-    //     ESP_LOGW("BLUFI", "STA netif already exists, destroying it");
-    //     esp_netif_destroy(existing_sta);
-    // }
-    // blufi_wificfg_start(true, blufi_device_name, cbs, this);
-    // ESP_LOGI(TAG, "BLUFI service started, waiting for STA IP...");
-    
-    // // 等待获取IP，增加超时机制
-    // const int IP_WAIT_TIMEOUT_MS = 60000; // 60秒超时
-    // int64_t ip_wait_start = esp_timer_get_time() / 1000;
-    // while (!is_got_ip) {
-    //     // 检查BLE是否仍然连接
-    //     if (!blufi_wificfg_is_ble_connected()) {
-    //         ESP_LOGW(TAG, "BLE disconnected while waiting for IP, will continue waiting for reconnection");
-    //     }
-        
-    //     // 检查超时
-    //     int64_t elapsed = (esp_timer_get_time() / 1000) - ip_wait_start;
-    //     if (elapsed > IP_WAIT_TIMEOUT_MS) {
-    //         ESP_LOGE(TAG, "Timeout waiting for IP address");
-    //         if (blufi_wificfg_is_ble_connected()) {
-    //             blufi_wificfg_send_error_message("WIFI_IP_TIMEOUT");
-    //         }
-    //         // 不立即退出，允许继续等待或重试
-    //         ip_wait_start = esp_timer_get_time() / 1000; // 重置超时计时
-    //     }
-        
-    //     vTaskDelay(pdMS_TO_TICKS(500));
-    //     ESP_LOGD(TAG, "Waiting for IP via BLUFI STA connection...");
-    // }
-    
-    // wifi_config_completed = true;
-    // ESP_LOGI(TAG, "WiFi configuration completed, starting OTA check...");
-    
-    // // 如果BLE已断开，等待重新连接
-    // if (!blufi_wificfg_is_ble_connected()) {
-    //     ESP_LOGW(TAG, "BLE disconnected after WiFi config, waiting for reconnection before OTA check");
-    //     int reconnect_timeout = 30000; // 30秒等待重连
-    //     int64_t reconnect_start = esp_timer_get_time() / 1000;
-    //     while (!blufi_wificfg_is_ble_connected()) {
-    //         int64_t elapsed = (esp_timer_get_time() / 1000) - reconnect_start;
-    //         if (elapsed > reconnect_timeout) {
-    //             ESP_LOGE(TAG, "BLE reconnection timeout, proceeding with OTA check anyway");
-    //             break;
-    //         }
-    //         vTaskDelay(pdMS_TO_TICKS(500));
-    //     }
-    // }
-    
-    // Ota ota;
-    // const int MAX_RETRY = 10;
-    // int retry_count = 0;
-    // int retry_delay = 5; // 初始重试延迟为5秒
-    // const int OTA_CHECK_TIMEOUT_MS = 60000; // OTA检查总超时60秒
-    // int64_t ota_check_start = esp_timer_get_time() / 1000;
-    
-    // while (true) {
-    //     // 检查总超时
-    //     int64_t elapsed = (esp_timer_get_time() / 1000) - ota_check_start;
-    //     if (elapsed > OTA_CHECK_TIMEOUT_MS) {
-    //         ESP_LOGE(TAG, "OTA check total timeout after %lld ms", elapsed);
-    //         if (blufi_wificfg_is_ble_connected()) {
-    //             // Keep OTA_CHECK_TIMEOUT for compatibility, and align error code format as well
-    //             blufi_wificfg_send_error_message("OTA_CHECK_TIMEOUT");
-    //             blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_TIMEOUT", strlen("OTA_CHECK_TIMEOUT"));
-    //         }
-    //         ResetWifiConfiguration();
-    //         return;
-    //     }
-        
-    //     // 检查BLE连接状态
-    //     if (!blufi_wificfg_is_ble_connected()) {
-    //         ESP_LOGW(TAG, "BLE disconnected during OTA check, waiting for reconnection...");
-    //         int reconnect_timeout = 10000; // 10秒等待重连
-    //         int64_t reconnect_start = esp_timer_get_time() / 1000;
-    //         while (!blufi_wificfg_is_ble_connected()) {
-    //             int64_t reconnect_elapsed = (esp_timer_get_time() / 1000) - reconnect_start;
-    //             if (reconnect_elapsed > reconnect_timeout) {
-    //                 ESP_LOGW(TAG, "BLE reconnection timeout, continuing OTA check");
-    //                 break;
-    //             }
-    //             vTaskDelay(pdMS_TO_TICKS(500));
-    //         }
-    //     }
-        
-    //     if (!ota.CheckVersion()) {
-    //         retry_count++;
-    //         if (retry_count >= MAX_RETRY) {
-    //             ESP_LOGE(TAG, "Too many retries, exit version check");
-    //             if (blufi_wificfg_is_ble_connected()) {
-    //                 blufi_wificfg_send_error_message("OTA_CHECK_FAILED_TOO_MANY_RETRIES");
-    //                 blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_FAILED", strlen("OTA_CHECK_FAILED"));
-    //             }
-    //             ResetWifiConfiguration();
-    //             return;
-    //         }
-            
-    //         ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
-    //         if (blufi_wificfg_is_ble_connected()) {
-    //             char retry_msg[64];
-    //             snprintf(retry_msg, sizeof(retry_msg), "OTA_CHECK_RETRY:%d/%d", retry_count, MAX_RETRY);
-    //             blufi_wificfg_send_custom((uint8_t *)retry_msg, strlen(retry_msg));
-    //         }
-            
-    //         // 在重试等待期间检查BLE连接
-    //         for (int i = 0; i < retry_delay; i++) {
-    //             if (!blufi_wificfg_is_ble_connected()) {
-    //                 ESP_LOGD(TAG, "BLE disconnected during retry wait");
-    //             }
-    //             vTaskDelay(pdMS_TO_TICKS(1000));
-    //         }
-    //         retry_delay = (retry_delay < 30) ? retry_delay * 2 : 30; // 最大延迟30秒
-    //         continue;
-    //     }
-        
-    //     ESP_LOGI(TAG, "OTA check success");
-    //     ota_check_completed = true;
-        
-    //     // Copy out the activation code to avoid referencing a potentially empty/invalid C-string
-    //     std::string code = ota.GetActivationCode();
-    //     // Avoid printing string content to keep logging safe even if data is malformed
-    //     ESP_LOGI(TAG, "Activation code len=%u, empty=%s",
-    //              static_cast<unsigned>(code.length()),
-    //              code.empty() ? "true" : "false");
-
-    //     // 如果获取到版本号信息，则视为联网成功，忽略激活码
-    //     const std::string firmware_version = ota.GetFirmwareVersion();
-    //     if (!firmware_version.empty()) {
-    //         if (blufi_wificfg_is_ble_connected()) {
-    //             esp_err_t err = blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_SUCCESS", strlen("OTA_CHECK_SUCCESS"));
-    //             if (err != ESP_OK) {
-    //                 ESP_LOGE(TAG, "Failed to send OTA_CHECK_SUCCESS to BLUFI, error: %d", err);
-    //             } else {
-    //                 ESP_LOGI(TAG, "Sent OTA_CHECK_SUCCESS to BLUFI");
-    //             }
-    //         }
-    //         ESP_LOGI(TAG, "Firmware version \"%s\" received, treating WiFi config as success, rebooting...",
-    //                  firmware_version.c_str());
-    //         vTaskDelay(pdMS_TO_TICKS(500)); // 给BLE时间发送消息
-    //         esp_restart();
-    //     } else {
-    //         if (blufi_wificfg_is_ble_connected()) {
-    //             esp_err_t err = blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_FAILED", strlen("OTA_CHECK_FAILED"));
-    //             if (err != ESP_OK) {
-    //                 ESP_LOGE(TAG, "Failed to send OTA_CHECK_FAILED to BLUFI, error: %d", err);
-    //             } else {
-    //                 ESP_LOGI(TAG, "Sent OTA_CHECK_FAILED to BLUFI");
-    //             }
-    //         }
-    //         ESP_LOGI(TAG, "Firmware version missing, treating WiFi config as failed, rebooting...");
-    //         vTaskDelay(pdMS_TO_TICKS(500)); // 给BLE时间发送消息
-    //         esp_restart();
-    //     }
-    // }
+void WifiBoard::EnterWifiConfigMode() {  
     auto& application = Application::GetInstance();
+    ESP_LOGI(TAG, "Entering WiFi config mode via BLUFI");
     application.SetDeviceState(kDeviceStateWifiConfiguring);
-
-    esp_timer_stop(clock_timer_OnConnecthandle_);
     
-    BleWifiIntegration::StartBleWifiConfig();
-
-    // 等待 1.5 秒显示开发板信息
-    vTaskDelay(pdMS_TO_TICKS(1500));
-
-    esp_timer_start_periodic(clock_timer_handle_, 1000000*10); // 每10秒提醒一次
-
-
+    application.Alert(Lang::Strings::WIFI_CONFIG_MODE, "请使用赛博星球小程序配网", "", Lang::Sounds::OGG_WIFICONFIG);
     
-    // Wait forever until reset after configuration
+    vTaskDelay(pdMS_TO_TICKS(2000));
+    bool is_got_ip = false;
+    esp_event_handler_register(IP_EVENT, IP_EVENT_STA_GOT_IP, [](void* arg, esp_event_base_t event_base, int32_t event_id, void* event_data){
+        bool *is_got_ip = (bool *)arg;
+        *is_got_ip = true;
+        auto got_ip = static_cast<ip_event_got_ip_t*>(event_data);
+        ESP_LOGI(TAG, "Got IP: " IPSTR ", netmask: " IPSTR ", gw: " IPSTR,
+                 IP2STR(&got_ip->ip_info.ip), IP2STR(&got_ip->ip_info.netmask), IP2STR(&got_ip->ip_info.gw));
+    }, &is_got_ip);
+    
+    uint8_t mac[6];
+    static char blufi_device_name[20];
+    esp_read_mac(mac, ESP_MAC_WIFI_STA);
+    snprintf(blufi_device_name, sizeof(blufi_device_name), "CYBER_%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    ESP_LOGI(TAG, "BLUFI device name: %s", blufi_device_name);
+    
+    // 用于控制配网流程的状态变量
+    static bool wifi_config_completed = false;
+    static bool ota_check_completed = false;
+    wifi_config_completed = false;
+    ota_check_completed = false;
+    
+    blufi_wificfg_cbs_t cbs = {
+        .sta_config_cb = [](const wifi_config_t *config, void *arg) {
+            ESP_LOGI(TAG, "Received sta config, ssid: %s, password: %s", config->sta.ssid, config->sta.password);
+            std::string ssid(reinterpret_cast<const char*>(config->sta.ssid));
+            std::string password(reinterpret_cast<const char*>(config->sta.password));
+            SsidManager::GetInstance().AddSsid(ssid, password);
+            ESP_LOGI(TAG, "SSID stored. Total known SSIDs: %u",
+                     static_cast<unsigned>(SsidManager::GetInstance().GetSsidList().size()));
+        },
+        .custom_data_cb = [](const uint8_t *data, size_t len, void *arg) {
+            ESP_LOGI(TAG, "Received custom data (len=%d): %.*s", (int)len, (int)len, data);
+            if (strncmp((char *)data, "AT+OTA=", 7) == 0) {
+                std::string url(reinterpret_cast<const char*>(data+7), len-7);
+                ESP_LOGI(TAG, "ota_url: %s", url.c_str());
+                Settings settings("wifi", true);
+                settings.SetString("ota_url", url);
+            } else if (strncmp((char *)data, "ERROR:", 6) == 0) {
+                // 处理从BLUFI层传来的错误消息
+                ESP_LOGE(TAG, "BLUFI error: %.*s", (int)(len-6), data+6);
+            } else {
+                ESP_LOGW(TAG, "Unknown custom data, ignored");
+            }
+        },
+        .error_cb = [](blufi_wificfg_error_t error, const char *message, void *arg) {
+            ESP_LOGE(TAG, "BLUFI error callback: error=%d, message=%s", error, message ? message : "NULL");
+            // Send error code to app via BLUFI (unified format similar to OTA_CHECK_TIMEOUT)
+            if (blufi_wificfg_is_ble_connected()) {
+                char error_msg[128];
+                switch (error) {
+                    case BLUFI_ERROR_WIFI_PASSWORD_WRONG:
+                        snprintf(error_msg, sizeof(error_msg), "WIFI_AUTH_FAILED");
+                        break;
+                    case BLUFI_ERROR_WIFI_NETWORK_UNAVAILABLE:
+                        snprintf(error_msg, sizeof(error_msg), "WIFI_NETWORK_UNAVAILABLE");
+                        break;
+                    case BLUFI_ERROR_WIFI_CONNECTION_TIMEOUT:
+                        snprintf(error_msg, sizeof(error_msg), "WIFI_CONNECTION_TIMEOUT");
+                        break;
+                    case BLUFI_ERROR_BLE_DISCONNECTED:
+                        snprintf(error_msg, sizeof(error_msg), "BLE_DISCONNECTED");
+                        break;
+                    default:
+                        snprintf(error_msg, sizeof(error_msg), "WIFI_CONFIG_FAILED");
+                        break;
+                }
+                blufi_wificfg_send_error_message(error_msg);
+            }
+        }
+    };
+
+    esp_netif_t* existing_sta = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (existing_sta) {
+        ESP_LOGW("BLUFI", "STA netif already exists, destroying it");
+        esp_netif_destroy(existing_sta);
+    }
+    blufi_wificfg_start(true, blufi_device_name, cbs, this);
+    ESP_LOGI(TAG, "BLUFI service started, waiting for STA IP...");
+    
+    // 等待获取IP，增加超时机制
+    const int IP_WAIT_TIMEOUT_MS = 60000; // 60秒超时
+    int64_t ip_wait_start = esp_timer_get_time() / 1000;
+    while (!is_got_ip) {
+        // 检查BLE是否仍然连接
+        if (!blufi_wificfg_is_ble_connected()) {
+            ESP_LOGW(TAG, "BLE disconnected while waiting for IP, will continue waiting for reconnection");
+        }
+        
+        // 检查超时
+        int64_t elapsed = (esp_timer_get_time() / 1000) - ip_wait_start;
+        if (elapsed > IP_WAIT_TIMEOUT_MS) {
+            ESP_LOGE(TAG, "Timeout waiting for IP address");
+            if (blufi_wificfg_is_ble_connected()) {
+                blufi_wificfg_send_error_message("WIFI_IP_TIMEOUT");
+            }
+            // 不立即退出，允许继续等待或重试
+            ip_wait_start = esp_timer_get_time() / 1000; // 重置超时计时
+        }
+        
+        vTaskDelay(pdMS_TO_TICKS(500));
+        ESP_LOGD(TAG, "Waiting for IP via BLUFI STA connection...");
+    }
+    
+    wifi_config_completed = true;
+    ESP_LOGI(TAG, "WiFi configuration completed, starting OTA check...");
+    
+    // 如果BLE已断开，等待重新连接
+    if (!blufi_wificfg_is_ble_connected()) {
+        ESP_LOGW(TAG, "BLE disconnected after WiFi config, waiting for reconnection before OTA check");
+        int reconnect_timeout = 30000; // 30秒等待重连
+        int64_t reconnect_start = esp_timer_get_time() / 1000;
+        while (!blufi_wificfg_is_ble_connected()) {
+            int64_t elapsed = (esp_timer_get_time() / 1000) - reconnect_start;
+            if (elapsed > reconnect_timeout) {
+                ESP_LOGE(TAG, "BLE reconnection timeout, proceeding with OTA check anyway");
+                break;
+            }
+            vTaskDelay(pdMS_TO_TICKS(500));
+        }
+    }
+    
+    Ota ota;
+    const int MAX_RETRY = 10;
+    int retry_count = 0;
+    int retry_delay = 5; // 初始重试延迟为5秒
+    const int OTA_CHECK_TIMEOUT_MS = 60000; // OTA检查总超时60秒
+    int64_t ota_check_start = esp_timer_get_time() / 1000;
+    
     while (true) {
-        vTaskDelay(pdMS_TO_TICKS(10000));
+        // 检查总超时
+        int64_t elapsed = (esp_timer_get_time() / 1000) - ota_check_start;
+        if (elapsed > OTA_CHECK_TIMEOUT_MS) {
+            ESP_LOGE(TAG, "OTA check total timeout after %lld ms", elapsed);
+            if (blufi_wificfg_is_ble_connected()) {
+                // Keep OTA_CHECK_TIMEOUT for compatibility, and align error code format as well
+                blufi_wificfg_send_error_message("OTA_CHECK_TIMEOUT");
+                blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_TIMEOUT", strlen("OTA_CHECK_TIMEOUT"));
+            }
+            ResetWifiConfiguration();
+            return;
+        }
+        
+        // 检查BLE连接状态
+        if (!blufi_wificfg_is_ble_connected()) {
+            ESP_LOGW(TAG, "BLE disconnected during OTA check, waiting for reconnection...");
+            int reconnect_timeout = 10000; // 10秒等待重连
+            int64_t reconnect_start = esp_timer_get_time() / 1000;
+            while (!blufi_wificfg_is_ble_connected()) {
+                int64_t reconnect_elapsed = (esp_timer_get_time() / 1000) - reconnect_start;
+                if (reconnect_elapsed > reconnect_timeout) {
+                    ESP_LOGW(TAG, "BLE reconnection timeout, continuing OTA check");
+                    break;
+                }
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
+        }
+        
+        if (!ota.CheckVersion()) {
+            retry_count++;
+            if (retry_count >= MAX_RETRY) {
+                ESP_LOGE(TAG, "Too many retries, exit version check");
+                if (blufi_wificfg_is_ble_connected()) {
+                    blufi_wificfg_send_error_message("OTA_CHECK_FAILED_TOO_MANY_RETRIES");
+                    blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_FAILED", strlen("OTA_CHECK_FAILED"));
+                }
+                ResetWifiConfiguration();
+                return;
+            }
+            
+            ESP_LOGW(TAG, "Check new version failed, retry in %d seconds (%d/%d)", retry_delay, retry_count, MAX_RETRY);
+            if (blufi_wificfg_is_ble_connected()) {
+                char retry_msg[64];
+                snprintf(retry_msg, sizeof(retry_msg), "OTA_CHECK_RETRY:%d/%d", retry_count, MAX_RETRY);
+                blufi_wificfg_send_custom((uint8_t *)retry_msg, strlen(retry_msg));
+            }
+            
+            // 在重试等待期间检查BLE连接
+            for (int i = 0; i < retry_delay; i++) {
+                if (!blufi_wificfg_is_ble_connected()) {
+                    ESP_LOGD(TAG, "BLE disconnected during retry wait");
+                }
+                vTaskDelay(pdMS_TO_TICKS(1000));
+            }
+            retry_delay = (retry_delay < 30) ? retry_delay * 2 : 30; // 最大延迟30秒
+            continue;
+        }
+        
+        ESP_LOGI(TAG, "OTA check success");
+        ota_check_completed = true;
+        
+        // Copy out the activation code to avoid referencing a potentially empty/invalid C-string
+        std::string code = ota.GetActivationCode();
+        // Avoid printing string content to keep logging safe even if data is malformed
+        ESP_LOGI(TAG, "Activation code len=%u, empty=%s",
+                 static_cast<unsigned>(code.length()),
+                 code.empty() ? "true" : "false");
+
+        // 如果获取到版本号信息，则视为联网成功，忽略激活码
+        const std::string firmware_version = ota.GetFirmwareVersion();
+        if (!firmware_version.empty()) {
+            if (blufi_wificfg_is_ble_connected()) {
+                esp_err_t err = blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_SUCCESS", strlen("OTA_CHECK_SUCCESS"));
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to send OTA_CHECK_SUCCESS to BLUFI, error: %d", err);
+                } else {
+                    ESP_LOGI(TAG, "Sent OTA_CHECK_SUCCESS to BLUFI");
+                }
+            }
+            ESP_LOGI(TAG, "Firmware version \"%s\" received, treating WiFi config as success, rebooting...",
+                     firmware_version.c_str());
+            vTaskDelay(pdMS_TO_TICKS(500)); // 给BLE时间发送消息
+            esp_restart();
+        } else {
+            if (blufi_wificfg_is_ble_connected()) {
+                esp_err_t err = blufi_wificfg_send_custom((uint8_t *)"OTA_CHECK_FAILED", strlen("OTA_CHECK_FAILED"));
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Failed to send OTA_CHECK_FAILED to BLUFI, error: %d", err);
+                } else {
+                    ESP_LOGI(TAG, "Sent OTA_CHECK_FAILED to BLUFI");
+                }
+            }
+            ESP_LOGI(TAG, "Firmware version missing, treating WiFi config as failed, rebooting...");
+            vTaskDelay(pdMS_TO_TICKS(500)); // 给BLE时间发送消息
+            esp_restart();
+        }
     }
 }
-
 
 
 
@@ -330,7 +312,14 @@ void WifiBoard::StartNetwork() {
         return;
     }
 
-
+    // If no WiFi SSID is configured, enter WiFi configuration mode
+    auto& ssid_manager = SsidManager::GetInstance();
+    auto ssid_list = ssid_manager.GetSsidList();
+    if (ssid_list.empty()) {
+        wifi_config_mode_ = true;
+        EnterWifiConfigMode();
+        return;
+    }
 
     auto& wifi_station = WifiStation::GetInstance();
     wifi_station.OnScanBegin([this]() {
@@ -352,87 +341,14 @@ void WifiBoard::StartNetwork() {
     });
     wifi_station.Start();
 
-    // If no WiFi SSID is configured, enter WiFi configuration mode
-    auto& ssid_manager = SsidManager::GetInstance();
-    auto ssid_list = ssid_manager.GetSsidList();
-    if (ssid_list.empty()) {
-        wifi_config_mode_ = true;
-        EnterWifiConfigMode();
-        return;
-    }
-    
-    // Try to connect to WiFi, if failed, launch the WiFi configuration AP
-    if (!wifi_station.WaitForConnected(10 * 1000)) {
-        wifi_station.Stop();
+    //超时重新配网
+    if (!wifi_station.WaitForConnected(60 * 1000)) {
+        // wifi_station.Stop();
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
         return;
     }
 }
-
-// void WifiBoard::StartNetwork() {
-//     // User can press BOOT button while starting to enter WiFi configuration mode
-//     //配网模式
-//     if (wifi_config_mode_) {
-//         EnterWifiConfigMode();
-//         return;
-//     }
-
-
-
-//     //建立wifi客户端并开始连接读取到的wifi ssid
-//     auto& wifi_station = WifiStation::GetInstance();
-//     wifi_station.OnScanBegin([this]() {
-//         auto display = Board::GetInstance().GetDisplay();
-//         display->ShowNotification(Lang::Strings::SCANNING_WIFI, 30000);
-//     });
-//     wifi_station.OnConnect([this](const std::string& ssid) {
-//         auto display = Board::GetInstance().GetDisplay();
-//         std::string notification = Lang::Strings::CONNECT_TO;
-//         notification += ssid;
-//         notification += "...";
-//         display->ShowNotification(notification.c_str(), 30000);
-//         esp_timer_start_once(clock_timer_OnConnecthandle_, 1000000*2); // 每2秒提醒一次
-//     });
-//     wifi_station.OnConnected([this](const std::string& ssid) {
-//         esp_timer_stop(clock_timer_handle_);
-//         auto display = Board::GetInstance().GetDisplay();
-//         std::string notification = Lang::Strings::CONNECTED_TO;
-//         notification += ssid;
-//         display->ShowNotification(notification.c_str(), 30000);
-//         auto& application = Application::GetInstance();
-//         esp_timer_stop(clock_timer_OnConnecthandle_);
-//         if(kDeviceStateWifiConfiguring == application.GetDeviceState())
-//         {
-//             esp_restart();
-//         }
-
-//     });
-//     wifi_station.Start();
-
-//     // If no WiFi SSID is configured, enter WiFi configuration mode
-//     //从NVS中读取已保存的WiFi SSID
-//     auto& ssid_manager = SsidManager::GetInstance();
-//     auto ssid_list = ssid_manager.GetSsidList();
-
-//     //如果没有已保存的WiFi SSID，进入WiFi配置模式
-//     if (ssid_list.empty()) {
-//         wifi_config_mode_ = true;
-
-//         EnterWifiConfigMode();
-//         return;
-//     }
-    
-//     // Try to connect to WiFi, if failed, launch the WiFi configuration AP
-//     //超时就重新开始配网
-//     if (!wifi_station.WaitForConnected(10 * 1000)) {
-
-//         wifi_station.Stop();
-//         wifi_config_mode_ = true;
-//         EnterWifiConfigMode();
-//         return;
-//     }
-// }
 
 NetworkInterface* WifiBoard::GetNetwork() {
     static EspNetwork network;

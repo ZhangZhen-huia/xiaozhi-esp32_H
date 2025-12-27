@@ -16,7 +16,7 @@
 #include "audio_service.h"
 #include "device_state_event.h"
 
-#define my 1
+#define my 0
 
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)

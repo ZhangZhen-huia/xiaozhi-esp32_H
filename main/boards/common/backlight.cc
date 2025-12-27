@@ -20,6 +20,7 @@ Backlight::Backlight() {
         .skip_unhandled_events = true,
     };
     ESP_ERROR_CHECK(esp_timer_create(&timer_args, &transition_timer_));
+    
 }
 
 Backlight::~Backlight() {
@@ -97,10 +98,11 @@ PwmBacklight::PwmBacklight(gpio_num_t pin, bool output_invert, uint32_t freq_hz)
         .duty = 0,
         .hpoint = 0,
         .flags = {
-            .output_invert = output_invert,
+            .output_invert = !output_invert,
         }
     };
     ESP_ERROR_CHECK(ledc_channel_config(&backlight_channel));
+
 }
 
 PwmBacklight::~PwmBacklight() {

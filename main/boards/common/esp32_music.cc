@@ -319,6 +319,9 @@ bool Esp32Music::StopStreaming() {
 
 void Esp32Music::SetMusicEventNextPlay(void)
 {
+    ManualNextPlay_ = true;
+    StopStreaming();
+    vTaskDelay(pdMS_TO_TICKS(1000));
     xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
 }
 
@@ -391,7 +394,7 @@ void Esp32Music::PlayAudioStream() {
     // 初始化时间跟踪变量
     current_play_time_ms_ = 0;
     total_frames_decoded_ = 0;
-    
+    ManualNextPlay_ = false;
 
     auto codec = Board::GetInstance().GetAudioCodec();
     if (!codec || !codec->output_enabled()) {
@@ -495,6 +498,7 @@ void Esp32Music::PlayAudioStream() {
                         break;
                     }
 
+                    // 如果处于“聆听”状态，启动计时；若处于“说话”状态也重置计时（不计时）
                     if (current_state == kDeviceStateListening) {
                         if (listening_start == steady_clock::time_point::min()) {
                             listening_start = steady_clock::now();
@@ -509,8 +513,12 @@ void Esp32Music::PlayAudioStream() {
                                 break;
                             }
                         }
+                    } else if (current_state == kDeviceStateSpeaking) {
+                        // 处于说话状态时重置计时，不触发自动恢复
+                        listening_start = steady_clock::time_point::min();
+                        ESP_LOGD(TAG, "Device speaking: reset listening timer");
                     } else {
-                        // 非聆听状态时重置计时器
+                        // 非聆听/说话状态时重置计时器
                         listening_start = steady_clock::time_point::min();
                     }
 
@@ -530,7 +538,6 @@ void Esp32Music::PlayAudioStream() {
                 // codec/采样率恢复由 ResumePlayback() 负责
             }
         }
-
 
         if (previous_state == kDeviceStateIdle && current_state != kDeviceStateIdle) {
             ESP_LOGI(TAG, "Device state changed from IDLE to %d, pausing playback", current_state);
@@ -866,7 +873,8 @@ void Esp32Music::PlayAudioStream() {
     }
 
     auto state = app.GetDeviceState();
-    if(state == kDeviceStateIdle){
+    if(state == kDeviceStateIdle && !ManualNextPlay_){
+        ESP_LOGI(TAG, "Device is idle, preparing to play next track");
         xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
         // if(IfNodeIsEnd())
         // {
@@ -968,6 +976,7 @@ void Esp32Music::ClearAudioBuffer() {
     }
     
     buffer_size_ = 0;
+    CleanupMp3Decoder();
     ESP_LOGI(TAG, "Audio buffer cleared");
 }
 
@@ -1257,7 +1266,7 @@ bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
         return false;
     }
     
-
+    InitializeMp3Decoder();
 
     ESP_LOGD(TAG, "Starting SD card streaming for: %s", file_path.c_str());
     
@@ -1281,8 +1290,8 @@ bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
         play_thread_.join();
     }
 
-    // 初始化 chunk 池，减少 heap 分配碎片（70 个 4KB 槽）
-    InitChunkPool(70, 4096+1024);
+    // 初始化 chunk 池，减少 heap 分配碎片（100 个 5KB 槽）
+    InitChunkPool(100, 5120);
     
     // 配置线程栈大小
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();

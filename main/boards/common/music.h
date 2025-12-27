@@ -60,7 +60,9 @@ public:
     virtual void SetRandomMode(bool random) = 0;
     virtual void SetOnceMode(bool once) = 0;
     virtual void SetOrderMode(bool order) = 0;
-    
+
+    virtual bool ReturnMode(void) =0;
+    virtual void SetMode(bool a) =0;
     virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
     virtual size_t GetMusicCount() const = 0;
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const =0;

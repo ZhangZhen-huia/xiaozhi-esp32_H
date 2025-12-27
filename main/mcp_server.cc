@@ -76,7 +76,6 @@ void McpServer::AddCommonTools() {
             [backlight,music](const PropertyList& properties) -> ReturnValue {
                 uint8_t brightness = static_cast<uint8_t>(properties["brightness"].value<int>());
                 backlight->SetBrightness(brightness, true);
-                // music->SetPauseState(false);
                 music->ResumePlayback();
                 return true;
             });
@@ -149,7 +148,7 @@ void McpServer::AddCommonTools() {
                     std::string now_playing; // 要返回给调用方的播放提示
 
                     if((song_name.empty() && singer.empty()) || !goon.empty()) {
-                        
+                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->ResumePlayback();
@@ -174,6 +173,7 @@ void McpServer::AddCommonTools() {
                     }
                     else if(!song_name.empty() && singer.empty())
                     {
+                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->StopStreaming(); // 停止当前播放
@@ -203,6 +203,7 @@ void McpServer::AddCommonTools() {
                     }
                     else if(!singer.empty() && song_name.empty())
                     {
+                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->StopStreaming(); // 停止当前播放
@@ -252,6 +253,7 @@ void McpServer::AddCommonTools() {
                     }
                     else
                     {
+                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->StopStreaming(); // 停止当前播放
@@ -935,6 +937,7 @@ void McpServer::AddCommonTools() {
                 "当用户说停止播放音乐或者停止播放故事的时候调用，你需要立刻停止播放音乐或者故事，然后返回播放停止的状态",
                 PropertyList(),
                 [music](const PropertyList& properties) -> ReturnValue {
+                    music->SetMode(false);
                     music->StopStreaming(); // 停止当前播放
                     return "{\"success\": true, \"message\": \"已停止播放\"}";
                 });

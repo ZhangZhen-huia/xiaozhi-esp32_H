@@ -17,7 +17,6 @@
 #include <arpa/inet.h>
 #include <font_awesome.h>
 #include "wifi_board.h"
-#include "ble/ble_wifi_integration.h"
 #include <ssid_manager.h>
 #include "wifi_station.h"
 #include <esp_netif.h>
@@ -74,8 +73,8 @@ Application::Application() {
     esp_timer_create_args_t clock_Offlinetimer_args = {
         .callback = [](void* arg) {
             Application* app = (Application*)arg;
-            ESP_LOGI(TAG, "Offline tick");
             app->Offline_ticks_++;
+            ESP_LOGI(TAG, "Offline tick: %d", app->Offline_ticks_);
         },
         .arg = this,
         .dispatch_method = ESP_TIMER_TASK,
@@ -653,7 +652,7 @@ void Application::Start() {
     }
     
     device_Role = Role_Xiaozhi;
-    std::string msg = "静默调用notice工具";
+    std::string msg = "向用户问好";
     SendMessage(msg);
 }
 
@@ -777,7 +776,7 @@ void Application::MainEventLoop() {
             auto display = Board::GetInstance().GetDisplay();
             display->UpdateStatusBar();
             auto& wifi_station = WifiStation::GetInstance();
-            if(wifi_station.IsConnected() && (clock_ticks_ % 60 == 0))
+            if(wifi_station.IsConnected() && (clock_ticks_ % 10 == 0))
             {
                 auto Rssi = wifi_station.GetRssi();
                 ESP_LOGI(TAG,"Rssi:%d dBm",Rssi);
@@ -802,9 +801,10 @@ void Application::MainEventLoop() {
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
                 SystemInfo::PrintHeapStats();
             }   
-            if(Offline_ticks_>=5)         
+            if(Offline_ticks_>=10)         
             {
                 Offline_ticks_=0;
+                esp_timer_stop(clock_Offlinetimer_handle_);
                 SetDeviceState(kDeviceStateWifiConfiguring);
             }
         }
@@ -880,6 +880,7 @@ void Application::SetDeviceState(DeviceState state) {
     auto display = board.GetDisplay();
     auto led = board.GetLed();
     led->OnStateChanged();
+    auto& wifi_station = WifiStation::GetInstance();
 
     //  // 当从idle状态变成其他任何状态时，停止音乐播放
     // if (previous_state == kDeviceStateIdle && state != kDeviceStateIdle) {
@@ -928,6 +929,7 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.ResetDecoder();
             break;
         case kDeviceStateWifiConfiguring:
+                wifi_station.Stop(); // 停止当前WiFi连接
                 board.EnterWifiConfigMode();
                 break;
         default:

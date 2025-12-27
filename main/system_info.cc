@@ -152,7 +152,9 @@ void SystemInfo::PrintHeapStats() {
 
     size_t used_psram = heap_caps_get_total_size(MALLOC_CAP_SPIRAM) -
                     heap_caps_get_free_size(MALLOC_CAP_SPIRAM);
-    ESP_LOGI("PSRAM", "used %u  / %u ",
+    size_t min_free_psram = heap_caps_get_minimum_free_size(MALLOC_CAP_SPIRAM);
+    ESP_LOGI("PSRAM", "used %u  / %u    minimum free %u",
         used_psram,
-        heap_caps_get_total_size(MALLOC_CAP_SPIRAM));
+        heap_caps_get_total_size(MALLOC_CAP_SPIRAM),
+        min_free_psram);
 }

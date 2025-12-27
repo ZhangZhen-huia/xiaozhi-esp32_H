@@ -84,6 +84,7 @@ public:
 
 private:
 
+    bool mode = false;
     // 固定池（环形/slot）用于存放从SD读到的原始块，避免频繁malloc/free导致碎片
     std::vector<uint8_t*> chunk_pool_all_;
     std::vector<uint8_t*> chunk_pool_free_;
@@ -154,6 +155,7 @@ private:
     std::atomic<bool> is_paused_;
     std::atomic<bool> is_first_play_;
     std::atomic<bool> is_downloading_;
+    std::atomic<bool> ManualNextPlay_;
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
@@ -297,6 +299,8 @@ public:
     virtual void SetPlayIndex(const std::string& playlist_name, int index)override;
     virtual void NextPlayIndexOrder(std::string& playlist_name)override;
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
+    virtual bool ReturnMode(void)override{return  mode;}
+    virtual void SetMode(bool a)override{mode = a;}
 
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;
