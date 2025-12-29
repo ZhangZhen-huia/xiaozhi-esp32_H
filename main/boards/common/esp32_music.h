@@ -152,7 +152,9 @@ private:
     std::atomic<PlaybackMode> StoryPlayback_mode_ = PLAYBACK_MODE_ORDER;
 
     std::atomic<bool> is_playing_;
-    std::atomic<bool> is_paused_;
+    std::atomic<bool> is_paused_ = false;
+    std::atomic<bool> actual_pause_;
+    std::atomic<bool> manual_pause_;
     std::atomic<bool> is_first_play_;
     std::atomic<bool> is_downloading_;
     std::atomic<bool> ManualNextPlay_;
@@ -217,9 +219,9 @@ private:
     char* ps_strdup(const std::string &s);
     void ps_free_str(char *p);
     void NextPlayTask(void* arg);
-    void SetPauseState(bool play){ is_paused_ = play; };
     void PausePlayback();
     void ResumePlayback();
+    bool IsActualPaused() const { return actual_pause_; };
     void SetMusicEventNextPlay(void);
     bool is_paused(void){return is_paused_;};
     int FindValidMp3SyncWord(uint8_t* data, int data_len);

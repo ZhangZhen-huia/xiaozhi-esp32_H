@@ -102,7 +102,6 @@ PwmBacklight::PwmBacklight(gpio_num_t pin, bool output_invert, uint32_t freq_hz)
         }
     };
     ESP_ERROR_CHECK(ledc_channel_config(&backlight_channel));
-
 }
 
 PwmBacklight::~PwmBacklight() {

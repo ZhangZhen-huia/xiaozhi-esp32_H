@@ -51,6 +51,9 @@ bool Board::GetBatteryLevel(int &level, bool& charging, bool& discharging) {
     return false;
 }
 
+int Board::GetBatteryLevel() {
+    return false;
+}
 bool Board::GetTemperature(float& esp32temp){
     return false;
 }
@@ -70,8 +73,7 @@ Music* Board::GetMusic() {
 }
 
 Led* Board::GetLed() {
-    static NoLed led;
-    return &led;
+    return nullptr;
 }
 
 std::string Board::GetSystemInfoJson() {

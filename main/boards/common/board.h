@@ -8,12 +8,12 @@
 #include <string>
 #include <network_interface.h>
 
-#include "led/led.h"
+#include "led.h"
 #include "backlight.h"
 #include "camera.h"
 #include "assets.h"
 #include "music.h"
-#include "adc_battery_monitor.h"
+
 
 void* create_board();
 class AudioCodec;
@@ -43,8 +43,6 @@ public:
     virtual Backlight* GetBacklight() { return nullptr; }
     virtual Led* GetLed();
     virtual AudioCodec* GetAudioCodec() = 0;
-    virtual AdcBatteryMonitor* GetBatteryMonitor()=0;
-
     virtual bool GetTemperature(float& esp32temp);
     virtual Display* GetDisplay();
     virtual Camera* GetCamera();
@@ -53,6 +51,7 @@ public:
     virtual void StartNetwork() = 0;
     virtual const char* GetNetworkStateIcon() = 0;
     virtual bool GetBatteryLevel(int &level, bool& charging, bool& discharging);
+    virtual int GetBatteryLevel();
     virtual std::string GetSystemInfoJson();
     virtual void SetPowerSaveMode(bool enabled) = 0;
     virtual std::string GetBoardJson() = 0;

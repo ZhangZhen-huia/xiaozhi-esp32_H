@@ -23,7 +23,8 @@
 #include "esp32_music.h"
 #include "esp32_rc522.h"
 #include "bat_monitor.h"
-
+#include "led.h"
+#include "assets/lang_config.h"
 #define TAG "LichuangDevBoard"
 
 #if my
@@ -43,14 +44,13 @@ public:
 #else
 
 #endif
+
 class CustomAudioCodec : public BoxAudioCodec {
     #if my
 private:
-    // Pca9557* pca9557_ = nullptr;
-        Pca9557* pca9557_;
-        #else
+    Pca9557* pca9557_;
+    #endif
 
-#endif
 public:
     #if my
     CustomAudioCodec(i2c_master_bus_handle_t i2c_bus, Pca9557* pca9557) 
@@ -71,24 +71,14 @@ public:
 
     virtual void EnableOutput(bool enable) override {
         BoxAudioCodec::EnableOutput(enable);
-
-
         if (enable) {
             pca9557_->SetOutputState(1, 1);
         } else {
             pca9557_->SetOutputState(1, 0);
         }
-   
-        // if (enable) {
-        //     gpio_set_level(GPIO_NUM_11, 1);  // 设置高电平
-        //     // pca9557_->SetOutputState(1, 1);
-        // } else {
-        //      gpio_set_level(GPIO_NUM_11, 0);  // 设置低电平
-        //     // pca9557_->SetOutputState(1, 0);
-        // }
     }
     #else
-        CustomAudioCodec(i2c_master_bus_handle_t i2c_bus) 
+    CustomAudioCodec(i2c_master_bus_handle_t i2c_bus) 
         : BoxAudioCodec(i2c_bus, 
                        AUDIO_INPUT_SAMPLE_RATE, 
                        AUDIO_OUTPUT_SAMPLE_RATE,
@@ -101,19 +91,15 @@ public:
                        AUDIO_CODEC_ES8311_ADDR, 
                        AUDIO_CODEC_ES7210_ADDR, 
                        AUDIO_INPUT_REFERENCE)
-                        {
+    {
     }
 
     virtual void EnableOutput(bool enable) override {
         BoxAudioCodec::EnableOutput(enable);
-
-   
         if (enable) {
-            gpio_set_level(GPIO_NUM_11, 1);  // 设置高电平
-            // pca9557_->SetOutputState(1, 1);
+            gpio_set_level(GPIO_NUM_11, 1);
         } else {
-             gpio_set_level(GPIO_NUM_11, 0);  // 设置低电平
-            // pca9557_->SetOutputState(1, 0);
+            gpio_set_level(GPIO_NUM_11, 0);
         }
     }
     #endif
@@ -123,13 +109,15 @@ class LichuangDevBoard : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_Boot_IO0;
-    Button boot_button_IO6;
-
+    int battery_ = 0;
+    bool longpress_flag_ = false;
     #if my
- Pca9557* pca9557_;
- #else
- 
- #endif
+    Pca9557* pca9557_;
+    #else
+    
+    Led led_;
+    #endif
+
     void InitializeI2c() {
         // Initialize I2C peripheral
         i2c_master_bus_config_t i2c_bus_cfg = {
@@ -146,15 +134,12 @@ private:
                 #else
                 .enable_internal_pullup = 0,
                 #endif
-
             },
         };
         ESP_ERROR_CHECK(i2c_new_master_bus(&i2c_bus_cfg, &i2c_bus_));
         #if my
-pca9557_ = new Pca9557(i2c_bus_, 0x19);
-#else
-
-#endif
+        pca9557_ = new Pca9557(i2c_bus_, 0x19);
+        #endif
     }
 
     void InitializeSpi() {
@@ -169,81 +154,132 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
     }
 
     void InitializeButtons() {
+        
+        // 处理单击/双击/长按逻辑：第一次单击立即切换状态；若在阈值内再次单击，则恢复到原始状态并执行双击动作
+        static esp_timer_handle_t click_timer = nullptr;
+        static std::atomic<int64_t> last_click_ms{0};
+        static std::atomic<int> pending_prev_state{-1};
+        const int64_t double_click_threshold_ms = 1500; // 双击阈值，可调整
 
-        boot_button_IO6.OnClick([this]() {
-            auto& app = Application::GetInstance();
-            if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
-                ResetWifiConfiguration();
-            }
+        // 定时器回调：超时后清除 pending 状态（表示双击窗口已过）
+        auto click_timer_cb = [](void* arg) {
+            // 清除等待标记，表示不会再还原
+            last_click_ms.store(0, std::memory_order_relaxed);
+            pending_prev_state.store(-1, std::memory_order_relaxed);
+            ESP_LOGD(TAG, "Boot按键 单击确认超时，清除待恢复状态");
+        };
 
-            // 限流：防止连续快速触发导致并发问题（可调整间隔 ms）
-            static std::atomic<int64_t> last_trigger_ms{0};
-            const int64_t min_interval_ms = 3000; // 3000ms 限流
+        if (click_timer == nullptr) {
+            esp_timer_create_args_t args;
+            args.callback = click_timer_cb;
+            args.arg = this;
+            args.name = "boot_click_tmr";
+            args.dispatch_method = ESP_TIMER_TASK;
+            args.skip_unhandled_events = false;
+            esp_timer_create(&args, &click_timer);
+        }
+
+        // 单击处理：
+        boot_button_Boot_IO0.OnClick([this]() {
             int64_t now_ms = esp_timer_get_time() / 1000;
-            int64_t prev = last_trigger_ms.load(std::memory_order_relaxed);
+            int64_t prev_ms = last_click_ms.load(std::memory_order_relaxed);
 
-            bool should_send = false;
-            if (now_ms - prev >= min_interval_ms) {
-                // 达到间隔，允许触发并更新时间戳
-                last_trigger_ms.store(now_ms, std::memory_order_relaxed);
-                should_send = true;
-            } else {
-                ESP_LOGW(TAG, "NextPlay ignored due to rapid press");
-                // 不 return，继续执行该回调的其余逻辑（如果有）
-            }
-
-            // 仅在允许时发送“下一首”消息，回调本身不会提前返回
-            if (should_send) {
-                auto music = Board::GetMusic();
-                if (music && music->ReturnMode()) {
-
-                    music->SetMusicEventNextPlay();
-                }
-                else {
-                    app.ToggleChatState();
-                }
-            }
-
-            // 回调其余逻辑（如需）继续放在这里，不会因为限流而被跳过
-        });
-                
-
-#if !my
-        boot_button_Boot_IO0.OnClick([this](){
             auto& app = Application::GetInstance();
-            app.ToggleChatState();            
-        });
-#endif
-        // //Boot按键
-        // boot_button_Boot_IO0.OnLongPressStart([this](){
-        //     auto& app = Application::GetInstance();
-        //     app.StartListening();
-        // });
-        // boot_button_Boot_IO0.OnPressUp([this](){
-        //     auto& app = Application::GetInstance();
-        //     app.StopListening();
-        // });
-#if CONFIG_USE_DEVICE_AEC
-        boot_button_Boot_IO0.OnDoubleClick([this]() {
 
+            // 如果上一次单击存在且在阈值内 -> 视为双击：恢复原始状态并执行双击动作
+            if (prev_ms != 0 && (now_ms - prev_ms) < double_click_threshold_ms) {
+                // 停掉定时器
+                if (click_timer) esp_timer_stop(click_timer);
+
+                int prev_state = pending_prev_state.load(std::memory_order_relaxed);
+                // 若记录了原始状态，则再次切换（Toggle）回去
+                if (prev_state != -1) {
+                    // 调度回主线程执行恢复，避免在中断/其他上下文直接调用
+                    app.Schedule([&app]() {
+                        ESP_LOGI(TAG, "Boot按键 双击：恢复到上一次状态（由双击触发）");
+                        app.ToggleChatState(); // 第二次 Toggle 恢复到原始状态
+                    });
+                } else {
+                    ESP_LOGW(TAG, "Boot按键 双击检测到但没有记录原始状态，跳过恢复");
+                }
+
+                // 执行原有的双击行为（如音乐切换）
                 auto music = Board::GetMusic();
                 if (music && music->ReturnMode()) {
-
                     music->SetMusicEventNextPlay();
+                    ESP_LOGI(TAG, "Boot按键 双击触发: 下一首/下一个章节");
+                } else {
+                    ESP_LOGI(TAG, "Boot按键 双击触发: 非音乐模式，无其他操作");
                 }
-            // auto& app = Application::GetInstance();
-            // if (app.GetDeviceState() == kDeviceStateIdle) {
-            //     app.SetAecMode(app.GetAecMode() == kAecOff ? kAecOnDeviceSide : kAecOff);
-            // }
+
+                // 清理标记
+                last_click_ms.store(0, std::memory_order_relaxed);
+                pending_prev_state.store(-1, std::memory_order_relaxed);
+                return;
+            }
+
+            // 否则这是第一次单击：记录当前状态，立即切换，并启动定时器等待可能的第二次单击
+            int cur_state = app.GetDeviceState();
+            pending_prev_state.store(cur_state, std::memory_order_relaxed);
+
+            // 立即切换状态（第一次单击即时生效）
+            app.Schedule([&app]() {
+                ESP_LOGI(TAG, "Boot按键 单击：立即切换聊天状态，当前=%d", app.GetDeviceState());
+                app.ToggleChatState();
+            });
+
+            // 记录时间并启动定时器：在阈值期内若未发生第二次单击则不再恢复
+            last_click_ms.store(now_ms, std::memory_order_relaxed);
+            if (click_timer) {
+                esp_timer_start_once(click_timer, double_click_threshold_ms * 1000); // 单位微秒
+            }
         });
-#endif
+
+        // 长按开始：进入监听，清除 pending 单击以避免冲突
+        boot_button_Boot_IO0.OnLongPressStart([this]() {
+            // 清除待恢复标记，避免与长按冲突
+            last_click_ms.store(0, std::memory_order_relaxed);
+            pending_prev_state.store(-1, std::memory_order_relaxed);
+
+            auto& app = Application::GetInstance();
+            app.StartListening();
+            longpress_flag_ = true;
+            ESP_LOGI(TAG, "Boot按键长按开始");
+        });
+
+        // 长按释放：停止监听
+        boot_button_Boot_IO0.OnPressUp([this]() {
+            auto& app = Application::GetInstance();
+            if (longpress_flag_) {
+                app.StopListening();
+                longpress_flag_ = false;
+                ESP_LOGI(TAG, "Boot按键长按释放：停止监听");
+            }
+        });
+
+        // 保留 OnDoubleClick 回调（如果仍需），但避免与上面双击路径重复触发
+        boot_button_Boot_IO0.OnDoubleClick([this]() {
+            int64_t now_ms = esp_timer_get_time() / 1000;
+            int64_t handled_ms = last_click_ms.load(std::memory_order_relaxed);
+            // 如果双击已由上面的单击路径处理（在同一时间窗口内），则忽略此回调
+            if (handled_ms == 0) {
+                // 如果这里触发，说明硬件/库直接检测到双击（非我们用两次单击合成）
+                auto music = Board::GetMusic();
+                if (music && music->ReturnMode()) {
+                    music->SetMusicEventNextPlay();
+                    ESP_LOGI(TAG, "Boot按键 双击回调触发: 下一首/下一个章节");
+                }
+            } else {
+                ESP_LOGI(TAG, "Boot按键 双击回调被忽略（已由单击路径处理或等待中）");
+            }
+        });
     }
 
     void InitializeSdcard() {
-            esp_vfs_fat_sdmmc_mount_config_t mount_config = {
-            .format_if_mount_failed = true,   // 如果挂载不成功是否需要格式化SD卡
-            .max_files = 5, // 允许打开的最大文件数
-            .allocation_unit_size = 16 * 1024  // 分配单元大小
+        esp_vfs_fat_sdmmc_mount_config_t mount_config = {
+            .format_if_mount_failed = true,
+            .max_files = 5,
+            .allocation_unit_size = 16 * 1024
         };
         
         sdmmc_card_t *card;
@@ -251,39 +287,45 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
         ESP_LOGD(TAG, "Initializing SD card");
         ESP_LOGD(TAG, "Using SDMMC peripheral");
     
-        sdmmc_host_t host = SDMMC_HOST_DEFAULT(); // SDMMC主机接口配置
-        sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT(); // SDMMC插槽配置
-        slot_config.width = 1;  // 设置为1线SD模式
+        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+        sdmmc_slot_config_t slot_config = SDMMC_SLOT_CONFIG_DEFAULT();
+        slot_config.width = 1;
         slot_config.clk = BSP_SD_CLK; 
         slot_config.cmd = BSP_SD_CMD;
         slot_config.d0 = BSP_SD_D0;
-        slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP; // 打开内部上拉电阻
+        slot_config.flags |= SDMMC_SLOT_FLAG_INTERNAL_PULLUP;
     
-        // ESP_LOGI(TAG, "Mounting filesystem");
-        esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card); // 挂载SD卡
+        esp_err_t ret = esp_vfs_fat_sdmmc_mount(mount_point, &host, &slot_config, &mount_config, &card);
     
-        if (ret != ESP_OK) {  // 如果没有挂载成功
-            if (ret == ESP_FAIL) { // 如果挂载失败
+        if (ret != ESP_OK) {
+            if (ret == ESP_FAIL) {
                 ESP_LOGE(TAG, "Failed to mount filesystem. ");
-            } else { // 如果是其它错误 打印错误名称
+            } else {
                 ESP_LOGE(TAG, "Failed to initialize the card (%s). ", esp_err_to_name(ret));
             }
             return;
         }
-        ESP_LOGI(TAG, "Filesystem mounted"); // 提示挂载成功
-        sdmmc_card_print_info(stdout, card); // 终端打印SD卡的一些信息
-        
+        ESP_LOGI(TAG, "Filesystem mounted");
+        sdmmc_card_print_info(stdout, card);
+    }
+
+    void InitializeLed()
+    {
+        // 仅确保 LED 初始为灭（实际初始化在构造函数初始化列表完成）
+        #if !my
+        led_.Set(false);
+        #endif
     }
 
     void InitializeBatteryMonitor() {
         bat_monitor_config_t config = {
-        .adc_ch = ADC_CHANNEL_6,     // ADC通道6
-        .charge_io = GPIO_NUM_NC,    // 充电检测IO引脚，如不使用配置为-1
-        .v_div_ratio = 1.0f,         // 电压分压比
-        .v_min = 2.0f,               // 电池亏点电压2.0V
-        .v_max = 3.7f,               // 电池满电电压3.7V
-        .low_thresh = 10.0f,         // 低电量阈值10%
-        .report_ms = 5000            // 5秒报告间隔
+            .adc_ch = ADC_CHANNEL_6,
+            .charge_io = GPIO_NUM_NC,
+            .v_div_ratio = 2.0f,
+            .v_min = 3.1f,
+            .v_max = 4.0f,
+            .low_thresh = 65.0f,
+            .report_ms = 5000
         };
         bat_monitor_handle_t handle = bat_monitor_create(&config);
         if (!handle) {
@@ -291,49 +333,82 @@ pca9557_ = new Pca9557(i2c_bus_, 0x19);
             return;
         }
         
-        // 设置事件回调
         bat_monitor_set_event_cb(handle, 
-                    [](bat_monitor_event_t event, float voltage, void *user_data) {
-                    switch (event) {
-                        case BAT_EVENT_VOLTAGE_REPORT:
-                            ESP_LOGI(TAG, "电池电压: %.2fV", voltage);
-                            break;
-                        case BAT_EVENT_FULL:
-                            ESP_LOGI(TAG, "电池已充满 (%.2fV)", voltage);
-                            break;
-                        case BAT_EVENT_LOW:
-                            ESP_LOGI(TAG, "电池电量低 (%.2fV)", voltage);
-                            break;
-                        case BAT_EVENT_CHARGING_BEGIN:
-                            ESP_LOGI(TAG, "开始充电");
-                            break;
-                        case BAT_EVENT_CHARGING_STOP:
-                            ESP_LOGI(TAG, "停止充电");
-                            break;
-                    }
-                }, NULL);
+            [](bat_monitor_event_t event, float voltage, int percentage, void *user_data) {
+                auto board = static_cast<LichuangDevBoard*>(user_data);
+                auto music = board->GetMusic();
+                auto &app = Application::GetInstance();
+                static uint8_t tick = 0;
+                switch (event) {
+                    case BAT_EVENT_VOLTAGE_REPORT:
+                        ESP_LOGI(TAG, "电池电量: %.2fV  %d%%", voltage, percentage);
+                        board->battery_ = percentage;
+                        break;
+                    case BAT_EVENT_FULL:
+                        ESP_LOGI(TAG, "电池已充满: %.2fV  %d%%", voltage, percentage);
+                        break;
+                    case BAT_EVENT_LOW:
+                        tick++;
+                        ESP_LOGI(TAG, "电池电量低: %.2fV  %d%%", voltage, percentage);
+                        // 每2分钟提醒一次
+                        if(tick%24==0) { 
+                            tick =0;
+                            if(music)
+                            {
+                                music->PausePlayback();
+
+                                vTaskDelay(pdMS_TO_TICKS(1000));
+                                if(music->ReturnMode()) {
+                                    if(music->IsActualPaused()) 
+                                        {
+                                            app.AbortSpeaking(AbortReason::kAbortReasonNone);
+                                            app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                        }
+                                    else 
+                                        ESP_LOGI(TAG, "音乐未暂停，跳过低电量提示音");   
+                                }
+                                else 
+                                {   
+                                    app.AbortSpeaking(AbortReason::kAbortReasonNone);
+                                    app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                }
+                                vTaskDelay(pdMS_TO_TICKS(3000));
+
+                                music->ResumePlayback();
+                            }
+                        }
+                        break;
+                    case BAT_EVENT_CHARGING_BEGIN:
+                        ESP_LOGI(TAG, "开始充电");
+                        break;
+                    case BAT_EVENT_CHARGING_STOP:
+                        ESP_LOGI(TAG, "停止充电");
+                        break;
+                }
+            }, this);
         ESP_LOGI(TAG, "电池监测已启动");
     };
 
 public:
-    LichuangDevBoard() : boot_button_Boot_IO0(BOOT_BUTTON_GPIO),
-    #if my                     
-    boot_button_IO6(GPIO_NUM_0)
+    LichuangDevBoard() : 
+    #if !my
+        boot_button_Boot_IO0(BOOT_BUTTON_GPIO),
+        led_(GPIO_NUM_6) // 直接在成员初始化中绑定 IO6
     #else
-    boot_button_IO6(GPIO_NUM_6)
+        boot_button_Boot_IO0(BOOT_BUTTON_GPIO)
     #endif
     {
         InitializeI2c();
         InitializeSpi();
         InitializeSdcard();
         InitializeButtons();
+        InitializeLed();
         #if !my
-        // InitializeBatteryMonitor();
-        #else
+        InitializeBatteryMonitor();
         #endif
         GetBacklight()->RestoreBrightness();
         RC522_Init();
-        RC522_Rese( );//复位RC522
+        RC522_Rese(); // 复位RC522
     }
 #if my
     virtual AudioCodec* GetAudioCodec() override {
@@ -348,11 +423,17 @@ public:
             i2c_bus_);
         return &audio_codec;
     }
+    virtual Led* GetLed() override {
+        return &led_;
+    }
 #endif
     
     virtual Backlight* GetBacklight() override {
         static PwmBacklight backlight(DISPLAY_BACKLIGHT_PIN, DISPLAY_BACKLIGHT_OUTPUT_INVERT);
         return &backlight;
+    }
+    virtual int GetBatteryLevel() override {
+        return battery_;
     }
 };
 

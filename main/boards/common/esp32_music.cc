@@ -479,6 +479,7 @@ void Esp32Music::PlayAudioStream() {
                 ESP_LOGI(TAG, "Playback paused, entering timed wait (2s)");
                 // 带超时循环等待，周期性检查聆听超时（10s）以自动恢复
                 while (is_paused_) {
+                    actual_pause_ = true;
                     if (!is_playing_) {
                         ESP_LOGI(TAG, "Playback stopping while paused");
                         break;
@@ -486,9 +487,9 @@ void Esp32Music::PlayAudioStream() {
 
                     // 检查当前设备状态并维护聆听计时器
                     current_state = app.GetDeviceState();
-
+                    
                     // 优化：如果设备变为 IDLE，立即恢复播放（无需等待超时）
-                    if (current_state == kDeviceStateIdle) {
+                    if (current_state == kDeviceStateIdle && manual_pause_==false) {
                         ESP_LOGI(TAG, "Device state is IDLE, auto-resuming playback immediately");
                         // 先解锁再调用 ResumePlayback()（ResumePlayback 内部会加锁并 notify）
                         lk.unlock();
@@ -504,7 +505,7 @@ void Esp32Music::PlayAudioStream() {
                             listening_start = steady_clock::now();
                         } else {
                             auto dur = duration_cast<seconds>(steady_clock::now() - listening_start).count();
-                            if (dur >= 10) {
+                            if (dur >= 15) { // 超过15秒未说话，自动恢复播放
                                 ESP_LOGI(TAG, "Listening timeout %llds exceeded, auto-resuming playback", (long long)dur);
                                 lk.unlock();
                                 ResumePlayback();
@@ -542,7 +543,8 @@ void Esp32Music::PlayAudioStream() {
         if (previous_state == kDeviceStateIdle && current_state != kDeviceStateIdle) {
             ESP_LOGI(TAG, "Device state changed from IDLE to %d, pausing playback", current_state);
             PausePlayback();
-            vTaskDelay(pdMS_TO_TICKS(500));
+            manual_pause_ = false; // 非手动暂停
+            vTaskDelay(pdMS_TO_TICKS(200));
             continue;
         }
 
@@ -564,7 +566,7 @@ void Esp32Music::PlayAudioStream() {
             vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
-        
+        actual_pause_ = false;
         // 设备状态检查通过，显示当前播放的歌名
             auto& board = Board::GetInstance();
             auto display = board.GetDisplay();
@@ -1238,6 +1240,7 @@ void Esp32Music::ResumePlayback() {
     std::lock_guard<std::mutex> lk(buffer_mutex_);
     if (!is_paused_) return;
     is_paused_ = false;
+    manual_pause_ = false;
     // 确保 codec 输出及采样率恢复
     auto codec = Board::GetInstance().GetAudioCodec();
     if (codec) {
@@ -1252,6 +1255,7 @@ void Esp32Music::PausePlayback() {
     std::lock_guard<std::mutex> lk(buffer_mutex_);
     if (is_paused_) return;
     is_paused_ = true;
+    manual_pause_ = true;
     ESP_LOGI(TAG, "PausePlayback: paused");
 }
 
@@ -1776,7 +1780,7 @@ std::string NormalizeForSearch(std::string s) {
         unsigned char c = static_cast<unsigned char>(s[i]);
         if (c < 0x80) {
             // ASCII：保留字母数字与连字符 '-'（字母转小写），丢弃空白与其它标点
-            if (std::isalnum(c) || c == '-') {
+            if (std::isalnum(c) || c == '-' || c == '.' || c == '#') {
                 out.push_back(static_cast<char>(std::tolower(c)));
             }
         } else {

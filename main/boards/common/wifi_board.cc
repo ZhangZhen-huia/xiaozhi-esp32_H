@@ -418,7 +418,7 @@ std::string WifiBoard::GetDeviceStatusJson() {
      *     "audio_speaker": {
      *         "volume": 70
      *     },
-     *     "screen": {
+     *     "lamp": {
      *         "brightness": 100,
      *         "theme": "light"
      *     },
@@ -449,18 +449,11 @@ std::string WifiBoard::GetDeviceStatusJson() {
 
     // Screen brightness
     auto backlight = board.GetBacklight();
-    auto screen = cJSON_CreateObject();
+    auto lamp = cJSON_CreateObject();
     if (backlight) {
-        cJSON_AddNumberToObject(screen, "brightness", backlight->brightness());
+        cJSON_AddNumberToObject(lamp, "brightness", backlight->brightness());
     }
-    auto display = board.GetDisplay();
-    if (display && display->height() > 64) { // For LCD display only
-        auto theme = display->GetTheme();
-        if (theme != nullptr) {
-            cJSON_AddStringToObject(screen, "theme", theme->name().c_str());
-        }
-    }
-    cJSON_AddItemToObject(root, "screen", screen);
+    cJSON_AddItemToObject(root, "lamp", lamp);
 
     // Battery
     int battery_level = 0;

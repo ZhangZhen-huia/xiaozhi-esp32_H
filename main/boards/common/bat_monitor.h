@@ -33,7 +33,7 @@ typedef struct {
 typedef void *bat_monitor_handle_t;
 
 // 事件回调函数类型定义
-typedef void (*bat_monitor_event_cb_t)(bat_monitor_event_t event, float voltage, void *user_data);
+typedef void (*bat_monitor_event_cb_t)(bat_monitor_event_t event, float voltage, int percentage, void *user_data);
 
 #ifdef __cplusplus
 extern "C" {

@@ -66,11 +66,12 @@ public:
     virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
     virtual size_t GetMusicCount() const = 0;
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const =0;
-    virtual void SetPauseState(bool play) = 0;
+
     virtual bool is_paused(void)=0;
     virtual void SetMusicEventNextPlay(void)=0;
     virtual void PausePlayback()=0;
     virtual void ResumePlayback()=0;
+    virtual bool IsActualPaused() const { return false; };
     virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const =0;
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) = 0;
     virtual bool PlayPlaylist(const std::string& playlist_name) = 0;

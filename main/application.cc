@@ -21,7 +21,6 @@
 #include "wifi_station.h"
 #include <esp_netif.h>
 #include "esp_wifi.h"
-#include "adc_battery_monitor.h"
 #include "esp32_rc522.h"
 #include "esp_task_wdt.h"
 #include "esp_tts.h"
@@ -231,6 +230,84 @@ void Application::CheckNewVersion(Ota& ota) {
                 break;
             }
         }
+    }
+}
+
+
+void Application::ShowBatteryLevel(int percent) {
+    if (percent < 0) percent = 0;
+    if (percent > 100) percent = 100;
+
+    // 显示文字
+    char buf[64];
+    snprintf(buf, sizeof(buf), "当前电量：%d%%", percent);
+    Alert("电量", buf, "battery", std::string_view());
+
+    // 单数字音效映射（0-9）
+    struct digit_sound {
+        char digit;
+        const std::string_view& sound;
+    };
+    static const std::array<digit_sound, 10> digit_sounds{{
+        digit_sound{'0', Lang::Sounds::OGG_0},
+        digit_sound{'1', Lang::Sounds::OGG_1},
+        digit_sound{'2', Lang::Sounds::OGG_2},
+        digit_sound{'3', Lang::Sounds::OGG_3},
+        digit_sound{'4', Lang::Sounds::OGG_4},
+        digit_sound{'5', Lang::Sounds::OGG_5},
+        digit_sound{'6', Lang::Sounds::OGG_6},
+        digit_sound{'7', Lang::Sounds::OGG_7},
+        digit_sound{'8', Lang::Sounds::OGG_8},
+        digit_sound{'9', Lang::Sounds::OGG_9}
+    }};
+
+    auto PlayDigit = [&](char d) {
+        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
+            [d](const digit_sound& ds) { return ds.digit == d; });
+        if (it != digit_sounds.end()) {
+            audio_service_.PlaySound(it->sound);
+            vTaskDelay(pdMS_TO_TICKS(120));
+        }
+    };
+
+    // 先播放“当前电量”提示音（如果存在）
+    audio_service_.PlaySound(Lang::Sounds::OGG_BATTERYLEVEL);
+    vTaskDelay(pdMS_TO_TICKS(200));
+
+    // 对于 20..100 范围，优先使用整十位音频（你已支持 20..100）
+    if (percent >= 20 && percent <= 100) {
+        int tens = (percent / 10) * 10; // 20,30,...,100
+        int ones = percent % 10;
+
+        // 播放十位语音（如果存在对应素材）
+        switch (tens) {
+            case 20: audio_service_.PlaySound(Lang::Sounds::OGG_20); break;
+            case 30: audio_service_.PlaySound(Lang::Sounds::OGG_30); break;
+            case 40: audio_service_.PlaySound(Lang::Sounds::OGG_40); break;
+            case 50: audio_service_.PlaySound(Lang::Sounds::OGG_50); break;
+            case 60: audio_service_.PlaySound(Lang::Sounds::OGG_60); break;
+            case 70: audio_service_.PlaySound(Lang::Sounds::OGG_70); break;
+            case 80: audio_service_.PlaySound(Lang::Sounds::OGG_80); break;
+            case 90: audio_service_.PlaySound(Lang::Sounds::OGG_90); break;
+            case 100: audio_service_.PlaySound(Lang::Sounds::OGG_100); break;
+            default: break;
+        }
+        vTaskDelay(pdMS_TO_TICKS(140));
+
+        // 100 属于整百，不再播个位
+        if (tens == 100) return;
+
+        // 播放个位（非 0 时）
+        if (ones != 0) {
+            PlayDigit(char('0' + ones));
+        }
+        return;
+    }
+
+    // 回退：逐位播放（用于 0..19 或者没有十位素材的情况）
+    std::string s = std::to_string(percent);
+    for (const auto& ch : s) {
+        PlayDigit(ch);
     }
 }
 
@@ -648,9 +725,12 @@ void Application::Start() {
     ESP_LOGW(TAG,"复位原因: 深度睡眠唤醒\n");
     break;
     default:
-    ESP_LOGW(TAG,"复位原因: 未知或其他类型\n");
+    break;
     }
-    
+    #if !my
+    ShowBatteryLevel(Board::GetInstance().GetBatteryLevel());
+    vTaskDelay(pdMS_TO_TICKS(3000));
+    #endif
     device_Role = Role_Xiaozhi;
     std::string msg = "向用户问好";
     SendMessage(msg);
@@ -788,16 +868,6 @@ void Application::MainEventLoop() {
             }
             // Print the debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
-                int level;
-                bool ischarging;
-                bool discharging;
-                auto &board = Board::GetInstance();
-                board.GetBatteryLevel(level,ischarging,discharging);
-
-                ESP_LOGI(TAG, "Battery: %d mV", level);
-                ESP_LOGI(TAG, "Battery Charging: %s", ischarging ? "Yes" : "No");
-                ESP_LOGI(TAG, "Battery Discharging: %s", discharging ? "Yes" : "No");
-
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
                 SystemInfo::PrintHeapStats();
             }   
@@ -870,7 +940,6 @@ void Application::SetDeviceState(DeviceState state) {
         return;
     }
     clock_ticks_ = 0;
-    auto previous_state = device_state_;
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 
@@ -878,19 +947,13 @@ void Application::SetDeviceState(DeviceState state) {
 
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
+    #if !my
     auto led = board.GetLed();
     led->OnStateChanged();
+    #endif
     auto& wifi_station = WifiStation::GetInstance();
 
-    //  // 当从idle状态变成其他任何状态时，停止音乐播放
-    // if (previous_state == kDeviceStateIdle && state != kDeviceStateIdle) {
-    //     auto music = board.GetMusic();
-    //     if (music->IsPlaying()) {
-    //         ESP_LOGI(TAG, "Stopping music streaming due to state change: %s -> %s", 
-    //                 STATE_STRINGS[previous_state], STATE_STRINGS[state]);
-    //         music->StopStreaming();
-    //     }
-    // }
+
     
     // auto codec = Board::GetInstance().GetAudioCodec();
     switch (state) {

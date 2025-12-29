@@ -53,7 +53,7 @@ static void monitor_task(void *arg) {
     float last_voltage = 0.0f;
     bool charging_state = false;
     bool previous_gpio_state = false;
-    
+    float percentage = 0.0f;
     // 如果配置了充电检测IO，获取初始状态
     if (handle->config.charge_io != GPIO_NUM_NC) {
         previous_gpio_state = gpio_get_level(handle->config.charge_io);
@@ -61,7 +61,7 @@ static void monitor_task(void *arg) {
         
         // 报告初始充电状态
         if (handle->event_cb && charging_state) {
-            handle->event_cb(BAT_EVENT_CHARGING_BEGIN, 0, handle->user_data);
+            handle->event_cb(BAT_EVENT_CHARGING_BEGIN, 0, 0, handle->user_data);
         }
     }
     
@@ -73,7 +73,6 @@ static void monitor_task(void *arg) {
         
         int mv = 0;
         adc_cali_raw_to_voltage(handle->adc_cali_handle, raw, &mv);
-        
         voltage = (float)mv / 1000.0f * handle->config.v_div_ratio;
         
         // 检测充电状态
@@ -86,12 +85,12 @@ static void monitor_task(void *arg) {
                 if (current_gpio_state) {
                     // 充电开始
                     if (handle->event_cb) {
-                        handle->event_cb(BAT_EVENT_CHARGING_BEGIN, voltage, handle->user_data);
+                        handle->event_cb(BAT_EVENT_CHARGING_BEGIN, voltage, 0, handle->user_data);
                     }
                 } else {
                     // 充电停止
                     if (handle->event_cb) {
-                        handle->event_cb(BAT_EVENT_CHARGING_STOP, voltage, handle->user_data);
+                        handle->event_cb(BAT_EVENT_CHARGING_STOP, voltage, 0, handle->user_data);
                     }
                 }
                 previous_gpio_state = current_gpio_state;
@@ -104,7 +103,7 @@ static void monitor_task(void *arg) {
                 if (!charging_state) {
                     charging_state = true;
                     if (handle->event_cb) {
-                        handle->event_cb(BAT_EVENT_CHARGING_BEGIN, voltage, handle->user_data);
+                        handle->event_cb(BAT_EVENT_CHARGING_BEGIN, voltage, 0, handle->user_data);
                     }
                 }
             } 
@@ -112,28 +111,27 @@ static void monitor_task(void *arg) {
             else if (voltage <= last_voltage - CHARGE_DETECT_DELTA && charging_state) {
                 charging_state = false;
                 if (handle->event_cb) {
-                    handle->event_cb(BAT_EVENT_CHARGING_STOP, voltage, handle->user_data);
+                    handle->event_cb(BAT_EVENT_CHARGING_STOP, voltage, 0, handle->user_data);
                 }
             }
         }
         
         // 计算电量百分比
-        float percentage = ((voltage - handle->config.v_min) / 
+        percentage = ((voltage - handle->config.v_min) / 
                           (handle->config.v_max - handle->config.v_min)) * 100.0f;
         percentage = percentage < 0 ? 0 : (percentage > 100 ? 100 : percentage);
-        
         // 触发电压报告事件
         if (handle->event_cb) {
-            handle->event_cb(BAT_EVENT_VOLTAGE_REPORT, voltage, handle->user_data);
-            
+            handle->event_cb(BAT_EVENT_VOLTAGE_REPORT, voltage, (int)percentage, handle->user_data);
+
             // 检查低电量事件
             if (percentage <= handle->config.low_thresh) {
-                handle->event_cb(BAT_EVENT_LOW, voltage, handle->user_data);
+                handle->event_cb(BAT_EVENT_LOW, voltage, (int)percentage, handle->user_data);
             }
             
             // 检查充满事件
             if (voltage >= handle->config.v_max + CHARGE_DETECT_DELTA*1.75f && charging_state) {
-                handle->event_cb(BAT_EVENT_FULL, voltage, handle->user_data);
+                handle->event_cb(BAT_EVENT_FULL, voltage, (int)percentage, handle->user_data);
             }
         }
         
@@ -145,7 +143,7 @@ static void monitor_task(void *arg) {
 }
 
 bat_monitor_handle_t bat_monitor_create(const bat_monitor_config_t *config) {
-    bat_monitor_t *monitor = calloc(1, sizeof(bat_monitor_t));
+    bat_monitor_t *monitor = heap_caps_malloc(sizeof(bat_monitor_t), MALLOC_CAP_SPIRAM);
     if (!monitor) return NULL;
     
     memcpy(&monitor->config, config, sizeof(bat_monitor_config_t));
@@ -225,6 +223,6 @@ void bat_monitor_destroy(bat_monitor_handle_t handle) {
     
     // 删除ADC单次模式句柄
     adc_oneshot_del_unit(monitor->adc_handle);
-    
-    free(monitor);
+
+    heap_caps_free(monitor);
 }
