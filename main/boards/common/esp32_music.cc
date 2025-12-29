@@ -446,6 +446,8 @@ void Esp32Music::PlayAudioStream() {
     is_first_play_ = true;
     using namespace std::chrono;
     steady_clock::time_point listening_start = steady_clock::time_point::min();
+    int consecutive_decode_failures = 0;
+    const int kMaxConsecutiveDecodeFailures = 1;
     while (is_playing_) {
         // 检查设备状态，只有在空闲状态才播放音乐
         DeviceState previous_state = current_state;
@@ -707,7 +709,7 @@ void Esp32Music::PlayAudioStream() {
             // 解码成功，获取帧信息
             MP3GetLastFrameInfo(mp3_decoder_, &mp3_frame_info_);
             total_frames_decoded_++;
-            
+            consecutive_decode_failures = 0;
             // 基本的帧信息有效性检查，防止除零错误
             if (mp3_frame_info_.samprate == 0 || mp3_frame_info_.nChans == 0) {
                 ESP_LOGW(TAG, "Invalid frame info: rate=%d, channels=%d, skipping", 
@@ -834,7 +836,70 @@ void Esp32Music::PlayAudioStream() {
             default:
                 ESP_LOGE(TAG, "MP3Decode: %d (未知错误)", decode_result);
             }
+            consecutive_decode_failures++;
+            ESP_LOGW(TAG, "Consecutive decode failures: %d/%d", consecutive_decode_failures, kMaxConsecutiveDecodeFailures);
+            if (consecutive_decode_failures >= kMaxConsecutiveDecodeFailures) {
+                ESP_LOGW(TAG, "连续解码失败达到阈值，准备重启当前文件从头开始播放");
 
+                // 记录将要重启的文件路径与显示名（线程安全地读取）
+                std::string restart_path;
+                std::string restart_name;
+                {
+                    std::lock_guard<std::mutex> lock(music_library_mutex_);
+                    if (current_playlist_name_ == default_musiclist_) {
+                        if (play_index_ >= 0 && static_cast<size_t>(play_index_) < ps_music_count_) {
+                            if (ps_music_library_[play_index_].file_path)
+                                restart_path = ps_music_library_[play_index_].file_path;
+                        }
+                        restart_name = current_song_name_;
+                    } else {
+                        if (!playlist_.file_paths.empty() && playlist_.play_index < (int)playlist_.file_paths.size()) {
+                            restart_path = playlist_.file_paths[playlist_.play_index];
+                        }
+                        restart_name = current_song_name_;
+                    }
+                }
+
+                // 发出停止信号并通知其他线程
+                is_playing_ = false;
+                is_downloading_ = false;
+                {
+                    std::lock_guard<std::mutex> lock(buffer_mutex_);
+                    buffer_cv_.notify_all();
+                }
+
+                // 通过主线程调度重新从头播放（避免在播放线程内重建线程导致死锁）
+                app.Schedule([this, restart_path, restart_name]() {
+                    ESP_LOGI(TAG, "在主线程调度：准备从头重启播放 %s", restart_path.c_str());
+
+                    // 1) 停止播放/下载标记（幂等）
+                    is_playing_ = false;
+                    is_downloading_ = false;
+
+                    // 2) 清空音频缓冲并清理解码器，确保没有残留状态
+                    ClearAudioBuffer();          // 内部会 CleanupMp3Decoder()
+
+                    // 3) 重新初始化 MP3 解码器以确保干净状态
+                    InitializeMp3Decoder();
+
+                    // 4) 确保从文件头开始（安全起见）并清除文件偏移记录
+                    {
+                        std::lock_guard<std::mutex> lk(current_play_file_mutex_);
+                        start_play_offset_ = 0;
+                        current_play_file_offset_ = 0;
+                        current_play_file_ = nullptr;
+                    }
+
+                    // 5) 小延时等待读取线程启动并填充缓冲（可根据设备速度调整）
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+
+                    // 6) 从头开始播放（StartSDCardStreaming 会新建读/播放线程）
+                    ESP_LOGI(TAG, "在主线程调度：从头开始播放 %s", restart_path.c_str());
+                    this->PlayFromSD(restart_path, restart_name);
+                });
+                // 退出播放循环，等待线程结束
+                break;
+            }
             // 正常情况：寻找下一个同步字
             int sync_offset = MP3FindSyncWord(read_ptr, bytes_left);
             if (sync_offset > 0) {
@@ -875,7 +940,7 @@ void Esp32Music::PlayAudioStream() {
     }
 
     auto state = app.GetDeviceState();
-    if(state == kDeviceStateIdle && !ManualNextPlay_){
+    if(state == kDeviceStateIdle && !ManualNextPlay_ && (consecutive_decode_failures < kMaxConsecutiveDecodeFailures)){
         ESP_LOGI(TAG, "Device is idle, preparing to play next track");
         xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
         // if(IfNodeIsEnd())
@@ -972,7 +1037,6 @@ void Esp32Music::ClearAudioBuffer() {
         AudioChunk chunk = audio_buffer_.front();
         audio_buffer_.pop();
         if (chunk.data) {
-            // heap_caps_free(chunk.data);
             ReturnChunkToPool(chunk.data);
         }
     }
