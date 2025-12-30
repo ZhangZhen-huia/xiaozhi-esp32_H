@@ -155,7 +155,7 @@ void McpServer::AddCommonTools() {
 
 
         AddTool("stopplay",
-                "当用户说停止播放的时候调用，你需要立刻停止播放",
+                "当用户说停止播放的时候调用，你必须调用这个工具来停止当前的音乐播放。不能主观臆断当前状态",
                 PropertyList(),
                 [music](const PropertyList& properties) -> ReturnValue {
                     music->SetMode(false);

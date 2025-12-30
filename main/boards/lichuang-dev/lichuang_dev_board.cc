@@ -24,7 +24,9 @@
 #include "esp32_rc522.h"
 #include "bat_monitor.h"
 #include "led.h"
+
 #include "assets/lang_config.h"
+
 #define TAG "LichuangDevBoard"
 
 #if my
@@ -142,17 +144,6 @@ private:
         #endif
     }
 
-    void InitializeSpi() {
-        spi_bus_config_t buscfg = {};
-        buscfg.mosi_io_num = GPIO_NUM_40;
-        buscfg.miso_io_num = GPIO_NUM_NC;
-        buscfg.sclk_io_num = GPIO_NUM_41;
-        buscfg.quadwp_io_num = GPIO_NUM_NC;
-        buscfg.quadhd_io_num = GPIO_NUM_NC;
-        buscfg.max_transfer_sz = DISPLAY_WIDTH * DISPLAY_HEIGHT * sizeof(uint16_t);
-        ESP_ERROR_CHECK(spi_bus_initialize(SPI3_HOST, &buscfg, SPI_DMA_CH_AUTO));
-    }
-
     void InitializeButtons() {
         
         // 处理单击/双击/长按逻辑：第一次单击立即切换状态；若在阈值内再次单击，则恢复到原始状态并执行双击动作
@@ -240,8 +231,13 @@ private:
             // 清除待恢复标记，避免与长按冲突
             last_click_ms.store(0, std::memory_order_relaxed);
             pending_prev_state.store(-1, std::memory_order_relaxed);
-
             auto& app = Application::GetInstance();
+            auto device_state = app.GetDeviceState();
+            if(device_state != kDeviceStateIdle) {
+                // 已在监听则先停止
+                app.SetDeviceState(kDeviceStateIdle);
+                vTaskDelay(pdMS_TO_TICKS(500));
+            }
             app.StartListening();
             longpress_flag_ = true;
             ESP_LOGI(TAG, "Boot按键长按开始");
@@ -327,13 +323,13 @@ private:
             .low_thresh = 65.0f,
             .report_ms = 5000
         };
-        bat_monitor_handle_t handle = bat_monitor_create(&config);
-        if (!handle) {
+        battery_handle = bat_monitor_create(&config);
+        if (!battery_handle) {
             ESP_LOGE(TAG, "电池监测初始化失败");
             return;
         }
-        
-        bat_monitor_set_event_cb(handle, 
+
+        bat_monitor_set_event_cb(battery_handle,
             [](bat_monitor_event_t event, float voltage, int percentage, void *user_data) {
                 auto board = static_cast<LichuangDevBoard*>(user_data);
                 auto music = board->GetMusic();
@@ -390,6 +386,7 @@ private:
     };
 
 public:
+
     LichuangDevBoard() : 
     #if !my
         boot_button_Boot_IO0(BOOT_BUTTON_GPIO),
@@ -399,7 +396,6 @@ public:
     #endif
     {
         InitializeI2c();
-        InitializeSpi();
         InitializeSdcard();
         InitializeButtons();
         InitializeLed();

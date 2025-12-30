@@ -8,6 +8,7 @@
 #ifndef BATTERY_MONITOR_H
 #define BATTERY_MONITOR_H
 
+
 #include <stdint.h>
 #include "driver/gpio.h"
 #include "driver/adc.h"
@@ -38,7 +39,7 @@ typedef void (*bat_monitor_event_cb_t)(bat_monitor_event_t event, float voltage,
 #ifdef __cplusplus
 extern "C" {
 #endif
-
+extern bat_monitor_handle_t battery_handle;
 // 创建电池监测实例
 bat_monitor_handle_t bat_monitor_create(const bat_monitor_config_t *config);
 

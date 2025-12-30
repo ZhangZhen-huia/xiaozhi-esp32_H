@@ -9,7 +9,7 @@
 #include "mcp_server.h"
 #include "assets.h"
 #include "settings.h"
-
+#include "esp_sleep.h"
 #include <cstring>
 #include <esp_log.h>
 #include <cJSON.h>
@@ -24,7 +24,7 @@
 #include "esp32_rc522.h"
 #include "esp_task_wdt.h"
 #include "esp_tts.h"
-
+#include "bat_monitor.h"
 
 #define TAG "Application"
 
@@ -734,6 +734,8 @@ void Application::Start() {
     device_Role = Role_Xiaozhi;
     std::string msg = "向用户问好";
     SendMessage(msg);
+    vTaskDelay(pdMS_TO_TICKS(10000));
+    
 }
 
 // Add a async task to MainLoop
@@ -744,7 +746,35 @@ void Application::Schedule(std::function<void()> callback) {
     }
     xEventGroupSetBits(event_group_, MAIN_EVENT_SCHEDULE);
 }
-   
+
+void Application::EnterDeepSleep() {
+    ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
+
+
+    ESP_LOGI(TAG, "停止RFID任务,休眠Rcc522");
+    if(rfid_task_handle_ != nullptr) {
+        vTaskDelete(rfid_task_handle_);
+        rfid_task_handle_ = nullptr;
+    }
+    PcdHalt();
+
+    ESP_LOGI(TAG,"停止电量监测");
+    bat_monitor_destroy(battery_handle);
+
+
+    ESP_LOGI(TAG, "关闭wifi");
+    esp_wifi_stop();
+    esp_wifi_deinit();
+
+    //ext0 仅支持 RTC IO（例如 GPIO0），若 wake_gpio 非 RTC 引脚可能无法生效
+    esp_err_t rc = esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
+    if (rc != ESP_OK) {
+        ESP_LOGE(TAG, "esp_sleep_enable_ext0_wakeup 返回 %d", rc);
+    }
+    
+    ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
+    esp_deep_sleep_start();
+}
 
 uint8_t read_write_data[16]={0};//读写数据缓存
 uint8_t card_KEY[6] ={0xff,0xff,0xff,0xff,0xff,0xff};//默认密码
@@ -772,42 +802,37 @@ void Application::RFID_TASK()
                     //输出卡ID
                     ESP_LOGI(TAG,"ID: %s", card_id.c_str());
                     auto music = Board::GetInstance().GetMusic();
-                    std::string msg = "静默调用工具Notice";
+
                     if(strcmp(card_id.c_str(), CardPlayer_ID) == 0) {
                         device_Role = Player;
                         ESP_LOGI(TAG,"Enter Player Mode\r\n");
-                        // if(music) {
-                        //     music->StopStreaming();
-                        // }
-                        SendMessage(msg);
+                        SetAecMode(kAecOff);
+
                     } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0) {
                         ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
                         device_Role = Role_Xiaozhi;
-                        // if(music) {
-                        //     music->StopStreaming();
-                        // }
-                        SendMessage(msg);
+
+
+                        SetAecMode(kAecOnDeviceSide);
                     } else if(strcmp(card_id.c_str(), CardRole_ESP_ID) == 0) {
                         ESP_LOGI(TAG,"ESP Role Activated\r\n");
                         device_Role = Role_ESP;
-                        // if(music) {
-                        //     music->StopStreaming();
-                        // }
-                        SendMessage(msg);
+                        SetAecMode(kAecOnDeviceSide);
                     }
                 }
             
             }
             #else
             #endif
-            vTaskDelay(1000);
+            vTaskDelay( pdMS_TO_TICKS(500) );
     }
 } 
 // The Main Event Loop controls the chat state and websocket connection
 // If other tasks need to access the websocket or chat state,
 // they should use Schedule to call this function
 void Application::MainEventLoop() {
-    
+    auto& wifi_station = WifiStation::GetInstance();
+    auto music = Board::GetInstance().GetMusic();
     while (true) {
         auto bits = xEventGroupWaitBits(event_group_, MAIN_EVENT_SCHEDULE |
             MAIN_EVENT_SEND_AUDIO |
@@ -853,9 +878,7 @@ void Application::MainEventLoop() {
         }
         if (bits & MAIN_EVENT_CLOCK_TICK) {
             clock_ticks_++;
-            auto display = Board::GetInstance().GetDisplay();
-            display->UpdateStatusBar();
-            auto& wifi_station = WifiStation::GetInstance();
+            
             if(wifi_station.IsConnected() && (clock_ticks_ % 10 == 0))
             {
                 auto Rssi = wifi_station.GetRssi();
@@ -876,6 +899,21 @@ void Application::MainEventLoop() {
                 Offline_ticks_=0;
                 esp_timer_stop(clock_Offlinetimer_handle_);
                 SetDeviceState(kDeviceStateWifiConfiguring);
+            }
+
+            // 空闲超时自动进入深度睡眠（仅在真正可以进入睡眠时）
+            if (device_state_ == kDeviceStateIdle && (music->IsPlaying() == false)) {
+                if (CanEnterSleepMode() && clock_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
+                    ESP_LOGI(TAG, "Device idle for %d seconds and can sleep -> entering deep sleep", IDLE_DEEP_SLEEP_SECONDS);
+                    // 防止重复调度：清零计时
+                    clock_ticks_ = 0;
+                    // 在主线程上下文调度进入深度睡眠
+                    Schedule([this]() {
+                        this->EnterDeepSleep();
+                        ESP_LOGI(TAG, "停止主事件循环任务");
+                        vTaskDelete(NULL);
+                    });
+                }
             }
         }
     }

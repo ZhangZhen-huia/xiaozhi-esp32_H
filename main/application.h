@@ -18,6 +18,10 @@
 
 #define my 0
 
+// 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
+#ifndef IDLE_DEEP_SLEEP_SECONDS
+#define IDLE_DEEP_SLEEP_SECONDS (1 * 60)
+#endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
 #define MAIN_EVENT_SEND_AUDIO (1 << 1)
@@ -77,7 +81,8 @@ public:
 
     void EnableBleWifiConfig(bool enable) { ble_wifi_config_enabled_ = enable; }
     bool IsBleWifiConfigEnabled() const { return ble_wifi_config_enabled_; }
- 
+    void EnterDeepSleep();
+
     bool Wifi_Offline = false;
     Role device_Role = Role_Xiaozhi;
 private:

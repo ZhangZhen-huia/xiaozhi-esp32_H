@@ -8,7 +8,7 @@
 #include "freertos/task.h"
 
 #define TAG "bat_monitor"
-
+bat_monitor_handle_t battery_handle = NULL;
 // 充电时电压变化阈值
 #define CHARGE_DETECT_DELTA 0.4f
 
@@ -224,5 +224,6 @@ void bat_monitor_destroy(bat_monitor_handle_t handle) {
     // 删除ADC单次模式句柄
     adc_oneshot_del_unit(monitor->adc_handle);
 
-    heap_caps_free(monitor);
+    monitor = NULL;
+    // heap_caps_free(monitor);
 }
