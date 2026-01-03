@@ -197,7 +197,7 @@ private:
                 // 执行原有的双击行为（如音乐切换）
                 auto music = Board::GetMusic();
                 if (music && music->ReturnMode()) {
-                    music->SetMusicEventNextPlay();
+                    music->SetEventNextPlay();
                     ESP_LOGI(TAG, "Boot按键 双击触发: 下一首/下一个章节");
                 } else {
                     ESP_LOGI(TAG, "Boot按键 双击触发: 非音乐模式，无其他操作");
@@ -262,7 +262,7 @@ private:
                 // 如果这里触发，说明硬件/库直接检测到双击（非我们用两次单击合成）
                 auto music = Board::GetMusic();
                 if (music && music->ReturnMode()) {
-                    music->SetMusicEventNextPlay();
+                    music->SetEventNextPlay();
                     ESP_LOGI(TAG, "Boot按键 双击回调触发: 下一首/下一个章节");
                 }
             } else {
@@ -318,9 +318,9 @@ private:
             .adc_ch = ADC_CHANNEL_6,
             .charge_io = GPIO_NUM_NC,
             .v_div_ratio = 2.0f,
-            .v_min = 3.1f,
+            .v_min = 3.67f,
             .v_max = 4.0f,
-            .low_thresh = 65.0f,
+            .low_thresh = 20.0f,
             .report_ms = 5000
         };
         battery_handle = bat_monitor_create(&config);
@@ -351,26 +351,45 @@ private:
                             tick =0;
                             if(music)
                             {
-                                music->PausePlayback();
-
-                                vTaskDelay(pdMS_TO_TICKS(1000));
-                                if(music->ReturnMode()) {
-                                    if(music->IsActualPaused()) 
+                                if(percentage <= 10)
+                                {
+                                    ESP_LOGI(TAG, "电量过低，强制停止播放音乐");
+                                    music->SetMode(false);
+                                    if(music->IsPlaying())
+                                        music->StopStreaming(); // 停止当前播放
+                                    vTaskDelay(pdMS_TO_TICKS(1000));
+                                    app.AbortSpeaking(AbortReason::kAbortReasonNone);
+                                    app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                }
+                                else 
+                                {
+                                    if(music->ReturnMode()) {
+                                        if(music->IsPlaying())
+                                        {
+                                        music->PausePlayback();
+                                            vTaskDelay(pdMS_TO_TICKS(1000));
+                                            if(music->IsActualPaused()) 
+                                                {
+                                                    app.AbortSpeaking(AbortReason::kAbortReasonNone);
+                                                    app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                                }
+                                            else 
+                                                ESP_LOGI(TAG, "音乐未暂停，跳过低电量提示音");   
+                                            vTaskDelay(pdMS_TO_TICKS(3000));
+                                            music->ResumePlayback();
+                                        }
+                                        else 
                                         {
                                             app.AbortSpeaking(AbortReason::kAbortReasonNone);
                                             app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
                                         }
+                                    }
                                     else 
-                                        ESP_LOGI(TAG, "音乐未暂停，跳过低电量提示音");   
+                                    {   
+                                        app.AbortSpeaking(AbortReason::kAbortReasonNone);
+                                        app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                    }
                                 }
-                                else 
-                                {   
-                                    app.AbortSpeaking(AbortReason::kAbortReasonNone);
-                                    app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
-                                }
-                                vTaskDelay(pdMS_TO_TICKS(3000));
-
-                                music->ResumePlayback();
                             }
                         }
                         break;

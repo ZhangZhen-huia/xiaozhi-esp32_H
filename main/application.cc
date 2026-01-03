@@ -902,7 +902,7 @@ void Application::MainEventLoop() {
             }
 
             // 空闲超时自动进入深度睡眠（仅在真正可以进入睡眠时）
-            if (device_state_ == kDeviceStateIdle && (music->IsPlaying() == false)) {
+            if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == false)) {
                 if (CanEnterSleepMode() && clock_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
                     ESP_LOGI(TAG, "Device idle for %d seconds and can sleep -> entering deep sleep", IDLE_DEEP_SLEEP_SECONDS);
                     // 防止重复调度：清零计时

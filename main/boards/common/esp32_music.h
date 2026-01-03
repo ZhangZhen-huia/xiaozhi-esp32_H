@@ -30,6 +30,7 @@ extern "C" {
 #define STORY 1
 #define MUSIC 0
 #define PLAY_EVENT_NEXT (1 << 0)
+
 // 音频数据块结构
 struct AudioChunk {
     uint8_t* data;
@@ -45,6 +46,16 @@ struct Music_Record_Info {
     const char* artist;      // 指向 ps_music_library_ 中的 char*（不复制）
     Music_Record_Info *next;
     Music_Record_Info *last;
+};
+
+struct Story_Record_Info {
+    int story_index;
+    int chapter_index;
+    const char* story_name;   
+    const char* chapter_name;      
+    const char* category;
+    Story_Record_Info *next;
+    Story_Record_Info *last;
 };
 
 // 播放列表结构
@@ -84,6 +95,13 @@ public:
 
 private:
 
+    int display_flag = 0;
+    // 裸缓冲指针（用于零分配的单声道转换）
+    int16_t *mono_buffer_ = nullptr;
+    // 缓冲容量（以样本数计）
+    size_t mono_buffer_capacity_ = 0;
+    // 预分配的最大单通道样本数（可根据需要调整）
+    static constexpr size_t kMaxMonoSamples = 2304;
     bool mode = false;
     // 固定池（环形/slot）用于存放从SD读到的原始块，避免频繁malloc/free导致碎片
     std::vector<uint8_t*> chunk_pool_all_;
@@ -143,7 +161,7 @@ private:
     
     //音乐记录链表
     Music_Record_Info *music_record_ = nullptr;
-
+    Story_Record_Info *story_record_ = nullptr;
 
     std::string current_song_name_;
 
@@ -222,7 +240,7 @@ private:
     void PausePlayback();
     void ResumePlayback();
     bool IsActualPaused() const { return actual_pause_; };
-    void SetMusicEventNextPlay(void);
+    void SetEventNextPlay(void);
     bool is_paused(void){return is_paused_;};
     int FindValidMp3SyncWord(uint8_t* data, int data_len);
     bool IsValidMp3FrameHeader(uint8_t* header);
@@ -233,6 +251,8 @@ private:
     std::string current_story_name_;
     std::string current_category_name_;
     int current_chapter_index_ = 0;
+    std::string current_chapter_name_;
+    int32_t  current_storyplay_idx_ = 0;
 
     // 保存的故事断点（持久化/恢复用）
     std::string saved_story_category_;
@@ -257,13 +277,15 @@ private:
     std::string saved_file_path_;
     bool has_saved_MusicPosition_ = false;
     bool SaveMusicRecord_ = true;
+    bool SaveStoryRecord_ = true;
 
     TaskHandle_t NextPlay_task_handle_ = nullptr;
     EventGroupHandle_t event_group_ = nullptr;
 public:
     Esp32Music();
     ~Esp32Music();
-    Music_Record_Info* NowNode = nullptr;
+    Music_Record_Info* MusicNowNode = nullptr;
+    Story_Record_Info* StoryNowNode = nullptr;
 
     virtual void SetMusicOrStory_(int val) override{
         MusicOrStory_ = val;
@@ -314,51 +336,106 @@ public:
     virtual std::string SearchMusicFromlistByIndex(std::string list) const override;
     virtual bool IfSavedMusicPosition() override{ return has_saved_MusicPosition_; };
     virtual void UpdateMusicRecordList(const std::string& artist, const std::string& song_name)override;
-    virtual void EnableRecord(bool x) override{SaveMusicRecord_ = x;};
-    virtual bool GetIfRecordEnabled() const override { return SaveMusicRecord_; };
-    virtual bool IfNodeIsEnd() const override {
-        if(NowNode == nullptr)
-            return true;
-        return (NowNode->next == nullptr);
-    }
-    virtual int NextNodeIndex() override {
-        if(NowNode == nullptr)
-            return -1; 
-        if (NowNode->next)
-        {
-            NowNode = NowNode->next;
-            ESP_LOGI("Esp32Music", "Next node index: %d", NowNode->index);
-            return NowNode->index;
-        } 
+    virtual void EnableRecord(bool x,bool MusicOrStory) override{
+        if(MusicOrStory == MUSIC)
+            SaveMusicRecord_ = x;
         else
-            return -1; // No next node
-    }
+            SaveStoryRecord_ = x;
+    };
+    virtual bool GetIfRecordEnabled(bool MusicOrStory) const override {
+        if(MusicOrStory == MUSIC)
+            return SaveMusicRecord_;
+        else
+            return SaveStoryRecord_;
+    };
 
-    virtual int LastNodeIndex() override {
-        if(NowNode == nullptr)
-            return -1;
-        if (NowNode->last)
-        {
-            NowNode = NowNode->last;
-            ESP_LOGI("Esp32Music", "Last node index: %d", NowNode->index);
-            return NowNode->index;
-        } 
-        else
-        {
-            ESP_LOGI("Esp32Music", "No last node, Replay Current.");
-            ESP_LOGI("Esp32Music", "Last node index: %d", NowNode->index);
-            return NowNode->index;
+    virtual bool IfNodeIsEnd(bool MusicOrStory) const override {
+        if(MusicOrStory == MUSIC){
+            if(MusicNowNode == nullptr)
+                return true;
+            return (MusicNowNode->next == nullptr);
+        }
+        else{
+            if(StoryNowNode == nullptr)
+                return true;
+            return (StoryNowNode->next == nullptr);
         }
     }
+    virtual int NextNodeIndex(bool MusicOrStory) override {
+        if(MusicOrStory == MUSIC){
+            if(MusicNowNode == nullptr)
+                return -1; 
+            if (MusicNowNode->next)
+            {
+                MusicNowNode = MusicNowNode->next;
+                ESP_LOGI("Esp32Music", "Next node index: %d", MusicNowNode->index);
+                return MusicNowNode->index;
+            } 
+            else
+                return -1; // No next node
+        }
+        else{
+            if(StoryNowNode == nullptr)
+                return -1; 
+            if (StoryNowNode->next)
+            {
+                StoryNowNode = StoryNowNode->next;
+                ESP_LOGI("Esp32Music", "Next story node index: %d", StoryNowNode->story_index,StoryNowNode->chapter_index);
+                SetCurrentChapterIndex(StoryNowNode->chapter_index);
+                return StoryNowNode->story_index;
+            } 
+            else
+                return -1; // No next node
+        }
+    }
+
+    virtual int LastNodeIndex(bool MusicOrStory) override {
+        if(MusicOrStory == MUSIC){
+            if(MusicNowNode == nullptr)
+                return -1;
+            if (MusicNowNode->last)
+            {
+                MusicNowNode = MusicNowNode->last;
+                ESP_LOGI("Esp32Music", "Last node index: %d", MusicNowNode->index);
+                return MusicNowNode->index;
+            } 
+            else
+            {
+                ESP_LOGI("Esp32Music", "No last node, Replay Current.");
+                ESP_LOGI("Esp32Music", "Last node index: %d", MusicNowNode->index);
+                return MusicNowNode->index;
+            }
+        }
+        else{
+            if(StoryNowNode == nullptr)
+                return -1;
+            if (StoryNowNode->last)
+            {
+                StoryNowNode = StoryNowNode->last;
+                ESP_LOGI("Esp32Music", "Last story node index: %d", StoryNowNode->story_index);
+                SetCurrentChapterIndex(StoryNowNode->chapter_index);
+                return StoryNowNode->story_index;
+            } 
+            else
+            {
+                ESP_LOGI("Esp32Music", "No last story node, Replay Current.");
+                ESP_LOGI("Esp32Music", "Last story node index: %d", StoryNowNode->story_index);
+                SetCurrentChapterIndex(StoryNowNode->chapter_index);
+                return StoryNowNode->story_index;
+            }
+        }
+    }
+
+    
     // 故事播放相关接口
     virtual bool ScanStoryLibrary(const std::string& story_folder) override;
     virtual bool IfSavedStoryPosition() override { return has_saved_story_position_; };
     virtual std::string GetCurrentStoryName() override{ return current_story_name_; };
     virtual std::string GetCurrentCategoryName() override{ return current_category_name_; };
     virtual int GetCurrentChapterIndex() override{ return current_chapter_index_; };
-
+    virtual std::string GetCurrentChapterName() override{ return current_chapter_name_; };
     virtual void SetCurrentCategoryName(const std::string& category)override;
-
+    virtual void SetCurrentStoryChapter(int index)override;
     virtual void SetCurrentStoryName(const std::string& story)override;
 
     virtual void SetCurrentChapterIndex(int index)override;
@@ -378,6 +455,7 @@ public:
     size_t FindStoryIndexInCategory(const std::string& category, const std::string& story_name) const override;
     virtual const PSStoryEntry* GetStoryLibrary(size_t &out_count) const override;
     size_t FindStoryIndexFuzzy(const std::string& story_name) const override;
+    virtual void UpdateStoryRecordList(const std::string& category, const std::string& story, const std::string& chapter)override;
 
 };
 

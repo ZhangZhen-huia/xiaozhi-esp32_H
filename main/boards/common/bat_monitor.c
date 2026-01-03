@@ -73,6 +73,7 @@ static void monitor_task(void *arg) {
         
         int mv = 0;
         adc_cali_raw_to_voltage(handle->adc_cali_handle, raw, &mv);
+        ESP_LOGI(TAG, "Raw ADC: %d, Voltage: %d mV", raw, mv);
         voltage = (float)mv / 1000.0f * handle->config.v_div_ratio;
         
         // 检测充电状态
@@ -115,11 +116,37 @@ static void monitor_task(void *arg) {
                 }
             }
         }
+        if(voltage >= 3.981)
+        {
+            percentage = 100;
+        }
+        else if(voltage < 3.981 && voltage >= 3.92)
+        {
+            percentage = 80+((voltage - 3.92)/0.061)*20;
+        }
+        else if(voltage < 3.92 && voltage >= 3.836)
+        {
+            percentage = 60+((voltage - 3.836)/0.084)*20;
+        }
+        else if(voltage < 3.836 && voltage >= 3.786)
+        {
+            percentage = 40+((voltage - 3.786)/0.064)*20;
+        }
+        else if(voltage < 3.786 && voltage >= 3.745)
+        {
+            percentage = 20+((voltage - 3.745)/0.041)*20;
+        }
+        else if(voltage < 3.745 && voltage >= 3.674)
+        {
+            percentage = ((voltage - 3.674)/0.071)*20;
+        }
+
         
         // 计算电量百分比
-        percentage = ((voltage - handle->config.v_min) / 
+        float raw_percentage = ((voltage - handle->config.v_min) /
                           (handle->config.v_max - handle->config.v_min)) * 100.0f;
-        percentage = percentage < 0 ? 0 : (percentage > 100 ? 100 : percentage);
+        raw_percentage = raw_percentage < 0 ? 0 : (raw_percentage > 100 ? 100 : raw_percentage);
+        ESP_LOGI(TAG, "Battery Voltage: %.2f V, Calculated Percentage: %.2f%%, Mapped Percentage: %.2f%%", voltage, raw_percentage, percentage);
         // 触发电压报告事件
         if (handle->event_cb) {
             handle->event_cb(BAT_EVENT_VOLTAGE_REPORT, voltage, (int)percentage, handle->user_data);
@@ -213,7 +240,7 @@ void bat_monitor_destroy(bat_monitor_handle_t handle) {
     bat_monitor_t *monitor = (bat_monitor_t *)handle;
     monitor->running = false;
     
-    // 等待任务结束
+    //等待任务结束
     vTaskDelay(10);
     
     // 删除ADC校准句柄

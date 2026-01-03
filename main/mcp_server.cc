@@ -33,31 +33,6 @@ McpServer::~McpServer() {
     tools_.clear();
 }
 
-// static std::string EscapeJson(const std::string &s) {
-//     std::string out;
-//     out.reserve(s.size());
-//     for (unsigned char c : s) {
-//         switch (c) {
-//             case '\"': out += "\\\""; break;
-//             case '\\': out += "\\\\"; break;
-//             case '\b': out += "\\b"; break;
-//             case '\f': out += "\\f"; break;
-//             case '\n': out += "\\n"; break;
-//             case '\r': out += "\\r"; break;
-//             case '\t': out += "\\t"; break;
-//             default:
-//                 if (c < 0x20) {
-//                     char buf[8];
-//                     snprintf(buf, sizeof(buf), "\\u%04x", c);
-//                     out += buf;
-//                 } else {
-//                     out += c;
-//                 }
-//         }
-//     }
-//     return out;
-// }
-
 
 static void EscapeJsonAppend(const std::string &s, std::string &out) {
     out.reserve(out.size() + s.size());
@@ -163,7 +138,7 @@ void McpServer::AddCommonTools() {
                     return true;
                 });
         AddTool("music.play",
-                "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1\n"
+                "当用户想要播放某个指定音乐时调用,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1，仅仅用来播放音乐\n"
                 "参数:\n"
                 "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
                 "  `singer`: 歌手名称，可选，默认为空字符串。\n"
@@ -177,8 +152,11 @@ void McpServer::AddCommonTools() {
                     Property("mode", kPropertyTypeString,"顺序播放"),// 播放模式（可选）
                     Property("GoOn", kPropertyTypeString,"")// 
                 }),
-                [music](const PropertyList& properties) -> ReturnValue {
-                    music->SetMusicOrStory_(MUSIC);
+                [music,&board](const PropertyList& properties) -> ReturnValue {
+                    if(board.GetBatteryLevel() <= 10)
+                    {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
+                    }
                     auto song_name = properties["songname"].value<std::string>();
                     auto singer = properties["singer"].value<std::string>();
                     auto mode = properties["mode"].value<std::string>();
@@ -204,7 +182,6 @@ void McpServer::AddCommonTools() {
                     std::string now_playing; // 要返回给调用方的播放提示
 
                     if((song_name.empty() && singer.empty()) || !goon.empty()) {
-                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->ResumePlayback();
@@ -213,7 +190,7 @@ void McpServer::AddCommonTools() {
                         if (music->IfSavedMusicPosition()) {
                             ESP_LOGI(TAG, "Resuming saved playback position");
                             now_playing = music->GetCurrentSongName();
-                            music->EnableRecord(true);
+                            music->EnableRecord(true, MUSIC);
                             ESP_LOGI(TAG, "Resuming song: %s", now_playing.c_str());
                             return BuildNowPlayingPayload("{\"call_tool\":\"actually.2\"}", "（简短播报一下）将为你继续播放", now_playing);
                         } else {
@@ -222,7 +199,6 @@ void McpServer::AddCommonTools() {
                     }
                     else if(!song_name.empty() && singer.empty())
                     {
-                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->StopStreaming(); // 停止当前播放
@@ -236,7 +212,7 @@ void McpServer::AddCommonTools() {
                             // 把找到的歌曲信息保存并返回，同时告诉 AI 调用另一个工具去播放
                             now_playing = song_name;
                             // 构造 ai_instruction（机器可解析的调用指令：call_tool/play_music）
-                            music->EnableRecord(true);
+                            music->EnableRecord(true, MUSIC);
                             return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报一下）将为你播放", now_playing);
                         }  else {
                             return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
@@ -244,7 +220,6 @@ void McpServer::AddCommonTools() {
                     }
                     else if(!singer.empty() && song_name.empty())
                     {
-                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->StopStreaming(); // 停止当前播放
@@ -265,7 +240,7 @@ void McpServer::AddCommonTools() {
                         if (file_paths.empty()) {
                             return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
                         }
-                        music->EnableRecord(true); 
+                        music->EnableRecord(true, MUSIC);
                         // 创建临时播放列表
                         std::string temp_playlist_name = "SearchResults_" + singer;
                         music->CreatePlaylist(temp_playlist_name, file_paths);
@@ -286,7 +261,6 @@ void McpServer::AddCommonTools() {
                     }
                     else
                     {
-                        music->SetMode(true);
                         if(music->is_paused())
                         {
                             music->StopStreaming(); // 停止当前播放
@@ -303,7 +277,7 @@ void McpServer::AddCommonTools() {
                         auto meta = ParseSongMeta(path);
                         if (meta.norm_title == need_title && meta.norm_artist == need_artist) {
                             music->SetPlayIndex(music->GetDefaultList(), index);
-                            music->EnableRecord(true); 
+                            music->EnableRecord(true, MUSIC);
                             // 找到匹配的歌曲和歌手
                             if (!music->PlayFromSD(path, song_name)) {
                                 return "{\"success\": false, \"message\": \"播放失败\"}";
@@ -327,10 +301,10 @@ void McpServer::AddCommonTools() {
         PropertyList(),
         [music](const PropertyList& properties) -> ReturnValue {
             // auto &app = Application::GetInstance();
-
+            music->SetMode(true);
+            music->SetMusicOrStory_(MUSIC);
             if (!music->ResumeSavedPlayback()) {
                 ESP_LOGI(TAG, "ResumeSavedPlayback failed or not possible — fallback to random play");
-
                 // 在库中随机选歌并播放，直到找到可播放的为止（若库为空则失败）
                 size_t out_count = 0;
                 auto all_music = music->GetMusicLibrary(out_count);
@@ -371,6 +345,8 @@ void McpServer::AddCommonTools() {
         "调用完 music.play或 next 后，如果函数返回内容里出现{\"call_tool\":\"actually.1\"}，请立即再调用 actually.1，参数留空。",
         PropertyList(),
         [music](const PropertyList& properties) -> ReturnValue {
+            music->SetMode(true);
+            music->SetMusicOrStory_(MUSIC);
             auto &app = Application::GetInstance();
 
             auto list = music->GetCurrentPlayList();
@@ -379,7 +355,7 @@ void McpServer::AddCommonTools() {
         });
 
         AddTool("searchmusic",
-                "用于查询本地是否存在音乐，当用户主动询问哪些歌曲或者某个作者有哪些歌曲或者问某个歌曲的时候调用\n"
+                "用于查询本地是否存在音乐，当用户主动询问哪些歌曲或者某个作者有哪些歌曲或者问某个歌曲的时候调用，仅仅用来搜索音乐\n"
                 "参数:\n"
                 "  `singer`: 歌手名称（非必需）。\n"
                 "   `songname`: 歌曲名称（非必需）。\n"
@@ -392,11 +368,9 @@ void McpServer::AddCommonTools() {
                 [music](const PropertyList& properties) -> ReturnValue {
                     auto singer = properties["singer"].value<std::string>();
                     auto song_name = properties["songname"].value<std::string>();
-                    ESP_LOGI(TAG, "Search music: singer='%s', songname='%s'", singer.c_str(), song_name.c_str());
+                    // ESP_LOGI(TAG, "Search music: singer='%s', songname='%s'", singer.c_str(), song_name.c_str());
                     size_t out_count = 0;
-                    // size_t max_count = 5;
                     auto all_music = music->GetMusicLibrary(out_count);        
-                    // max_count = min(max_count, out_count);            
                     // 使用复用缓冲构建返回 JSON，避免多次小分配
                     g_mcp_scratch.clear();
                     if(!singer.empty() && song_name.empty()) {
@@ -524,19 +498,23 @@ void McpServer::AddCommonTools() {
                 PropertyList({
                     Property("mode", kPropertyTypeString,"下一章") // 故事切换模式，下一章、下一个
                 }),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,&board](const PropertyList& properties) -> ReturnValue {
+                    if(board.GetBatteryLevel() <= 10)
+                    {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
+                    }
                     auto MusicOrStory_ = music->GetMusicOrStory_();
                                         // JSON 字符串转义（局部 lambda）
 
                     auto playmode = music->GetPlaybackMode();
                     std::string now_playing; // 要返回给调用方的播放提示
+                    if(music->is_paused())
+                    {
+                        music->StopStreaming(); // 停止当前播放
+                    }
                     if(MusicOrStory_ == MUSIC)
                     {
-                        if(music->is_paused())
-                        {
-                            music->StopStreaming(); // 停止当前播放
-                        }
-                        if(music->IfNodeIsEnd())
+                        if(music->IfNodeIsEnd(MUSIC))
                         {                        
                             auto list = music->GetCurrentPlayList();
                             if(playmode == PLAYBACK_MODE_ORDER)
@@ -548,13 +526,13 @@ void McpServer::AddCommonTools() {
                                 // 在循环模式下，保持当前索引不变即可
                             }
                             now_playing = music->SearchMusicFromlistByIndex(list);
-                            music->EnableRecord(true);
+                            music->EnableRecord(true, MUSIC);
                         }
                         else
                         {
                             auto list = music->GetDefaultList();
-                            music->SetPlayIndex(list, music->NextNodeIndex());
-                            music->EnableRecord(false);
+                            music->SetPlayIndex(list, music->NextNodeIndex(MUSIC));
+                            music->EnableRecord(false, MUSIC);
                             now_playing = music->SearchMusicFromlistByIndex(list);
                         }
 
@@ -570,33 +548,48 @@ void McpServer::AddCommonTools() {
                     else
                     {
                         auto mode = properties["mode"].value<std::string>();
-
                         auto category = music->GetCurrentCategoryName();
                         auto story_name = music->GetCurrentStoryName();
-
-                        if(category.empty() || story_name.empty())
+                        if(music->IfNodeIsEnd(STORY))
                         {
-                            return "{\"success\": false, \"message\": \"当前没有播放故事\"}";
-                        }
-                        if(mode == "下一章" || mode == "")
-                        {
-                            ESP_LOGI(TAG,"下一章");
-                            if(!music->NextChapterInStory(category, story_name))
+                            if(category.empty() || story_name.empty())
                             {
-                                return "{\"success\": false, \"message\": \"下一章播放失败\"}";
+                                return "{\"success\": false, \"message\": \"当前没有播放故事\"}";
                             }
-                        }
-                        else if(mode == "下一个")
-                        {
-                            ESP_LOGI(TAG,"下一个");
-                            if(!music->NextStoryInCategory(category))
+                            if(mode == "下一章" || mode == "")
                             {
-                                return "{\"success\": false, \"message\": \"下一个故事播放失败\"}";
+                                ESP_LOGI(TAG,"下一章");
+                                if(!music->NextChapterInStory(category, story_name))
+                                {
+                                    return "{\"success\": false, \"message\": \"下一章播放失败\"}";
+                                }
                             }
+                            else if(mode == "下一个")
+                            {
+                                ESP_LOGI(TAG,"下一个");
+                                if(!music->NextStoryInCategory(category))
+                                {
+                                    return "{\"success\": false, \"message\": \"下一个故事播放失败\"}";
+                                }
+                            }
+                            music->EnableRecord(true, STORY);
+                            now_playing = music->GetCurrentCategoryName() + "故事：" + music->GetCurrentStoryName() +
+                                        "章节：" + std::to_string(music->GetCurrentChapterIndex() + 1);
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "(你需要读出来)将为你播放", now_playing);
                         }
-                        now_playing = music->GetCurrentCategoryName() + "故事：" + music->GetCurrentStoryName() +
-                                    "章节：" + std::to_string(music->GetCurrentChapterIndex() + 1);
-                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "(你需要读出来)将为你播放", now_playing);
+                        else
+                        {
+                            size_t count = 0;
+                            auto ps_story_index_ = music->GetStoryLibrary(count);
+                            music->EnableRecord(false, STORY);
+                            size_t idx = music->NextNodeIndex(STORY);
+                            music->SetCurrentStoryName(ps_story_index_[idx].story_name);
+                            music->SetCurrentCategoryName(ps_story_index_[idx].category);
+                            now_playing = music->GetCurrentCategoryName() + "故事：" + music->GetCurrentStoryName() +
+                                        "章节：" + std::to_string(music->GetCurrentChapterIndex() + 1);
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "(你需要读出来)将为你播放", now_playing);
+                        }
+                        
                     }
                     return "{\"success\": false, \"message\": \"下一首播放失败\"}";
             });
@@ -610,25 +603,30 @@ void McpServer::AddCommonTools() {
                 PropertyList({
                     Property("mode", kPropertyTypeString,"上一章") // 故事切换模式，上一章、上一个
                 }),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,&board](const PropertyList& properties) -> ReturnValue {
+                    if(board.GetBatteryLevel() <= 10)
+                    {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
+                    }
                     auto MusicOrStory_ = music->GetMusicOrStory_();
-                                        // JSON 字符串转义（局部 lambda）
+                                        
                     std::string now_playing; // 要返回给调用方的播放提示
+                    if(music->is_paused())
+                    {
+                        music->StopStreaming(); // 停止当前播放
+                    }
                     if(MusicOrStory_ == MUSIC)
                     {
-                        if(music->is_paused())
-                        {
-                            music->StopStreaming(); // 停止当前播放
-                        }
+
                         auto list = music->GetDefaultList();
-                        auto index = music->LastNodeIndex();
+                        auto index = music->LastNodeIndex(MUSIC);
                         if(index == -1)
                         {
                             return "{\"success\": false, \"message\": \"还没有播放记录呢，请先播放音乐\"}";
                         }
 
                         music->SetPlayIndex(list, index);
-                        music->EnableRecord(false);
+                        music->EnableRecord(false, MUSIC);
                         now_playing = music->SearchMusicFromlistByIndex(list);
                         
 
@@ -643,23 +641,26 @@ void McpServer::AddCommonTools() {
                     }
                     else
                     {
+                        music->EnableRecord(false, STORY);
+                        auto index = music->LastNodeIndex(STORY);
+                        if(index == -1)
+                        {
+                            return "{\"success\": false, \"message\": \"还没有播放记录呢，请先播放故事\"}";
+                        }
 
-                        // std::string ai_instr_json = std::string("{\"call_tool\":\"actually.3\"}"); 
-                        // now_playing = music->GetCurrentCategoryName()+"故事："+music->GetCurrentStoryName()+
-                        //               "章节："+std::to_string(music->GetCurrentChapterIndex()+1);
-                        // // 返回包含摘要 + 指示 AI 调用的 payload（ai_instruction 为 JSON 对象）
-                        // std::string payload = "{\"success\": true, \"message\": \"(你需要读出来)将为你播放\", \"now_playing\": \"";
-                        // payload += (now_playing);
-                        // payload += "\", \"ai_instruction\": ";
-                        // payload += ai_instr_json;
-                        // payload += "}";
-                        // return payload;
+                        size_t count = 0;
+                        auto ps_story_index_ = music->GetStoryLibrary(count);
+                        music->SetCurrentStoryName(ps_story_index_[index].story_name);
+                        music->SetCurrentCategoryName(ps_story_index_[index].category);
+                        now_playing = music->GetCurrentCategoryName() + "故事：" + music->GetCurrentStoryName() +
+                                        "章节：" + std::to_string(music->GetCurrentChapterIndex() + 1);
+                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "(你需要读出来)将为你播放", now_playing);
                     }
                     return "{\"success\": false, \"message\": \"上一首播放失败\"}";
             });
 
             AddTool("story.search",
-                    "用于查询本地的故事，当用户主动询问有哪些故事或者某个类别下有哪些故事或者问某个故事的章节的时候调用\n"
+                    "用于查询本地的故事，当用户主动询问有哪些故事或者某个类别下有哪些故事或者问某个故事的章节的时候调用,你需要先查询到完整的故事路径然后再播放\n"
                     "参数:\n"
                     "  `category`: 故事类别（可选）。\n"
                     "  `story`: 故事名称（可选）。\n"
@@ -695,8 +696,6 @@ void McpServer::AddCommonTools() {
                         }
                         else if(!story.empty() && category.empty())
                         {
-                            // 先找到该故事所属类别及章节
-                            auto cats = music->GetStoryCategories();
                             std::string found_cat;
                             auto index = music->FindStoryIndexFuzzy(story);  
                             
@@ -741,7 +740,7 @@ void McpServer::AddCommonTools() {
                             auto cats = music->GetStoryCategories();
                             g_mcp_scratch.clear();
                             g_mcp_scratch.reserve(256 + cats.size()*32);
-                            g_mcp_scratch += "{\"success\": true, \"message\": \"我可以播放以下类别的故事: \", \"categories\": [";
+                            g_mcp_scratch += "{\"success\": true, \"message\"\"我可以播放以下类别的故事: : \", \"categories\": [";
                             for (size_t i = 0; i < cats.size(); ++i) {
                                 if (i) g_mcp_scratch += ", ";
                                 g_mcp_scratch += "\"";
@@ -791,9 +790,9 @@ void McpServer::AddCommonTools() {
                 
             // story: 播放指定类别/故事/章节
             AddTool("story.play",
-                "当用户说继续播放故事的时候调用。调用完之后根据当前工具返回值来调用下一个工具，出现actually.3就调用工具actually.3，出现actually.4就调用工具actually.4\n"
+                "当用户说继续播放故事的时候调用。先用story.search找到到完整的故事路径，调用完之后根据当前工具返回值来调用下一个工具，出现actually.3就调用工具actually.3，出现actually.4就调用工具actually.4。只有故事能调用这个工具，音乐要调用music.play来播放，\n"
                 "参数: \n"
-                "`Category`:故事的类别,包括`搞笑`，`惊悚`，`益智`，可选\n"
+                "`Category`:故事的类别,可选\n"
                 " `Story`:故事名称,可选\n"
                 " `Chapter_Index`:故事章节,(可选，默认0)\n"
                 " `GoOn`: 继续播放上次的故事标志位，默认为`false`。\n"
@@ -807,8 +806,11 @@ void McpServer::AddCommonTools() {
                     Property("GoOn", kPropertyTypeBoolean,false),
                     Property("mode", kPropertyTypeString,"顺序播放")
                 }),
-                [music](const PropertyList& properties) -> ReturnValue {
-                    music->SetMusicOrStory_(STORY);
+                [music,&board](const PropertyList& properties) -> ReturnValue {
+                    if(board.GetBatteryLevel() <= 10)
+                    {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
+                    }
                     auto cat = properties["Category"].value<std::string>();
                     auto name = properties["Story"].value<std::string>();
                     int chapter_idx = properties["Chapter_Index"].value<int>();
@@ -833,6 +835,7 @@ void McpServer::AddCommonTools() {
 
                     std::string now_playing; // 要返回给调用方的播放提示
                     if((cat.empty() && name.empty() && chapter_idx==0) || goon==true) {
+                        ESP_LOGI(TAG, "Continuing last story playback");
                         // 播放上次的故事
                         if (music->IfSavedStoryPosition()) {
                             now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
@@ -841,29 +844,24 @@ void McpServer::AddCommonTools() {
                             return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
                         }
                     }
-                    else
+                    else if(cat.empty() && !name.empty() )
                     {
-                        music->SetCurrentCategoryName(cat);
-                        if(name.empty())
+                        std::string found_cat;
+                        auto index = music->FindStoryIndexFuzzy(name);  
+                        
+                        size_t count = 0;
+                        auto storys = music->GetStoryLibrary(count);
+                        std::string final_name;
+                        if(index != -1)
                         {
-                            // 选择该类别下的第一个故事
-                            auto stories = music->GetStoriesInCategory(cat);
-                            if(stories.empty())
-                            {
-                                return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
-                            }
-                            auto count = stories.size();
-                            size_t idx = esp_random() % count;
-                            name = stories[idx];
+                            found_cat = storys[index].category;
+                            final_name = storys[index].story_name;
                         }
-                        auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
-                        if(index == -1)
+                        else
                         {
                             return "{\"success\": false, \"message\": \"未找到该故事\"}";
                         }
-                        size_t  count;
-                        auto storys = music->GetStoryLibrary(count);
-                        auto final_name = storys[index].story_name;
+                        music->SetCurrentCategoryName(found_cat);
                         music->SetCurrentStoryName(final_name);
                         if(chapter_idx == 0)
                         {
@@ -873,7 +871,68 @@ void McpServer::AddCommonTools() {
                         now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
                         return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
                     }
+                    else if(!cat.empty() && name.empty())
+                    {
+                        //这样就是在这个类别里面循环播放
+                        music->SetCurrentCategoryName(cat);
+                        // 选择该类别下的第一个故事
+                        auto stories = music->GetStoriesInCategory(cat);
+                        if(stories.empty())
+                        {
+                            return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
+                        }
+                        auto count = stories.size();
+                        size_t idx = esp_random() % count;
+                        name = stories[idx];
 
+                        auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
+                        if(index == -1)
+                        {
+                            return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                        }
+                        auto storys = music->GetStoryLibrary(count);
+                        auto final_name = storys[index].story_name;
+                        music->SetCurrentStoryName(final_name);
+                        chapter_idx = 1; // 从第一章开始播放
+                        music->SetCurrentChapterIndex(chapter_idx-1);
+                        now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
+                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+                    }
+                    else
+                    {
+                       auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
+                        if(index == -1)
+                        {
+                            return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                        }
+                        size_t count = 0;
+                        auto storys = music->GetStoryLibrary(count);
+                        auto final_name = storys[index].story_name;
+                        music->SetCurrentStoryName(final_name);
+                        music->SetCurrentCategoryName(cat);
+                        if(chapter_idx <=0 )
+                            chapter_idx = 1;
+                        music->SetCurrentStoryChapter(chapter_idx-1);
+                        
+                        auto chapters = music->GetCurrentChapterName();
+                        size_t pos = chapters.find_last_of("/\\");
+                        if(pos != std::string::npos) 
+                            chapters = chapters.substr(pos + 1);
+                        pos = chapters.find_last_of('.');
+                        if(pos != std::string::npos)
+                            chapters = chapters.substr(0, pos);
+
+                        if(chapter_idx == 0)
+                        {
+                            chapter_idx = 1; // 默认从第一章开始播放
+                        }
+                        
+                        music->SetCurrentChapterIndex(chapter_idx-1);
+                        now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章" + chapters;
+                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+
+                    }
+                    return "{\"success\": false, \"message\": \"播放故事失败\"}";
                 });
             
 
@@ -881,8 +940,11 @@ void McpServer::AddCommonTools() {
                 "调用完 story.play后，如果函数返回内容里出现{\"call_tool\":\"actually.4\"}，请立即再调用 actually.4，参数留空。",
                 PropertyList(),
                 [music](const PropertyList& properties) -> ReturnValue {
+                    ESP_LOGI(TAG, "actually.4 called to resume story playback");
+                    music->SetMode(true);
+                    music->SetMusicOrStory_(STORY);
                     if (!music->ResumeSavedStoryPlayback()) {
-                        ESP_LOGI(TAG, "ResumeSavedStoryPlayback failed or not possible");
+                        ESP_LOGI("TAG", "ResumeSavedStoryPlayback failed or not possible");
                     }
                     return "{\"success\": true, \"message\": \"继续播放故事\"}";
                 });
@@ -892,7 +954,9 @@ void McpServer::AddCommonTools() {
                 "返回：立刻开始播放，无需播报状态",
                 PropertyList(),
                 [music](const PropertyList& properties) -> ReturnValue {
-
+                    ESP_LOGI(TAG, "actually.3 called to start story playback");
+                    music->SetMode(true);
+                    music->SetMusicOrStory_(STORY);
                     if(music->SelectStoryAndPlay())
                     {
                         return "{\"success\": true, \"message\": \"开始播放故事\"}";
@@ -901,26 +965,26 @@ void McpServer::AddCommonTools() {
                 });
                 }
 
-            AddTool("Notice",
-                "无",
-                PropertyList(),
-                [](const PropertyList& properties) -> ReturnValue {
-                    auto &app = Application::GetInstance();
-                    if(app.device_Role == Player)
-                    {
+            // AddTool("Notice",
+            //     "无",
+            //     PropertyList(),
+            //     [](const PropertyList& properties) -> ReturnValue {
+            //         auto &app = Application::GetInstance();
+            //         if(app.device_Role == Player)
+            //         {
                         
-                        return "{\"success\": true, \"message\": \"系统提示：你现在是音乐播放器模式,需要快速播放音乐然后快速进入待机状态，根据用户需求调用相应工具来快速播放音乐，不需要与用户进行互动\"}";
-                    }
-                    else if(app.device_Role == Role_Xiaozhi)
-                    {
-                        return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的角色叫做小智，可以与用户进行深入的对话和互动，现在主动向用户进行问候吧\"}";
-                    }
-                    else if(app.device_Role == Role_ESP)
-                    {
-                        return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的角色叫做ESP，可以与用户进行深入的对话和互动，现在主动向用户进行问候吧\"}";
-                    }
-                    return "{\"success\": true, \"message\": \"系统提示：未知的设备角色\"}";
-                });
+            //             return "{\"success\": true, \"message\": \"系统提示：你现在是音乐播放器模式,需要快速播放音乐然后快速进入待机状态，根据用户需求调用相应工具来快速播放音乐，不需要与用户进行互动\"}";
+            //         }
+            //         else if(app.device_Role == Role_Xiaozhi)
+            //         {
+            //             return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的角色叫做小智，可以与用户进行深入的对话和互动，现在主动向用户进行问候吧\"}";
+            //         }
+            //         else if(app.device_Role == Role_ESP)
+            //         {
+            //             return "{\"success\": true, \"message\": \"系统提示：你现在是AI助理模式，你的角色叫做ESP，可以与用户进行深入的对话和互动，现在主动向用户进行问候吧\"}";
+            //         }
+            //         return "{\"success\": true, \"message\": \"系统提示：未知的设备角色\"}";
+            //     });
 
 
     // Restore the original tools list to the end of the tools list

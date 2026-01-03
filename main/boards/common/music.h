@@ -35,6 +35,7 @@ struct PSStoryEntry {
     std::string norm_category;   // 保留规范化用于快速比较（DRAM，轻量）
     std::string norm_story;      // 保留规范化用于快速比较（DRAM，轻量）
     char *token_norm = nullptr;  // 保留空格的小写 token-normalized 字符串（存放于 SPIRAM）
+    uint32_t idx = 0;              // 故事索引编号
 };
 enum PlaybackMode {
     PLAYBACK_MODE_ONCE = 0,     // 播放一次
@@ -68,7 +69,7 @@ public:
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const =0;
 
     virtual bool is_paused(void)=0;
-    virtual void SetMusicEventNextPlay(void)=0;
+    virtual void SetEventNextPlay(void)=0;
     virtual void PausePlayback()=0;
     virtual void ResumePlayback()=0;
     virtual bool IsActualPaused() const { return false; };
@@ -93,11 +94,11 @@ public:
     virtual bool IfSavedMusicPosition()  = 0;
     virtual std::string GetCurrentSongName() = 0;
     virtual void UpdateMusicRecordList(const std::string& artist, const std::string& song_name) = 0;
-    virtual void EnableRecord(bool x)=0;
-    virtual bool GetIfRecordEnabled() const =0;
-    virtual bool IfNodeIsEnd() const =0;
-    virtual int NextNodeIndex() =0;
-    virtual int LastNodeIndex() =0;
+    virtual void EnableRecord(bool x,bool MusicOrStory)=0;
+    virtual bool GetIfRecordEnabled(bool MusicOrStory) const =0;
+    virtual bool IfNodeIsEnd(bool MusicOrStory) const =0;
+    virtual int NextNodeIndex(bool MusicOrStory) =0;
+    virtual int LastNodeIndex(bool MusicOrStory) =0;
     virtual bool ScanStoryLibrary(const std::string& story_folder) = 0;
     virtual std::vector<std::string> GetStoryCategories() const = 0;
     virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const = 0;
@@ -112,7 +113,7 @@ public:
     virtual std::string GetCurrentCategoryName() =0;
     virtual int GetCurrentChapterIndex() =0;
     virtual const PSStoryEntry* GetStoryLibrary(size_t &out_count) const =0;
-
+    virtual std::string GetCurrentChapterName() =0;
     virtual void ScanAndLoadStory()=0;
     virtual int GetMusicOrStory_() const=0;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) = 0;
@@ -121,8 +122,11 @@ public:
     virtual void SetCurrentStoryName(const std::string& story) =0;
     virtual void SetCurrentChapterIndex(int index) = 0;
     virtual bool NextStoryInCategory(const std::string& category) = 0;
+    virtual void SetCurrentStoryChapter(int index) = 0;
     virtual size_t FindStoryIndexInCategory(const std::string& category, const std::string& story_name) const = 0;
     virtual size_t FindStoryIndexFuzzy(const std::string& story_name) const = 0;
+    virtual void UpdateStoryRecordList(const std::string& category, const std::string& story, const std::string& chapter) = 0;
+
 };
 
 #endif // MUSIC_H 

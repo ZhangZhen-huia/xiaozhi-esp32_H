@@ -456,16 +456,12 @@ std::string WifiBoard::GetDeviceStatusJson() {
     cJSON_AddItemToObject(root, "lamp", lamp);
 
     // Battery
-    int battery_level = 0;
-    bool charging = false;
-    bool discharging = false;
-    if (board.GetBatteryLevel(battery_level, charging, discharging)) {
-        cJSON* battery = cJSON_CreateObject();
+    int battery_level = board.GetBatteryLevel();
+    if( battery_level >=0 ) {
+        auto battery = cJSON_CreateObject();
         cJSON_AddNumberToObject(battery, "level", battery_level);
-        cJSON_AddBoolToObject(battery, "charging", charging);
         cJSON_AddItemToObject(root, "battery", battery);
     }
-
     // Network
     auto network = cJSON_CreateObject();
     auto& wifi_station = WifiStation::GetInstance();
