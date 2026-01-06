@@ -28,7 +28,7 @@
 
 #define TAG "Application"
 
-
+extern bool NotResumePlayback;
 static const char* const STATE_STRINGS[] = {
     "unknown",
     "starting",
@@ -90,6 +90,27 @@ Application::~Application() {
         esp_timer_delete(clock_timer_handle_);
     }
     vEventGroupDelete(event_group_);
+}
+
+// 全局唤醒计时（ms），0 表示未计时
+static std::atomic<int64_t> s_wake_start_ms{0};
+
+static inline void StartWakeTimerInternal() {
+    int64_t now = esp_timer_get_time() / 1000;
+    s_wake_start_ms.store(now, std::memory_order_release);
+    ESP_LOGI(TAG, "Wake timer started at %lld ms", (long long)now);
+}
+
+static inline int64_t ConsumeWakeStartMs() {
+    return s_wake_start_ms.exchange(0, std::memory_order_acq_rel);
+}
+int64_t Application::GetAndClearWakeElapsedMs() {
+    // 取出并清零起始时间（0 表示无计时）
+    int64_t start = s_wake_start_ms.exchange(0, std::memory_order_acq_rel);
+    if (start == 0) return 0;
+    int64_t now = esp_timer_get_time() / 1000;
+    int64_t elapsed = now - start;
+    return elapsed > 0 ? elapsed : 0;
 }
 
 void Application::CheckAssetsVersion() {
@@ -237,7 +258,7 @@ void Application::CheckNewVersion(Ota& ota) {
 void Application::ShowBatteryLevel(int percent) {
     if (percent < 0) percent = 0;
     if (percent > 100) percent = 100;
-
+    percent = (percent / 10) * 10; // 四舍五入到最近的10的倍数
     // 显示文字
     char buf[64];
     snprintf(buf, sizeof(buf), "当前电量：%d%%", percent);
@@ -461,6 +482,17 @@ void Application::StopListening() {
     });
 }
 
+void Application::GetSwitchState(){
+    auto ledmode = gpio_get_level(LEDMODE_GPIO);
+    auto normalmode = gpio_get_level(NORMALMODE_GPIO);
+    ESP_LOGI(TAG, "ledmode: %d, normalmode: %d", ledmode, normalmode);
+    // device_function_ = Function_AIAssistant;
+    if(ledmode == 0 && normalmode ==1) {
+        device_function_ = Function_Light;
+    } else if(ledmode ==1 && normalmode ==0) {
+        device_function_ = Function_AIAssistant;
+    } 
+}
 
 bool IsWifiConfigMode() {
     auto& ssid_manager = SsidManager::GetInstance();
@@ -476,6 +508,20 @@ void Application::Start() {
     auto& board = Board::GetInstance();
 
 
+    //获取设备功能
+    GetSwitchState();
+    if(device_function_ == Function_Light) {
+        ESP_LOGI(TAG, "Switch state: Light");
+        board.GetBacklight()->RestoreBrightness(true);
+        return ;
+    }
+    else if(device_function_ == Function_AIAssistant) {
+        board.GetBacklight()->RestoreBrightness(false);
+        ESP_LOGI(TAG, "Switch state: AIAssistant");
+    }
+    else {
+        ESP_LOGI(TAG, "Switch state: Unknown mode, proceed with normal mode");
+    }
     SetDeviceState(kDeviceStateStarting);
 
     /* Setup the display */
@@ -732,8 +778,8 @@ void Application::Start() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     #endif
     device_Role = Role_Xiaozhi;
-    std::string msg = "向用户问好";
-    SendMessage(msg);
+    // std::string msg = "向用户问好";
+    // SendMessage(msg);
     vTaskDelay(pdMS_TO_TICKS(10000));
     
 }
@@ -784,9 +830,12 @@ uint8_t ucStatusReturn;    //返回状态
 void Application::RFID_TASK()
 {
 
-
+    auto &board = Board::GetInstance();
+    auto led = board.GetLed();
     while(1)
     {
+        
+        // GetSwitchState();
         #if !my
             if ( ( ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID ) ) != MI_OK )
             {
@@ -801,7 +850,6 @@ void Application::RFID_TASK()
                     std::string card_id = std::to_string(ucArray_ID [ 0 ]) + std::to_string(ucArray_ID [ 1 ]) + std::to_string(ucArray_ID [ 2 ]) + std::to_string(ucArray_ID [ 3 ]);
                     //输出卡ID
                     ESP_LOGI(TAG,"ID: %s", card_id.c_str());
-                    auto music = Board::GetInstance().GetMusic();
 
                     if(strcmp(card_id.c_str(), CardPlayer_ID) == 0) {
                         device_Role = Player;
@@ -819,6 +867,9 @@ void Application::RFID_TASK()
                         device_Role = Role_ESP;
                         SetAecMode(kAecOnDeviceSide);
                     }
+                    led->Blink(200, 200);
+                    led->Blink(200, 200);
+                    led->Blink(200, 200);
                 }
             
             }
@@ -898,15 +949,16 @@ void Application::MainEventLoop() {
             {
                 Offline_ticks_=0;
                 esp_timer_stop(clock_Offlinetimer_handle_);
-                SetDeviceState(kDeviceStateWifiConfiguring);
+                // SetDeviceState(kDeviceStateWifiConfiguring);
             }
 
             // 空闲超时自动进入深度睡眠（仅在真正可以进入睡眠时）
             if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == false)) {
-                if (CanEnterSleepMode() && clock_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
+                sleep_ticks_++;
+                if (CanEnterSleepMode() && sleep_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
                     ESP_LOGI(TAG, "Device idle for %d seconds and can sleep -> entering deep sleep", IDLE_DEEP_SLEEP_SECONDS);
                     // 防止重复调度：清零计时
-                    clock_ticks_ = 0;
+                    sleep_ticks_ = 0;
                     // 在主线程上下文调度进入深度睡眠
                     Schedule([this]() {
                         this->EnterDeepSleep();
@@ -914,6 +966,36 @@ void Application::MainEventLoop() {
                         vTaskDelete(NULL);
                     });
                 }
+            }
+            else if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == true)) {
+                sleep_music_ticks_++;
+                if (CanEnterSleepMode() && sleep_music_ticks_ >= (4*IDLE_DEEP_SLEEP_SECONDS)) {
+                    ESP_LOGI(TAG, "Music idle for %d seconds and can sleep -> entering deep sleep", (4*IDLE_DEEP_SLEEP_SECONDS));
+                    // 防止重复调度：清零计时
+                    sleep_music_ticks_ = 0;
+                    // 在主线程上下文调度进入深度睡眠
+                    Schedule([this]() {
+                        this->EnterDeepSleep();
+                        ESP_LOGI(TAG, "停止主事件循环任务");
+                        vTaskDelete(NULL);
+                    });
+                }
+            }
+            else {
+                sleep_music_ticks_ = 0;
+                sleep_ticks_ = 0;
+            }
+            if(music->ReturnMode() == true)
+            {
+                
+                if(device_state_ != kDeviceStateIdle && device_state_last_ == kDeviceStateConnecting)
+                {
+                    //开始计时
+                    if (s_wake_start_ms.load(std::memory_order_acquire) == 0) {
+                        StartWakeTimerInternal();
+                    }
+                }
+
             }
         }
     }
@@ -978,6 +1060,7 @@ void Application::SetDeviceState(DeviceState state) {
         return;
     }
     clock_ticks_ = 0;
+    device_state_last_ = device_state_;
     device_state_ = state;
     ESP_LOGI(TAG, "STATE: %s", STATE_STRINGS[device_state_]);
 

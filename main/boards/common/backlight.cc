@@ -30,16 +30,20 @@ Backlight::~Backlight() {
     }
 }
 
-void Backlight::RestoreBrightness() {
+void Backlight::RestoreBrightness(bool mode) {
     // Load brightness from settings
-    Settings settings("display");  
-    int saved_brightness = settings.GetInt("brightness", 75);
-    
+    Settings settings("display");
+    int saved_brightness;
+    if(mode == false)
+        saved_brightness = settings.GetInt("brightness_ai", 25);
+    else
+        saved_brightness = settings.GetInt("brightness", 0);
+
     ESP_LOGI(TAG, "Restoring brightness to %d", saved_brightness);
-    SetBrightness(saved_brightness);
+    SetBrightness(saved_brightness,true,mode);
 }
 
-void Backlight::SetBrightness(uint8_t brightness, bool permanent) {
+void Backlight::SetBrightness(uint8_t brightness, bool permanent, bool mode) {
     if (brightness > 100) {
         brightness = 100;
     }
@@ -50,7 +54,10 @@ void Backlight::SetBrightness(uint8_t brightness, bool permanent) {
 
     if (permanent) {
         Settings settings("display", true);
-        settings.SetInt("brightness", brightness);
+        if(mode == false)
+            settings.SetInt("brightness_ai", brightness);
+        else  
+            settings.SetInt("brightness", brightness);
     }
 
     target_brightness_ = brightness;

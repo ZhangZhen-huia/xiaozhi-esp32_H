@@ -122,11 +122,10 @@ public:
     virtual void SetCurrentStoryName(const std::string& story) =0;
     virtual void SetCurrentChapterIndex(int index) = 0;
     virtual bool NextStoryInCategory(const std::string& category) = 0;
-    virtual void SetCurrentStoryChapter(int index) = 0;
     virtual size_t FindStoryIndexInCategory(const std::string& category, const std::string& story_name) const = 0;
     virtual size_t FindStoryIndexFuzzy(const std::string& story_name) const = 0;
     virtual void UpdateStoryRecordList(const std::string& category, const std::string& story, const std::string& chapter) = 0;
-
+    virtual void SetCurrentStoryIndex(int index) =0;
 };
 
 #endif // MUSIC_H 

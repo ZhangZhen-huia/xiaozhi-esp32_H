@@ -24,24 +24,8 @@
 #include <freertos/task.h>
 #include "settings.h"
 #include <queue>
-#include "esp_debug_helpers.h"  // ⬅️ 加上这个
+
 #define TAG "Esp32Music"
-
-
-// 1. 辅助函数（增加 file/line 参数）
-static inline void* _log_malloc(size_t size, uint32_t caps, const char* tag, 
-                                const char* file, int line) {
-    void* ptr = heap_caps_malloc(size, caps);
-
-    if(caps != MALLOC_CAP_SPIRAM) 
-        ESP_LOGE(tag, "malloc  at %s:%d (size=%u, caps=0x%X)", file, line, (unsigned)size, (unsigned)caps);
-    return ptr;
-}
-
-// 2. 宏：在调用点展开时捕获文件名和行号
-#define heap_caps_malloc(size, caps) \
-    _log_malloc(size, caps, TAG, __FILE__, __LINE__)
-
 
 
 static uint8_t* read_buffer = nullptr;
@@ -1062,7 +1046,7 @@ void Esp32Music::PlayAudioStream() {
     }
 
     auto state = app.GetDeviceState();
-    if(state == kDeviceStateIdle && !ManualNextPlay_ && (consecutive_decode_failures < kMaxConsecutiveDecodeFailures) && (resume_fail_count <= 5)){
+    if(state == kDeviceStateIdle && !ManualNextPlay_ && (consecutive_decode_failures < kMaxConsecutiveDecodeFailures) && (resume_fail_count <= 3)){
         ESP_LOGI(TAG, "Device is idle, preparing to play next track");
         xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
         // if(IfNodeIsEnd())
@@ -1271,7 +1255,46 @@ size_t Esp32Music::SkipId3Tag(uint8_t* data, size_t size) {
  */
 static bool file_exists(const std::string& filename) {
     struct stat st;
-    return (stat(filename.c_str(), &st) == 0);
+    auto res = stat(filename.c_str(), &st);
+    if (res == 0) {
+        // 成功获取文件状态
+        ESP_LOGI(TAG, "File exists.");
+        return true;
+    } else {
+        // 打印错误信息
+        ESP_LOGE(TAG, "stat failed:");
+        switch (errno) {
+            case EACCES:
+               ESP_LOGE(TAG, "Permission denied.");
+               break;
+            case ELOOP:
+               ESP_LOGE(TAG, "Too many levels of symbolic links.");
+               break;
+            case ENAMETOOLONG:
+               ESP_LOGE(TAG, "Filename too long.");
+               break;
+            case ENOENT:
+               ESP_LOGE(TAG, "No such file or directory.");
+               break;
+            case ENOTDIR:
+               ESP_LOGE(TAG, "Not a directory or a component of the given path is not a directory.");
+               break;
+            case EIO:
+               ESP_LOGE(TAG, "Input/output error.");
+               break;
+            case ESRCH:
+               ESP_LOGE(TAG, "Cannot get file system information.");
+               break;
+            case ESTALE:
+               ESP_LOGE(TAG, "Stale file or directory.");
+               break;
+            default:
+               ESP_LOGE(TAG, "Error %d, %s", errno, strerror(errno));
+               break;
+        }
+        return false;
+    }
+
 }
 
 /**
@@ -1441,7 +1464,7 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     return StartSDCardStreaming(file_path);
 }
 
-
+extern bool NotResumePlayback;
 void Esp32Music::ResumePlayback() {
     std::lock_guard<std::mutex> lk(buffer_mutex_);
     if (!is_paused_) return;
@@ -1449,6 +1472,9 @@ void Esp32Music::ResumePlayback() {
     manual_pause_ = false;
     // 确保 codec 输出及采样率恢复
     auto codec = Board::GetInstance().GetAudioCodec();
+    auto &app = Application::GetInstance();
+    app.GetAndClearWakeElapsedMs(); // 清除唤醒时间，避免误判静音
+    NotResumePlayback = 0;
     if (codec) {
         codec->EnableOutput(true);
         ResetSampleRate();
@@ -2957,6 +2983,8 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
     return true;
 }
 
+
+
 bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
     ESP_LOGI(TAG, "Scanning story library from: %s", story_folder.c_str());
     struct stat st;
@@ -3047,6 +3075,8 @@ bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
 
     return ps_story_count_ > 0;
 }
+
+
 std::vector<std::string> Esp32Music::GetStoryCategories() const {
     std::vector<std::string> cats;
     std::lock_guard<std::mutex> lock(story_index_mutex_);
@@ -3389,8 +3419,7 @@ size_t Esp32Music::FindStoryIndexInCategory(const std::string& category, const s
 }
 
 bool Esp32Music::SelectStoryAndPlay() {
-    // std::string ncat = NormalizeForSearch_local(current_category_name_);
-    // std::string nst = NormalizeForSearch_local(current_story_name_);
+
     size_t found_idx = SIZE_MAX;
     if(current_category_name_.empty()) {
         found_idx = FindStoryIndexFuzzy(current_story_name_);
@@ -3404,22 +3433,6 @@ bool Esp32Music::SelectStoryAndPlay() {
         return false;
     }
     PSStoryEntry found = ps_story_index_[found_idx];
-    // bool ok = false;
-    // {
-    //     std::lock_guard<std::mutex> lock(story_index_mutex_);
-    //     for (size_t i = 0; i < ps_story_count_; ++i) {
-    //         auto &e = ps_story_index_[i];
-    //         if (e.norm_category == ncat && e.norm_story == nst) {
-    //             found = e; 
-    //             ok = true;
-    //             break;
-    //         }
-    //     }
-    // }
-    // if (!ok) {
-    //     ESP_LOGW(TAG, "SelectStoryAndPlay: story not found '%s' / '%s'", ncat.c_str(), nst.c_str());
-    //     return false;
-    // }
     if (found.chapter_count == 0 || !found.chapters) {
         ESP_LOGW(TAG, "SelectStoryAndPlay: story has no chapters '%s' / '%s'", current_category_name_.c_str(), current_story_name_.c_str());
         return false;
@@ -3558,7 +3571,7 @@ bool Esp32Music::NextChapterInStory(const std::string& category, const std::stri
             std::lock_guard<std::mutex> lock(story_index_mutex_);
             if (!nst.empty() && nst == (ps_story_index_[current_storyplay_idx_].norm_story)) {
                 next_idx = current_chapter_index_ + 1;
-                ESP_LOGI(TAG, "NextChapterInStory: current chapter index %d, next %d", current_chapter_index_+1, next_idx+1);
+                // ESP_LOGI(TAG, "NextChapterInStory: current chapter index %d, next %d", current_chapter_index_+1, next_idx+1);
             } else {
                 ESP_LOGI(TAG, "Can't Find Story:%s",current_story_name_.c_str());
                 next_idx = 0;
@@ -3592,6 +3605,16 @@ bool Esp32Music::NextChapterInStory(const std::string& category, const std::stri
         current_category_name_ = category;
         current_chapter_index_ = next_idx;
         current_story_name_ = story_name;
+        current_chapter_name_ = std::string(p);
+        size_t pos = current_chapter_name_.find_last_of("/\\");
+        if (pos != std::string::npos) {
+            current_chapter_name_ = current_chapter_name_.substr(pos + 1);
+        }
+        pos = current_chapter_name_.find_last_of('.');
+        if (pos != std::string::npos) {
+            current_chapter_name_ = current_chapter_name_.substr(0, pos);
+        }
+        ESP_LOGI(TAG, "NextChapterInStory: playing chapter: %s", current_chapter_name_.c_str());
     }
 
     return true;
@@ -3682,7 +3705,17 @@ bool Esp32Music::NextStoryInCategory(const std::string& category) {
         current_category_name_ = ps_story_index_[next_story].category ? std::string(ps_story_index_[next_story].category) : std::string();
         current_story_name_ = ps_story_index_[next_story].story_name ? std::string(ps_story_index_[next_story].story_name) : std::string();
         current_chapter_index_ = 0;
-
+        current_chapter_name_ = ps_story_index_[next_story].chapters[current_chapter_index_];
+        size_t pos = current_chapter_name_.find_last_of("/\\");
+        if (pos != std::string::npos) {
+            current_chapter_name_ = current_chapter_name_.substr(pos + 1);
+        }
+        pos = current_chapter_name_.find_last_of('.');
+        if (pos != std::string::npos) {
+            current_chapter_name_ = current_chapter_name_.substr(0, pos);
+        }
+        ESP_LOGI(TAG, "NextStoryInCategory: playing story '%s' / '%s' chapter: %s",
+                 current_category_name_.c_str(), current_story_name_.c_str(), current_chapter_name_.c_str());
         return true;
     }
 }
@@ -3707,11 +3740,7 @@ const PSStoryEntry* Esp32Music::GetStoryLibrary(size_t &out_count) const
     ESP_LOGI(TAG,"Current Story:%s",current_story_name_.c_str());
 }
 
-void Esp32Music::SetCurrentStoryChapter(int index)
-{
-    current_chapter_name_ = ps_story_index_[current_storyplay_idx_].chapters[index];
-    ESP_LOGI(TAG,"Current Story Chapter:%s",current_chapter_name_.c_str());
-}
+
  void Esp32Music::SetCurrentChapterIndex(int index)
  {
        
@@ -3720,3 +3749,8 @@ void Esp32Music::SetCurrentStoryChapter(int index)
     ESP_LOGI(TAG,"Current Chapter Index:%d, Current Chapter:%s",current_chapter_index_+1,current_chapter_name_.c_str());
 }
 
+void Esp32Music::SetCurrentStoryIndex(int index)
+{
+    current_storyplay_idx_ = index;
+    ESP_LOGI(TAG,"Current Story Index:%d",current_storyplay_idx_);
+}

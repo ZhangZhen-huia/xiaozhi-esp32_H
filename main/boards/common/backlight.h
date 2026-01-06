@@ -12,8 +12,8 @@ public:
     Backlight();
     ~Backlight();
 
-    void RestoreBrightness();
-    void SetBrightness(uint8_t brightness, bool permanent = false);
+    void RestoreBrightness(bool mode = false);
+    void SetBrightness(uint8_t brightness, bool permanent = false,bool mode = false);
     inline uint8_t brightness() const { return brightness_; }
 
 protected:

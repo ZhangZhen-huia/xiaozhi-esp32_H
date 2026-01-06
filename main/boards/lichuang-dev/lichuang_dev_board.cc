@@ -172,57 +172,101 @@ private:
 
         // 单击处理：
         boot_button_Boot_IO0.OnClick([this]() {
-            int64_t now_ms = esp_timer_get_time() / 1000;
-            int64_t prev_ms = last_click_ms.load(std::memory_order_relaxed);
-
             auto& app = Application::GetInstance();
-
-            // 如果上一次单击存在且在阈值内 -> 视为双击：恢复原始状态并执行双击动作
-            if (prev_ms != 0 && (now_ms - prev_ms) < double_click_threshold_ms) {
-                // 停掉定时器
-                if (click_timer) esp_timer_stop(click_timer);
-
-                int prev_state = pending_prev_state.load(std::memory_order_relaxed);
-                // 若记录了原始状态，则再次切换（Toggle）回去
-                if (prev_state != -1) {
-                    // 调度回主线程执行恢复，避免在中断/其他上下文直接调用
-                    app.Schedule([&app]() {
-                        ESP_LOGI(TAG, "Boot按键 双击：恢复到上一次状态（由双击触发）");
-                        app.ToggleChatState(); // 第二次 Toggle 恢复到原始状态
-                    });
+            // 获取设备功能
+            auto device_function = app.GetDeviceFunction();
+            if (device_function == Function_Light) {
+                ESP_LOGW(TAG, "Boot按键 单击：切换夜灯亮度");
+                static const uint8_t levels[] = {0, 25, 50, 75, 100};
+                static int idx = 0;
+                static int dir = 1; // 1: 向上，-1: 向下
+                uint8_t cur = GetBacklight()->brightness();
+                int found = -1;
+                for (int i = 0; i < 5; ++i) {
+                    if (cur == levels[i]) { found = i; break; }
+                }
+                if (found != -1) {
+                    idx = found;
                 } else {
-                    ESP_LOGW(TAG, "Boot按键 双击检测到但没有记录原始状态，跳过恢复");
+                    // 如果当前不在四档之一，从最低档开始
+                    idx = 0;
+                    dir = 1;
+                }
+                if (dir == 1) {
+                    if (idx < 4) {
+                        idx++;
+                    } else {
+                        // 到顶后切换到下降方向，下一档为 75
+                        idx = 3;
+                        dir = -1;
+                    }
+                } else {
+                    if (idx > 0) {
+                        idx--;
+                    } else {
+                        // 到底后切换回上升方向，下一档为 25
+                        idx = 1;
+                        dir = 1;
+                    }
+                }
+                ESP_LOGI(TAG, "Nightlight brightness: %u -> %u", (unsigned)cur, (unsigned)levels[idx]);
+                GetBacklight()->SetBrightness(levels[idx], true, true);
+
+            } else if (device_function == Function_AIAssistant) {
+
+
+                int64_t now_ms = esp_timer_get_time() / 1000;
+                int64_t prev_ms = last_click_ms.load(std::memory_order_relaxed);
+
+
+
+                // 如果上一次单击存在且在阈值内 -> 视为双击：恢复原始状态并执行双击动作
+                if (prev_ms != 0 && (now_ms - prev_ms) < double_click_threshold_ms) {
+                    // 停掉定时器
+                    if (click_timer) esp_timer_stop(click_timer);
+
+                    int prev_state = pending_prev_state.load(std::memory_order_relaxed);
+                    // 若记录了原始状态，则再次切换（Toggle）回去
+                    if (prev_state != -1) {
+                        // 调度回主线程执行恢复，避免在中断/其他上下文直接调用
+                        app.Schedule([&app]() {
+                            ESP_LOGI(TAG, "Boot按键 双击：恢复到上一次状态（由双击触发）");
+                            app.ToggleChatState(); // 第二次 Toggle 恢复到原始状态
+                        });
+                    } else {
+                        ESP_LOGW(TAG, "Boot按键 双击检测到但没有记录原始状态，跳过恢复");
+                    }
+
+                    // 执行原有的双击行为（如音乐切换）
+                    auto music = Board::GetMusic();
+                    if (music && music->ReturnMode()) {
+                        music->SetEventNextPlay();
+                        ESP_LOGI(TAG, "Boot按键 双击触发: 下一首/下一个章节");
+                    } else {
+                        ESP_LOGI(TAG, "Boot按键 双击触发: 非音乐模式，无其他操作");
+                    }
+
+                    // 清理标记
+                    last_click_ms.store(0, std::memory_order_relaxed);
+                    pending_prev_state.store(-1, std::memory_order_relaxed);
+                    return;
                 }
 
-                // 执行原有的双击行为（如音乐切换）
-                auto music = Board::GetMusic();
-                if (music && music->ReturnMode()) {
-                    music->SetEventNextPlay();
-                    ESP_LOGI(TAG, "Boot按键 双击触发: 下一首/下一个章节");
-                } else {
-                    ESP_LOGI(TAG, "Boot按键 双击触发: 非音乐模式，无其他操作");
+                // 否则这是第一次单击：记录当前状态，立即切换，并启动定时器等待可能的第二次单击
+                int cur_state = app.GetDeviceState();
+                pending_prev_state.store(cur_state, std::memory_order_relaxed);
+
+                // 立即切换状态（第一次单击即时生效）
+                app.Schedule([&app]() {
+                    ESP_LOGI(TAG, "Boot按键 单击：立即切换聊天状态，当前=%d", app.GetDeviceState());
+                    app.ToggleChatState();
+                });
+
+                // 记录时间并启动定时器：在阈值期内若未发生第二次单击则不再恢复
+                last_click_ms.store(now_ms, std::memory_order_relaxed);
+                if (click_timer) {
+                    esp_timer_start_once(click_timer, double_click_threshold_ms * 1000); // 单位微秒
                 }
-
-                // 清理标记
-                last_click_ms.store(0, std::memory_order_relaxed);
-                pending_prev_state.store(-1, std::memory_order_relaxed);
-                return;
-            }
-
-            // 否则这是第一次单击：记录当前状态，立即切换，并启动定时器等待可能的第二次单击
-            int cur_state = app.GetDeviceState();
-            pending_prev_state.store(cur_state, std::memory_order_relaxed);
-
-            // 立即切换状态（第一次单击即时生效）
-            app.Schedule([&app]() {
-                ESP_LOGI(TAG, "Boot按键 单击：立即切换聊天状态，当前=%d", app.GetDeviceState());
-                app.ToggleChatState();
-            });
-
-            // 记录时间并启动定时器：在阈值期内若未发生第二次单击则不再恢复
-            last_click_ms.store(now_ms, std::memory_order_relaxed);
-            if (click_timer) {
-                esp_timer_start_once(click_timer, double_click_threshold_ms * 1000); // 单位微秒
             }
         });
 
@@ -305,6 +349,17 @@ private:
         sdmmc_card_print_info(stdout, card);
     }
 
+    void InitializeSwitches()
+    {
+        gpio_config_t io_conf;
+        // 配置为输入模式，带上拉电阻
+        io_conf.intr_type = GPIO_INTR_DISABLE;
+        io_conf.mode = GPIO_MODE_INPUT;
+        io_conf.pin_bit_mask = (1ULL << LEDMODE_GPIO) | (1ULL << NORMALMODE_GPIO);
+        io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+        io_conf.pull_up_en = GPIO_PULLUP_ENABLE;
+        gpio_config(&io_conf);
+    }
     void InitializeLed()
     {
         // 仅确保 LED 初始为灭（实际初始化在构造函数初始化列表完成）
@@ -406,7 +461,7 @@ private:
 
 public:
 
-    LichuangDevBoard() : 
+    LichuangDevBoard():
     #if !my
         boot_button_Boot_IO0(BOOT_BUTTON_GPIO),
         led_(GPIO_NUM_6) // 直接在成员初始化中绑定 IO6
@@ -421,9 +476,9 @@ public:
         #if !my
         InitializeBatteryMonitor();
         #endif
-        GetBacklight()->RestoreBrightness();
         RC522_Init();
         RC522_Rese(); // 复位RC522
+        InitializeSwitches();
     }
 #if my
     virtual AudioCodec* GetAudioCodec() override {

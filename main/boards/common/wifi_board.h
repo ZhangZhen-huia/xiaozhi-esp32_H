@@ -23,6 +23,7 @@ public:
     virtual AudioCodec* GetAudioCodec() override { return nullptr; }
     virtual std::string GetDeviceStatusJson() override;
     virtual void EnterWifiConfigMode() override;
+
     // virtual int GetBatteryLevel() override { return 0; }
 };
 

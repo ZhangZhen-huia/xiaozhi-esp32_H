@@ -86,13 +86,6 @@ struct StoryEntry {
 
 
 class Esp32Music : public Music {
-public:
-    // 显示模式控制 - 移动到public区域
-    enum DisplayMode {
-        DISPLAY_MODE_SPECTRUM = 1,  // 默认显示频谱
-        DISPLAY_MODE_LYRICS = 0     // 显示歌词
-    };
-
 private:
 
     int display_flag = 0;
@@ -435,10 +428,10 @@ public:
     virtual int GetCurrentChapterIndex() override{ return current_chapter_index_; };
     virtual std::string GetCurrentChapterName() override{ return current_chapter_name_; };
     virtual void SetCurrentCategoryName(const std::string& category)override;
-    virtual void SetCurrentStoryChapter(int index)override;
     virtual void SetCurrentStoryName(const std::string& story)override;
-
+    virtual void SetCurrentStoryIndex(int index) override;
     virtual void SetCurrentChapterIndex(int index)override;
+
     virtual std::vector<std::string> GetStoryCategories() const;
     virtual std::vector<std::string> GetStoriesInCategory(const std::string& category) const;
     virtual std::vector<std::string> GetChaptersForStory(const std::string& category, const std::string& story_name) const;

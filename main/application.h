@@ -16,11 +16,17 @@
 #include "audio_service.h"
 #include "device_state_event.h"
 
+#define LEDMODE_GPIO         GPIO_NUM_4
+#define NORMALMODE_GPIO      GPIO_NUM_5
+#define SW_LEDMODE       1
+#define SW_NORMALMODE    0
+
+
 #define my 0
 
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
-#define IDLE_DEEP_SLEEP_SECONDS (1 * 60)
+#define IDLE_DEEP_SLEEP_SECONDS (5 * 60)
 #endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -43,6 +49,12 @@ enum Role{
     Role_Xiaozhi,
     Role_ESP,
 };
+
+enum DeviceFunction {
+    Function_AIAssistant = 0,
+    Function_Light = 1,
+};
+
 class Application {
 public:
     static Application& GetInstance() {
@@ -85,10 +97,14 @@ public:
 
     bool Wifi_Offline = false;
     Role device_Role = Role_Xiaozhi;
+    void GetSwitchState();
+    int64_t GetAndClearWakeElapsedMs();
+    DeviceFunction GetDeviceFunction() const { return device_function_; }
 private:
     Application();
     ~Application();
 
+    DeviceFunction device_function_ = Function_AIAssistant;
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
@@ -97,6 +113,8 @@ private:
     esp_timer_handle_t clock_Offlinetimer_handle_ = nullptr;
     int Offline_ticks_ = 0;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
+    volatile DeviceState device_state_last_ = kDeviceStateUnknown;
+
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
@@ -105,6 +123,8 @@ private:
     bool has_server_time_ = false;
     bool aborted_ = false;
     int clock_ticks_ = 0;
+    int sleep_ticks_ = 0;
+    int sleep_music_ticks_ = 0;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
     TaskHandle_t rfid_task_handle_ = nullptr;

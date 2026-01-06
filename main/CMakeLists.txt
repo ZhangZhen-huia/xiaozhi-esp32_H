@@ -10,6 +10,10 @@ set(SOURCES "audio/audio_codec.cc"
             "audio/codecs/dummy_audio_codec.cc"
             "audio/processors/audio_debugger.cc"
             "display/display.cc"
+            "ble/esp_ble.c"
+            "ble/ble_protocol.c"
+            "ble/ble_wifi_integration.cc"
+            "ble/ble_wifi_config.cc"
             "protocols/protocol.cc"
             "protocols/mqtt_protocol.cc"
             "protocols/websocket_protocol.cc"
@@ -24,7 +28,7 @@ set(SOURCES "audio/audio_codec.cc"
             "boards/common/bat_monitor.c"
             )
 
-set(INCLUDE_DIRS "." "display" "audio" "protocols" )
+set(INCLUDE_DIRS "." "display" "audio" "protocols" "ble")
 
 # Add board common files
 file(GLOB BOARD_COMMON_SOURCES ${CMAKE_CURRENT_SOURCE_DIR}/boards/common/*.cc)
