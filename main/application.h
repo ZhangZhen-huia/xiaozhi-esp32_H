@@ -100,6 +100,7 @@ public:
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
     DeviceFunction GetDeviceFunction() const { return device_function_; }
+    void Resetsleep_music_ticks_(){sleep_music_ticks_ = 0;};
 private:
     Application();
     ~Application();

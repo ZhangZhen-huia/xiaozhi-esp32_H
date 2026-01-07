@@ -27,6 +27,9 @@
 
 #define TAG "Esp32Music"
 
+// 全局 counting semaphore，用于取代 std::condition_variable (避免动态分配多个)
+static SemaphoreHandle_t g_buffer_sema = nullptr;
+static constexpr int kBufferSemaphoreMax = 16;
 
 static uint8_t* read_buffer = nullptr;
 Esp32Music::Esp32Music() : current_song_name_(),
@@ -34,7 +37,7 @@ Esp32Music::Esp32Music() : current_song_name_(),
                          play_thread_(), download_thread_(), audio_buffer_(), buffer_mutex_(), 
                          buffer_cv_(), buffer_size_(0), mp3_decoder_(nullptr), mp3_frame_info_(), 
                          mp3_decoder_initialized_(false) {
-    ESP_LOGI(TAG, "Music player initialized with default spectrum display mode");
+    ESP_LOGI(TAG, "Music player initialized");
     InitializeMp3Decoder();
     if (!read_buffer) {
         read_buffer = (uint8_t*)heap_caps_malloc(4096, MALLOC_CAP_SPIRAM);
@@ -52,6 +55,15 @@ Esp32Music::Esp32Music() : current_song_name_(),
     } else {
         ESP_LOGW(TAG, "mono_buffer allocation failed entirely, stereo->mono conversion will be skipped");
         mono_buffer_capacity_ = 0;
+    }
+
+    if (!g_buffer_sema) {
+        g_buffer_sema = xSemaphoreCreateCounting(kBufferSemaphoreMax, 0);
+        if (!g_buffer_sema) {
+            ESP_LOGW(TAG, "Failed to create buffer semaphore");
+        } else {
+            ESP_LOGI(TAG, "Created buffer semaphore");
+        }
     }
 
     event_group_ = xEventGroupCreate();
@@ -160,7 +172,11 @@ Esp32Music::~Esp32Music() {
     // 通知所有等待的线程
     {
         std::lock_guard<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.notify_all();
+        if (g_buffer_sema) {
+            for (int i = 0; i < kBufferSemaphoreMax; ++i) xSemaphoreGive(g_buffer_sema);
+        } else {
+            buffer_cv_.notify_all();
+        }
     }
     
     // 等待下载线程结束，设置5秒超时
@@ -249,6 +265,18 @@ Esp32Music::~Esp32Music() {
         mono_buffer_ = nullptr;
         mono_buffer_capacity_ = 0;
     }
+
+    if (NextPlay_task_handle_ != nullptr) {
+        vTaskDelete(NextPlay_task_handle_);
+        NextPlay_task_handle_ = nullptr;
+        ESP_LOGI(TAG, "NextPlayTask deleted");
+    }
+
+    if (g_buffer_sema) {
+        vSemaphoreDelete(g_buffer_sema);
+        g_buffer_sema = nullptr;
+        ESP_LOGI(TAG, "Deleted buffer semaphore");
+    }
     // 清理缓冲区和MP3解码器
     ClearAudioBuffer();
     CleanupMp3Decoder();
@@ -296,7 +324,16 @@ bool Esp32Music::StopStreaming() {
     // 通知所有等待的线程
     {
         std::lock_guard<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.notify_all();
+        if (g_buffer_sema) {
+            // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+            for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+                xSemaphoreGive(g_buffer_sema);
+
+            }
+        } else {
+            buffer_cv_.notify_all();
+            ESP_LOGW(TAG, "Notified all waiting threads to stop playback");
+        }
     }
     
     // 等待线程结束（避免重复代码，让StopStreaming也能等待线程完全停止）
@@ -313,7 +350,15 @@ bool Esp32Music::StopStreaming() {
         // 通知条件变量，确保线程能够退出
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.notify_all();
+            if (g_buffer_sema) {
+                // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+                for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+                    xSemaphoreGive(g_buffer_sema);
+                }
+            } else {
+                buffer_cv_.notify_all();
+                ESP_LOGW(TAG, "Notified all waiting threads to stop playback");
+            }
         }
         
         // 使用超时机制等待线程结束，避免死锁
@@ -453,11 +498,19 @@ void Esp32Music::PlayAudioStream() {
     // 等待缓冲区有足够数据开始播放
     {
         std::unique_lock<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.wait(lock, [this] { 
-            return buffer_size_ >= MIN_BUFFER_SIZE || (!is_downloading_ && !audio_buffer_.empty()); 
-        });
+        // 替换为 FreeRTOS counting semaphore 等待：循环检查 predicate，若不满足则在解锁后等待 semaphore（支持被 notify）
+        while (!(buffer_size_ >= MIN_BUFFER_SIZE || (!is_downloading_ && !audio_buffer_.empty()))) {
+            lock.unlock();
+            if (g_buffer_sema) {
+                // 等待信号，因这里是启动播放前的等待，使用无限期等待
+                xSemaphoreTake(g_buffer_sema, portMAX_DELAY);
+            } else {
+                // 退化：没有 semaphore 时采用短睡眠以保持兼容
+                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+            }
+            lock.lock();
+        }
     }
-    
     ESP_LOGI(TAG, "小智开源音乐固件qq交流群:826072986");
     ESP_LOGI(TAG, "Starting playback with buffer size: %d", buffer_size_);
     
@@ -537,19 +590,28 @@ void Esp32Music::PlayAudioStream() {
                         break;
                     }
 
-                    // 如果处于“聆听”状态，启动计时；若处于“说话”状态也重置计时（不计时）
                     if (current_state == kDeviceStateListening) {
                         if (listening_start == steady_clock::time_point::min()) {
                             listening_start = steady_clock::now();
-                        } else {
-                            auto dur = duration_cast<seconds>(steady_clock::now() - listening_start).count();
-                            if (dur >= 10) { // 超过10秒未说话，自动恢复播放
-                                ESP_LOGI(TAG, "Listening timeoutexceeded, auto-resuming playback");
-                                lk.unlock();
-                                ResumePlayback();
-                                lk.lock();
+                            ESP_LOGW(TAG, "Listening started, recording timestamp");
+                        } 
+                        else 
+                        {
+                            auto dur_ms = std::chrono::duration_cast<std::chrono::milliseconds>(steady_clock::now() - listening_start).count();
+                            const int64_t kTimeoutMs = 10000; // 10s
+                            ESP_LOGD(TAG, "Listening elapsed %f s", dur_ms / 1000.0);
+                            if (dur_ms >= kTimeoutMs) {
+                                ESP_LOGW(TAG, "Listening timeout exceeded (%f s), auto-resuming playback", dur_ms / 1000.0);
+                                // 先清除计时，避免重复触发
                                 listening_start = steady_clock::time_point::min();
-                                app.SetDeviceState(kDeviceStateIdle); // 变成待机状态
+                                // 解锁并在主线程调度恢复，避免锁竞争
+                                lk.unlock();
+                                app.Schedule([this]() {
+                                    ESP_LOGW(TAG, "Scheduled ResumePlayback on main thread due to listening timeout");
+                                    this->ResumePlayback();
+                                });
+                                lk.lock();
+                                app.SetDeviceState(kDeviceStateIdle);
                                 break;
                             }
                         }
@@ -560,14 +622,22 @@ void Esp32Music::PlayAudioStream() {
                     } else {
                         // 非聆听/说话状态时重置计时器
                         listening_start = steady_clock::time_point::min();
+                        ESP_LOGD(TAG, "Device not listening/speaking: reset listening timer");
                     }
 
-                    // 周期性唤醒检查，避免永久阻塞
-                    auto status = buffer_cv_.wait_for(lk, std::chrono::seconds(2));
-                    if (status == std::cv_status::timeout) {
-                        ESP_LOGI(TAG, "Still paused after 2s");
+                    // 使用 FreeRTOS semaphore 带超时等待 500ms
+                    lk.unlock();
+                    BaseType_t taken = pdFALSE;
+                    if (g_buffer_sema) {
+                        taken = xSemaphoreTake(g_buffer_sema, pdMS_TO_TICKS(500));
                     } else {
-                        ESP_LOGI(TAG, "Woken from pause wait");
+                        std::this_thread::sleep_for(std::chrono::milliseconds(500));
+                    }
+                    lk.lock();
+                    if (taken == pdTRUE) {
+                        ESP_LOGD(TAG, "Woken from pause wait (semaphore)");
+                    } else {
+                        ESP_LOGD(TAG, "Still paused after 500ms wait (timeout)");
                     }
                 }
                 if (!is_playing_) {
@@ -637,27 +707,38 @@ void Esp32Music::PlayAudioStream() {
             
             // 从缓冲区获取音频数据
             {
-                std::unique_lock<std::mutex> lock(buffer_mutex_);
-                if (audio_buffer_.empty()) {
-                    if (!is_downloading_) {
-                        // 下载完成且缓冲区为空，播放结束
-                        ESP_LOGI(TAG, "Playback finished, total played: %d bytes", total_played);
-                        break;
-                    }
-                    // 等待新数据
-                    buffer_cv_.wait(lock, [this] { return !audio_buffer_.empty() || !is_downloading_; });
+                    std::unique_lock<std::mutex> lock(buffer_mutex_);
                     if (audio_buffer_.empty()) {
-                        continue;
+                        if (!is_downloading_) {
+                            // 下载完成且缓冲区为空，播放结束
+                            ESP_LOGI(TAG, "Playback finished, total played: %d bytes", total_played);
+                            break;
+                        }
+                        // 等待新数据（使用 semaphore 循环）
+                        while (audio_buffer_.empty() && is_downloading_) {
+                            lock.unlock();
+                            if (g_buffer_sema) {
+                                xSemaphoreTake(g_buffer_sema, portMAX_DELAY);
+                            } else {
+                                std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                            }
+                            lock.lock();
+                        }
+                        if (audio_buffer_.empty()) {
+                            continue;
+                        }
+                    }
+                    chunk = audio_buffer_.front();
+                    audio_buffer_.pop();
+                    buffer_size_ -= chunk.size;
+                    // 通知下载线程缓冲区有空间
+                    if (g_buffer_sema) {
+                        xSemaphoreGive(g_buffer_sema);
+                    } else {
+                        buffer_cv_.notify_one();
+                        ESP_LOGW(TAG, "Notified one waiting download thread after popping chunk");
                     }
                 }
-                
-                chunk = audio_buffer_.front();
-                audio_buffer_.pop();
-                buffer_size_ -= chunk.size;
-                
-                // 通知下载线程缓冲区有空间
-                buffer_cv_.notify_one();
-            }
             
             // 将新数据添加到MP3输入缓冲区
             if (chunk.data && chunk.size > 0) {
@@ -734,7 +815,15 @@ void Esp32Music::PlayAudioStream() {
                 is_downloading_ = false;
                 {
                     std::lock_guard<std::mutex> lock(buffer_mutex_);
-                    buffer_cv_.notify_all();
+                    if (g_buffer_sema) {
+                        // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+                        for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+                            xSemaphoreGive(g_buffer_sema);
+                        }
+                    } else {
+                        buffer_cv_.notify_all();
+                        ESP_LOGW(TAG, "Notified all waiting threads to stop playback");
+                    }
                 }
 
                 // 通过主线程调度重新从头播放（避免在播放线程内重建线程导致死锁）
@@ -973,7 +1062,15 @@ void Esp32Music::PlayAudioStream() {
                 is_downloading_ = false;
                 {
                     std::lock_guard<std::mutex> lock(buffer_mutex_);
-                    buffer_cv_.notify_all();
+                    if (g_buffer_sema) {
+                        // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+                        for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+                            xSemaphoreGive(g_buffer_sema);
+                        }
+                    } else {
+                        buffer_cv_.notify_all();
+                        ESP_LOGW(TAG, "Notified all waiting threads due to decode failure");
+                    }
                 }
 
                 // 通过主线程调度重新从头播放（避免在播放线程内重建线程导致死锁）
@@ -1479,7 +1576,16 @@ void Esp32Music::ResumePlayback() {
         codec->EnableOutput(true);
         ResetSampleRate();
     }
-    buffer_cv_.notify_all();
+    if (g_buffer_sema) {
+        // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+        for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+            xSemaphoreGive(g_buffer_sema);
+            
+        }
+    } else {
+        buffer_cv_.notify_all();
+        ESP_LOGW(TAG, "Notified playback thread to resume");
+    }
     ESP_LOGI(TAG, "ResumePlayback: resumed and notified");
 }
 
@@ -1514,14 +1620,31 @@ bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
     if (download_thread_.joinable()) {
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.notify_all();  // 通知线程退出
+            if (g_buffer_sema) {
+                // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+                for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+                    xSemaphoreGive(g_buffer_sema);
+                   
+                }
+            } else {
+                buffer_cv_.notify_all();
+                ESP_LOGW(TAG, "Notified download thread to exit");
+            }
         }
         download_thread_.join();
     }
     if (play_thread_.joinable()) {
         {
             std::lock_guard<std::mutex> lock(buffer_mutex_);
-            buffer_cv_.notify_all();  // 通知线程退出
+            if (g_buffer_sema) {
+                // 给多个计数以唤醒最多 kBufferSemaphoreMax 个等待者（合理上限）
+                for (int i = 0; i < kBufferSemaphoreMax; ++i) {
+                    xSemaphoreGive(g_buffer_sema);
+                }
+            } else {
+                buffer_cv_.notify_all();
+                ESP_LOGW(TAG, "Notified playback thread to exit");
+            }
         }
         play_thread_.join();
     }
@@ -1611,7 +1734,16 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
             std::unique_lock<std::mutex> lk(buffer_mutex_);
             if (is_paused_) {
                 ESP_LOGI(TAG, "Read thread paused, waiting for resume");
-                buffer_cv_.wait(lk, [this]{ return !is_paused_ || !is_downloading_ || !is_playing_; });
+                // 将 condition_variable.wait 替换为 semaphore 循环等待
+                while (is_paused_ && is_downloading_ && is_playing_) {
+                    lk.unlock();
+                    if (g_buffer_sema) {
+                        xSemaphoreTake(g_buffer_sema, portMAX_DELAY);
+                    } else {
+                        std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                    }
+                    lk.lock();
+                }
                 if (!is_downloading_ || !is_playing_) break;
                 ESP_LOGI(TAG, "Read thread resumed");
             }
@@ -1673,14 +1805,26 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
         {
             std::unique_lock<std::mutex> lock(buffer_mutex_);
 
-            buffer_cv_.wait(lock, [this] { return buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_; });
+            while (!(buffer_size_ < MAX_BUFFER_SIZE || !is_downloading_)) {
+                lock.unlock();
+                if (g_buffer_sema) {
+                    xSemaphoreTake(g_buffer_sema, portMAX_DELAY);
+                } else {
+                    std::this_thread::sleep_for(std::chrono::milliseconds(50));
+                }
+                lock.lock();
+            }
             if (is_downloading_) {
                 audio_buffer_.push(AudioChunk(chunk_data, bytes_read));
                 buffer_size_ += bytes_read;
+                if (g_buffer_sema) {
+                    xSemaphoreGive(g_buffer_sema); // 唤醒一个等待者
+                    
+                } else {
+                    buffer_cv_.notify_one(); // 兼容回退
+                    ESP_LOGW(TAG, "Notified playback thread of new audio chunk");
+                }
                 total_read += bytes_read;
-
-                // 通知播放线程有新数据
-                buffer_cv_.notify_one();
                 if (total_read % (256 * 1024) == 0) {
                     ESP_LOGI(TAG, "Read %d bytes from SD, buffer size: %d", total_read, buffer_size_);
                 }
@@ -1704,7 +1848,12 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
     // 通知播放线程读取完成
     {
         std::lock_guard<std::mutex> lock(buffer_mutex_);
-        buffer_cv_.notify_all();
+        if (g_buffer_sema) {
+            xSemaphoreGive(g_buffer_sema);
+        } else {
+            buffer_cv_.notify_one();
+            ESP_LOGW(TAG, "Notified playback thread of read completion");
+        }
     }
     memset(read_buffer, 0, 4096); // 清空读缓冲区
     ESP_LOGI(TAG, "SD card read thread finished");

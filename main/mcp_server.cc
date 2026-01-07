@@ -184,6 +184,28 @@ void McpServer::AddCommonTools() {
     if (music) {
 
 
+        AddTool("currentplay",
+                "获取当前播放的音乐或者故事信息\n"
+                "返回值：当前正在播放的内容",
+                PropertyList(),
+                [music](const PropertyList& properties) -> ReturnValue {
+
+                    if(music->ReturnMode())
+                    {
+                        if(music->GetMusicOrStory_() == MUSIC)
+                        {
+                            auto current_song = music->GetCurrentSongName();
+                            return "{\"song\": \"" + current_song + "\"}";
+                        }
+                        else if(music->GetMusicOrStory_() == STORY)
+                        {
+                            auto current_story = music->GetCurrentStoryName();
+                            auto current_chapter = music->GetCurrentChapterName();
+                            return "{\"story\": \"" + current_story + "\", \"chapter\": \"" + current_chapter + "\"}";
+                        }
+                    }
+                    return "当前没有在播放音乐或故事";
+                });
         AddTool("stopplay",
                 "当用户说停止播放的时候调用，你必须调用这个工具来停止当前的音乐播放。不能主观臆断当前状态",
                 PropertyList(),
@@ -710,8 +732,17 @@ void McpServer::AddCommonTools() {
                         auto ps_story_index_ = music->GetStoryLibrary(count);
                         music->SetCurrentStoryName(ps_story_index_[index].story_name);
                         music->SetCurrentCategoryName(ps_story_index_[index].category);
+                        auto chapters = music->GetCurrentChapterName();
+                        size_t pos  = chapters.find_last_of("/\\");
+                        if (pos != std::string::npos) {
+                            chapters = chapters.substr(pos + 1);
+                        }
+                        pos = chapters.find_last_of('.');
+                        if (pos != std::string::npos) {
+                            chapters = chapters.substr(0, pos);
+                        }
                         now_playing = music->GetCurrentCategoryName() + "故事：" + music->GetCurrentStoryName() +
-                                        "章节：" + music->GetCurrentChapterName();
+                                        "章节：" + chapters;
 
                         std::string speak = "上一则为你播放的是" + now_playing + "。";
                         return BuildNowPlayingResult("actually.3", now_playing, speak);

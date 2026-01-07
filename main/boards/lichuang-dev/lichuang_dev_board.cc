@@ -214,7 +214,7 @@ private:
 
             } else if (device_function == Function_AIAssistant) {
 
-
+                app.Resetsleep_music_ticks_();
                 int64_t now_ms = esp_timer_get_time() / 1000;
                 int64_t prev_ms = last_click_ms.load(std::memory_order_relaxed);
 
@@ -285,6 +285,7 @@ private:
             app.StartListening();
             longpress_flag_ = true;
             ESP_LOGI(TAG, "Boot按键长按开始");
+            app.Resetsleep_music_ticks_();
         });
 
         // 长按释放：停止监听
@@ -295,11 +296,14 @@ private:
                 longpress_flag_ = false;
                 ESP_LOGI(TAG, "Boot按键长按释放：停止监听");
             }
+            app.Resetsleep_music_ticks_();
         });
 
         // 保留 OnDoubleClick 回调（如果仍需），但避免与上面双击路径重复触发
         boot_button_Boot_IO0.OnDoubleClick([this]() {
-            int64_t now_ms = esp_timer_get_time() / 1000;
+            auto& app = Application::GetInstance();
+            app.Resetsleep_music_ticks_();
+            // int64_t now_ms = esp_timer_get_time() / 1000;
             int64_t handled_ms = last_click_ms.load(std::memory_order_relaxed);
             // 如果双击已由上面的单击路径处理（在同一时间窗口内），则忽略此回调
             if (handled_ms == 0) {
@@ -318,8 +322,8 @@ private:
     void InitializeSdcard() {
         esp_vfs_fat_sdmmc_mount_config_t mount_config = {
             .format_if_mount_failed = true,
-            .max_files = 5,
-            .allocation_unit_size = 16 * 1024
+            .max_files = 10,
+            .allocation_unit_size = 20 * 1024
         };
         
         sdmmc_card_t *card;
