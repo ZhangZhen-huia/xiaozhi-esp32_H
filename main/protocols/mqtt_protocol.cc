@@ -32,13 +32,26 @@ MqttProtocol::MqttProtocol() {
 
     esp_timer_create_args_t disconnect_timer_args = {
         .callback = [](void* arg) {
+            auto &app = Application::GetInstance();
             MqttProtocol* protocol = (MqttProtocol*)arg;
-            protocol->disconnect_count++;
+            auto music = Board::GetInstance().GetMusic();
+            if(music->ReturnMode()==false)
+                protocol->disconnect_count++;
+            if(music->ReturnMode())
+                if(app.GetDeviceState() != kDeviceStateIdle)
+                {
+                    music->StopStreaming();
+                    music->SetMode(false);
+                }
             if( protocol->disconnect_count <= 3 ) {
                 esp_timer_start_once( protocol->disconnect_timer_, 5*1000000 );
             }
-            auto &app = Application::GetInstance();
-            app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
+            if(music->ReturnMode()==false)
+            {
+
+                app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
+            }
+
         },
         .arg = this,
     };
@@ -95,10 +108,13 @@ bool MqttProtocol::StartMqttClient(bool report_error) {
             on_disconnected_();
         }
         auto music = Board::GetInstance().GetMusic();
-        music->StopStreaming();
+        // music->StopStreaming();
         auto& app = Application::GetInstance();
-        app.PlaySound(Lang::Sounds::OGG_POPUP);
-        app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
+        if(music->ReturnMode()==false)
+        {
+            app.PlaySound(Lang::Sounds::OGG_POPUP);
+            app.PlaySound(Lang::Sounds::OGG_WIFIDISCONNECTED);
+        }
         esp_timer_start_once(disconnect_timer_, 5*1000000 );
         
         ESP_LOGI(TAG, "MQTT disconnected, schedule reconnect in %d seconds", MQTT_RECONNECT_INTERVAL_MS / 1000);

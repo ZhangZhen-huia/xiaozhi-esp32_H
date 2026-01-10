@@ -27,6 +27,8 @@
 
 #include "assets/lang_config.h"
 
+extern uint8_t data[16];
+
 #define TAG "LichuangDevBoard"
 
 #if my
@@ -172,11 +174,17 @@ private:
 
         // 单击处理：
         boot_button_Boot_IO0.OnClick([this]() {
+            data[0] = 91;  // 清零缓冲区
+            data[1] = 91;  // 清零缓冲区
             auto& app = Application::GetInstance();
             // 获取设备功能
             auto device_function = app.GetDeviceFunction();
+            
             if (device_function == Function_Light) {
                 ESP_LOGW(TAG, "Boot按键 单击：切换夜灯亮度");
+
+
+
                 static const uint8_t levels[] = {0, 25, 50, 75, 100};
                 static int idx = 0;
                 static int dir = 1; // 1: 向上，-1: 向下
@@ -209,6 +217,9 @@ private:
                         dir = 1;
                     }
                 }
+                    data[0] = 91+idx;  //
+                    data[1] = 91+idx;  //
+                    ESP_LOGW(TAG, "%d %d",data[0],data[1]);
                 ESP_LOGI(TAG, "Nightlight brightness: %u -> %u", (unsigned)cur, (unsigned)levels[idx]);
                 GetBacklight()->SetBrightness(levels[idx], true, true);
 

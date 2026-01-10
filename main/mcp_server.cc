@@ -181,11 +181,33 @@ void McpServer::AddCommonTools() {
             });
     }
     
+    AddTool("SayHello",
+            "向用户问好时调用这个工具，告诉用户你现在的名字或者模式",
+            PropertyList(),
+            [](const PropertyList& properties) -> ReturnValue {
+                auto &app = Application::GetInstance();
+                std::string msg;
+                if(app.device_Role == Role_Xiaozhi)
+                {
+                    msg = "角色提示：你现在的名字叫做小智，然后向用户介绍自己，并询问有什么需要帮助的";
+                }
+                else if(app.device_Role == Role_XiaoMing)
+                {
+                    msg = "角色提示：你现在的名字叫做小明，然后向用户介绍自己，并询问有什么需要帮助的";
+                }
+                else if(app.device_Role == Player)
+                {
+                    msg = "角色提示：你现在的模式是播放小助手，然后向用户介绍自己，并询问有什么需要帮助的";
+                }
+                return msg;
+            });
+
+
     if (music) {
 
 
         AddTool("currentplay",
-                "获取当前播放的音乐或者故事信息\n"
+                "获取当前播放的音乐或者故事名字\n"
                 "返回值：当前正在播放的内容",
                 PropertyList(),
                 [music](const PropertyList& properties) -> ReturnValue {
@@ -214,20 +236,96 @@ void McpServer::AddCommonTools() {
                     music->StopStreaming(); // 停止当前播放
                     return true;
                 });
+
+    AddTool("music.create_style_playlist",
+        "Create a temporary playlist from provided tracks and start continuous playback. "
+        "参数: { \"tracks\": JSON 字符串数组 或 以逗号分隔的索引字符串 }. "
+        "注意：本工具仅能在 music.play 工具返回并明确指示调用（通常为 music.play 返回的 ai_instruction 要求调用本工具）后由模型或客户端调用；"
+        "若直接在未授权场景下调用，设备端可拒绝或忽略该调用。",
+        PropertyList({
+            Property("tracks", kPropertyTypeString, "") // JSON 数组字符串或 "1,2,3"
+        }),
+        [music](const PropertyList& properties) -> ReturnValue {
+            std::string tracks_raw = properties["tracks"].value<std::string>();
+            std::vector<std::string> tracks;
+            // 解析 JSON 数组优先
+            cJSON *arr = cJSON_Parse(tracks_raw.c_str());
+            if (arr && cJSON_IsArray(arr)) {
+                cJSON *it = nullptr;
+                cJSON_ArrayForEach(it, arr) {
+                    if (cJSON_IsString(it)) {
+                        tracks.emplace_back(it->valuestring);
+                    }
+                }
+                cJSON_Delete(arr);
+            } else {
+                // 尝试按逗号分割索引形式 "1,2,3"
+                if (!tracks_raw.empty()) {
+                    std::stringstream ss(tracks_raw);
+                    std::string token;
+                    while (std::getline(ss, token, ',')) {
+                        // token 可以是索引或路径；如果是纯数字我们可以从 music 库取 path
+                        bool is_num = !token.empty() && std::all_of(token.begin(), token.end(), ::isdigit);
+                        if (is_num) {
+                            int idx = std::stoi(token);
+                            size_t lib_count = 0;
+                            auto all_music = music->GetMusicLibrary(lib_count);
+                            if (idx >= 0 && (size_t)idx < lib_count) {
+                                tracks.emplace_back(all_music[idx].file_path ? all_music[idx].file_path : std::string());
+                            }
+                        } else {
+                            // 认为是路径或短名，直接加入
+                            tracks.push_back(token);
+                        }
+                    }
+                }
+            }
+
+            if (tracks.empty()) {
+                return std::string("{\"success\":false,\"message\":\"no tracks provided\"}");
+            }
+            for(auto &track : tracks) {
+                ESP_LOGI(TAG, "Selected track: %s", track.c_str());
+            }
+            // 在设备端创建播放列表并开始持续播放
+            std::string tmp_name = "StylePlaylist_" + std::to_string(esp_random());
+            music->CreatePlaylist(tmp_name, tracks);
+            music->SetCurrentPlayList(tmp_name);
+            music->EnableRecord(true, MUSIC);
+
+            // 准备要读出来的第一首歌曲短名（去路径和扩展名）
+            std::string now_playing;
+            if (!tracks.empty()) {
+                std::string first = tracks[0];
+                size_t pos = first.find_last_of("/\\");
+                if (pos != std::string::npos) first = first.substr(pos + 1);
+                size_t dot = first.find_last_of('.');
+                if (dot != std::string::npos) first = first.substr(0, dot);
+                now_playing = first;
+            } else {
+                now_playing = tmp_name;
+            }
+
+            // 返回 payload，包含 ai_instruction 让模型调用 actually.1 来开始播放，并读出第一首
+            return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "已创建并将为你播放：", now_playing);
+        });
+
         AddTool("music.play",
-                "用于播放音乐,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1，仅仅用来播放音乐\n"
+                "用于播放某种风格的音乐,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1，仅仅用来播放音乐\n"
                 "参数:\n"
                 "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
                 "  `singer`: 歌手名称，可选，默认为空字符串。\n"
                 "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` 、 `循环播放`\n"
                 "   `GoOn`: 继续播放标志位，默认为空字符串。\n"
+                "  `style`: 音乐风格，可选，默认为空字符串。\n"
                 "返回:\n"
                 "  播放状态信息，播报要播放的内容，并指示调用下一个工具actually.2或者actually.1。",
                 PropertyList({
                     Property("songname", kPropertyTypeString,""), // 歌曲名称（可选）
                     Property("singer", kPropertyTypeString,""), // 歌手名称（可选）
                     Property("mode", kPropertyTypeString,"顺序播放"),// 播放模式（可选）
-                    Property("GoOn", kPropertyTypeBoolean,false)// 
+                    Property("GoOn", kPropertyTypeBoolean,false),// 
+                    Property("style", kPropertyTypeString,"") //  音乐风格（可选）
                 }),
                 [music,&board](const PropertyList& properties) -> ReturnValue {
                     if(board.GetBatteryLevel() <= 10)
@@ -238,7 +336,8 @@ void McpServer::AddCommonTools() {
                     auto singer = properties["singer"].value<std::string>();
                     auto mode = properties["mode"].value<std::string>();
                     auto goon = properties["GoOn"].value<bool>();
-
+                    auto style = properties["style"].value<std::string>();
+                    ESP_LOGW(TAG, "style: '%s'",style.c_str());
                     auto &app = Application::GetInstance();
                     // 解析播放模式（支持中文与常见英文）
                     auto mode_str = properties["mode"].value<std::string>();
@@ -255,10 +354,62 @@ void McpServer::AddCommonTools() {
                         music->SetOrderMode(true);
                         ESP_LOGI(TAG, "Set Order Play Mode");
                     }
-
                     std::string now_playing; // 要返回给调用方的播放提示
+                    if (style != "") {
+                        // 把音乐库打包成 JSON 发给模型，指示模型选择符合 style 的多首歌曲
+                        size_t lib_count = 0;
+                        auto all_music = music->GetMusicLibrary(lib_count);
+                        size_t max_return = std::min((size_t)200, lib_count);
 
-                    if((song_name.empty() && singer.empty())) {
+                        std::string lib_json = "[";
+                        bool first = true;
+                        for (size_t i = 0; i < lib_count && i < max_return; ++i) {
+                            const char* path = all_music[i].file_path;
+                            if (!path) continue;
+                            auto meta = ParseSongMeta(path);
+                            if (!first) lib_json += ",";
+                            first = false;
+                            lib_json += "{\"index\":";
+                            lib_json += std::to_string(i);
+                            lib_json += ",\"title\":\"";
+                            EscapeJsonAppend(meta.title, lib_json);
+                            lib_json += "\",\"artist\":\"";
+                            EscapeJsonAppend(meta.artist, lib_json);
+                            lib_json += "\",\"path\":\"";
+                            EscapeJsonAppend(path, lib_json);
+                            lib_json += "\"}";
+                        }
+                        lib_json += "]";
+
+                        std::string ai_instr;
+                        ai_instr.reserve(256 + lib_json.size() + style.size());
+                        ai_instr += "{";
+                        ai_instr += "\"call_tool\":\"music.create_style_playlist\",";
+                        ai_instr += "\"style\":\"";
+                        EscapeJsonAppend(style, ai_instr);
+                        ai_instr += "\",";
+                        ai_instr += "\"library\":";
+                        ai_instr += lib_json;
+                        ai_instr += ",";
+                        ai_instr += "\"instruction\":\"请从 field 'library' 中选择多首最符合 style 的歌曲，返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 3 首歌曲用于连续播放。\"";
+                        ai_instr += "}";
+
+                        // 构造返回 JSON，包含 ai_instruction（供小智调用工具）
+                        cJSON *root = cJSON_CreateObject();
+                        cJSON_AddBoolToObject(root, "success", true);
+                        cJSON_AddStringToObject(root, "now_playing", ("正在为你挑选 " + style + " 歌曲").c_str());
+                        cJSON *ai = cJSON_CreateObject();
+                        cJSON_AddStringToObject(ai, "call_tool", "music.create_style_playlist");
+                        cJSON_AddStringToObject(ai, "instruction", ai_instr.c_str());
+                        cJSON_AddStringToObject(ai, "speak", ("我会为你挑选并播放 " + style + " 风格的歌曲").c_str());
+                        cJSON_AddItemToObject(root, "ai_instruction", ai);
+                        char *out = cJSON_PrintUnformatted(root);
+                        std::string ret = out ? out : std::string("{}");
+                        if (out) cJSON_free(out);
+                        cJSON_Delete(root);
+                        return ret;
+                    }
+                    else if((song_name.empty() && singer.empty())) {
                         if(music->is_paused())
                         {
                             if(music->GetMusicOrStory_() == MUSIC)
@@ -595,11 +746,11 @@ void McpServer::AddCommonTools() {
         AddTool("next",
                 "当用户说要播放下一首歌或者下一章节故事或者下一个故事的时候调用，你需要读出来要播放的内容，然后调用完之后根据返回值，返回actually.1或者actually.3来播放下一首歌或者下一章节故事或者下一个故事\n"
                 "参数:\n"
-                "`mode`: 故事切换模式，`下一章`、`下一个`\n"
+                "`mode`: 故事切换模式，`下一章`、`下一个`、`换一个`，你需要仔细判断用户说的什么要求，是下一章节还是下一个故事\n"
                 "返回:\n"
                 "返回下一个要调用的工具和要播放歌曲。",
                 PropertyList({
-                    Property("mode", kPropertyTypeString,"下一章") // 故事切换模式，下一章、下一个
+                    Property("mode", kPropertyTypeString,"下一个") // 故事切换模式，下一章、下一个
                 }),
                 [music,&board](const PropertyList& properties) -> ReturnValue {
                     if (board.GetBatteryLevel() <= 10) {
@@ -632,13 +783,11 @@ void McpServer::AddCommonTools() {
                             now_playing = music->SearchMusicFromlistByIndex(list);
                         }
 
-                        // 提取文件名并去扩展名，作为朗读文本
                         size_t pos = now_playing.find_last_of("/\\");
                         std::string short_name = (pos != std::string::npos) ? now_playing.substr(pos + 1) : now_playing;
                         pos = short_name.find_last_of('.');
                         if (pos != std::string::npos) short_name = short_name.substr(0, pos);
 
-                        // 构造自然语言朗读文本（中文场景）
                         std::string speak = "下一首歌是：" + short_name + "。";
                         return BuildNowPlayingResult("actually.1", short_name, speak);
                     } else {
@@ -647,16 +796,15 @@ void McpServer::AddCommonTools() {
                         auto story_name = music->GetCurrentStoryName();
 
                         if (music->IfNodeIsEnd(STORY)) {
+                            ESP_LOGW(TAG, "=============%s===============",mode.c_str());
                             if (category.empty() || story_name.empty()) {
                                 return std::string("{\"success\": false, \"message\": \"当前没有播放故事\"}");
                             }
-                            if (mode == "下一章" || mode == "") {
-                                ESP_LOGI(TAG, "下一章");
+                            if (mode == "下一章" || mode == "下一集" || mode == "" || mode.find("个") == std::string::npos || mode.find("章") != std::string::npos || mode.find("集") != std::string::npos) {
                                 if (!music->NextChapterInStory(category, story_name)) {
                                     return std::string("{\"success\": false, \"message\": \"下一章播放失败\"}");
                                 }
-                            } else if (mode == "下一个") {
-                                ESP_LOGI(TAG, "下一个");
+                            } else if (mode == "下一个" || mode == "换一个" || mode.find("个") != std::string::npos) {
                                 if (!music->NextStoryInCategory(category)) {
                                     return std::string("{\"success\": false, \"message\": \"下一个故事播放失败\"}");
                                 }

@@ -860,7 +860,7 @@ void WifiBoard::StartNetwork() {
     }
     
     // Try to connect to WiFi, if failed, launch the WiFi configuration AP
-    if (!wifi_station.WaitForConnected(10 * 1000)) {
+    if (!wifi_station.WaitForConnected(30 * 1000)) {
         wifi_station.Stop();
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
@@ -943,6 +943,7 @@ const char* WifiBoard::GetNetworkStateIcon() {
     }
     auto& wifi_station = WifiStation::GetInstance();
     auto& app = Application::GetInstance();
+    auto music = Board::GetInstance().GetMusic();
     if (!wifi_station.IsConnected()) {
         return FONT_AWESOME_WIFI_SLASH;
     }
@@ -950,7 +951,8 @@ const char* WifiBoard::GetNetworkStateIcon() {
     if (rssi >= -60) {
         return FONT_AWESOME_WIFI;
     } else if (rssi >= -70) {
-        app.PlaySound(Lang::Sounds::OGG_WEAKWIFISIGNAL);
+        if(!music->ReturnMode()) 
+            app.PlaySound(Lang::Sounds::OGG_WEAKWIFISIGNAL);
         return FONT_AWESOME_WIFI_FAIR;
     } else {
         return FONT_AWESOME_WIFI_WEAK;

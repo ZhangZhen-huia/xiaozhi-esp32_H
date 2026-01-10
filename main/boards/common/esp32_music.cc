@@ -1355,7 +1355,7 @@ static bool file_exists(const std::string& filename) {
     auto res = stat(filename.c_str(), &st);
     if (res == 0) {
         // 成功获取文件状态
-        ESP_LOGI(TAG, "File exists.");
+        // ESP_LOGI(TAG, "File exists.");
         return true;
     } else {
         // 打印错误信息
@@ -1517,13 +1517,17 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
         auto pos = current_song_name_.find_first_of('-');
         if(SaveMusicRecord_ == true)
         {
-            ESP_LOGI(TAG, "Updating music record list for song: %s", current_song_name_.c_str());
+
             if(pos != std::string::npos)
             {
+                ESP_LOGW(TAG, "Updating music record list for song: %s - %s",current_song_name_.substr(0, pos).c_str(), current_song_name_.substr(pos + 1).c_str());
                 UpdateMusicRecordList(current_song_name_.substr(0, pos),current_song_name_.substr(pos + 1));
             }
             else
+            {
+                ESP_LOGW(TAG, "Updating music record list for song: %s", current_song_name_.c_str());
                 UpdateMusicRecordList("",current_song_name_);
+            }
 
             SaveMusicRecord_ = false;
         }
@@ -1558,6 +1562,7 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     // 停止之前的播放
     StopStreaming();
     
+    ESP_LOGW(TAG, "Start Play");
     return StartSDCardStreaming(file_path);
 }
 
@@ -1927,7 +1932,6 @@ bool Esp32Music::ps_add_music_info_locked(const MusicFileInfo &info) {
     dst.token_norm = ps_strdup(token);
 
     dst.file_size = info.file_size;
-    dst.duration = info.duration;
 
     // 检查是否有字符串分配失败，若失败则释放刚分配字段并返回 false（保留已存在条目）
     if ((!dst.file_path) || (!dst.file_name) || (!dst.song_name) || (!dst.artist) || (!dst.artist_norm) || (!dst.token_norm)) {
@@ -2071,7 +2075,6 @@ MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
             info.artist = ps_music_library_[i].artist ? std::string(ps_music_library_[i].artist) : std::string();
             info.artist_norm = ps_music_library_[i].artist_norm ? std::string(ps_music_library_[i].artist_norm) : std::string();
             info.file_size = ps_music_library_[i].file_size;
-            info.duration = ps_music_library_[i].duration;
             return info;
         }
     }
@@ -2358,12 +2361,13 @@ bool Esp32Music::PlayPlaylist(const std::string& playlist_name) {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
 
     if (playlist_name == default_musiclist_) {
-        ESP_LOGI(TAG, "Playing default music library");
+        ESP_LOGW(TAG, "Playing default music library");
         bool result = PlayFromSD(ps_music_library_[play_index_].file_path);
         return result;
     }
     else
     {
+        ESP_LOGW(TAG, "Playing playlist: %s", playlist_name.c_str());
         bool result = PlayFromSD(playlist_.file_paths[playlist_.play_index]);
         return result;
     }
@@ -2457,7 +2461,7 @@ int Esp32Music::SearchMusicIndexFromlist(std::string name) const
     int best_len_diff = INT_MAX;
     std::vector<int> freq_t(256);
 
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    // std::lock_guard<std::mutex> lock(music_library_mutex_);
     for (size_t i = 0; i < ps_music_count_; ++i) {
         const PSMusicInfo &m = ps_music_library_[i];
         if (!m.song_name) continue;
@@ -2544,7 +2548,7 @@ int Esp32Music::SearchMusicIndexFromlistByArtSong(std::string songname,std::stri
     int best_len_diff = INT_MAX;
     std::vector<int> freq_t(256);
 
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
     for (size_t i = 0; i < ps_music_count_; ++i) {
         const auto& m = ps_music_library_[i];
         if (!m.song_name) continue;
@@ -2923,12 +2927,14 @@ void Esp32Music::UpdateStoryRecordList(const std::string& category, const std::s
 
 void Esp32Music::UpdateMusicRecordList(const std::string& artist, const std::string& song_name)
 {
-
     // 决定索引（仍使用 play_index_ 优先）
     int idx = play_index_;
     if (current_playlist_name_ != default_musiclist_) {
-        if (artist.empty()) idx = SearchMusicIndexFromlistByArtSong(song_name, artist);
-        else idx = SearchMusicIndexFromlist(song_name);
+        if (!artist.empty()) {
+            idx = SearchMusicIndexFromlistByArtSong(song_name, artist);
+        } else {
+            idx = SearchMusicIndexFromlist(song_name);
+        }
     }
 
     // 新节点（尾插），不复制字符串，仅保存指针到已有 ps_music_library_ 字符串

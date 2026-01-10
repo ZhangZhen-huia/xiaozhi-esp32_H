@@ -8,7 +8,6 @@ struct MusicFileInfo {
     std::string file_path;
     std::string file_name;
     std::string song_name; // 规范化后的曲名（用于匹配）
-    int duration = 0;
     size_t file_size = 0;
 
     // 新增：歌手信息
@@ -17,14 +16,13 @@ struct MusicFileInfo {
 };
 
 struct PSMusicInfo {
-    char *file_path = nullptr;   // NUL 结尾 C 字符串（PSRAM 分配）
+    char *file_path = nullptr;  
     char *file_name = nullptr;
     char *song_name = nullptr;
     char *artist = nullptr;
     char *artist_norm = nullptr;
-    char *token_norm; // 新增：保留空格的小写 token-normalized 字符串（存放于 SPIRAM）
+    char *token_norm = nullptr;
     size_t file_size = 0;
-    int duration = 0;
 };
 
 struct PSStoryEntry {

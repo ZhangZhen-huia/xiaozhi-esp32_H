@@ -47,7 +47,7 @@ enum AecMode {
 enum Role{
     Player,
     Role_Xiaozhi,
-    Role_ESP,
+    Role_XiaoMing,
 };
 
 enum DeviceFunction {
@@ -97,6 +97,7 @@ public:
 
     bool Wifi_Offline = false;
     Role device_Role = Role_Xiaozhi;
+    Role last_device_Role = Role_Xiaozhi;
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
     DeviceFunction GetDeviceFunction() const { return device_function_; }

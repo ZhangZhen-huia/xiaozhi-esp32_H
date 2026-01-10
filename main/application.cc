@@ -491,7 +491,8 @@ void Application::GetSwitchState(){
         device_function_ = Function_Light;
     } else if(ledmode ==1 && normalmode ==0) {
         device_function_ = Function_AIAssistant;
-    } 
+    }
+    // device_function_ = Function_Light;
 }
 
 bool IsWifiConfigMode() {
@@ -523,6 +524,9 @@ void Application::Start() {
         ESP_LOGI(TAG, "Switch state: Unknown mode, proceed with normal mode");
     }
     SetDeviceState(kDeviceStateStarting);
+
+    Settings settings("device", true);
+    device_Role = (Role)settings.GetInt("device_role");
 
     /* Setup the display */
     //申请显示器资源
@@ -777,9 +781,14 @@ void Application::Start() {
     ShowBatteryLevel(Board::GetInstance().GetBatteryLevel());
     vTaskDelay(pdMS_TO_TICKS(3000));
     #endif
-    device_Role = Role_Xiaozhi;
-    // std::string msg = "向用户问好";
-    // SendMessage(msg);
+
+
+    last_device_Role = device_Role;
+    SetAecMode(kAecOff);
+    ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
+    std::string msg = "向用户问好";
+    SendMessage(msg);
+    
     vTaskDelay(pdMS_TO_TICKS(10000));
     
 }
@@ -826,7 +835,8 @@ uint8_t read_write_data[16]={0};//读写数据缓存
 uint8_t card_KEY[6] ={0xff,0xff,0xff,0xff,0xff,0xff};//默认密码
 uint8_t ucArray_ID [ 4 ];
 uint8_t ucStatusReturn;    //返回状态
-
+uint8_t data[16] = {0};  // 16字节缓冲区，全部初始化为0
+uint8_t LastUID[4] = {0}; // 上次读取的卡片ID
 void Application::RFID_TASK()
 {
 
@@ -834,44 +844,87 @@ void Application::RFID_TASK()
     auto led = board.GetLed();
     while(1)
     {
-        
-        // GetSwitchState();
         #if !my
             if ( ( ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID ) ) != MI_OK )
             {
                 ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID );
             }
+            
             if ( ucStatusReturn == MI_OK  )
             {
+
             /* 防冲突操作，被选中的卡片序列传入数组ucArray_ID中 */
-                if ( PcdAnticoll ( ucArray_ID ) == MI_OK )
-                {
+            if ( PcdAnticoll ( ucArray_ID ) == MI_OK )
+            {
+                ESP_LOGW(TAG,"Card Detected: %02X %02X %02X %02X", ucArray_ID[0], ucArray_ID[1], ucArray_ID[2], ucArray_ID[3]);
+                // if(LastUID[0] == ucArray_ID[0] &&
+                //    LastUID[1] == ucArray_ID[1] &&
+                //    LastUID[2] == ucArray_ID[2] &&
+                //    LastUID[3] == ucArray_ID[3])
+                // {
+                //     vTaskDelay( pdMS_TO_TICKS(500) );
+                //     continue; // 如果和上次读取的卡片ID相同，则跳过后续操作
+                // }
+                // ESP_LOGW(TAG,"Card Detected: %02X %02X %02X %02X", ucArray_ID[0], ucArray_ID[1], ucArray_ID[2], ucArray_ID[3]);
+                // PcdSelect(ucArray_ID);              // 选中卡
+                // // 2. 认证块1（第一个数据块）
+                // PcdAuthState(PICC_AUTHENT1A, 1, card_KEY, ucArray_ID);
+                // // 3. 写入数据到块1
+                // if (PcdWrite(1, data) == MI_OK) {
+                //     ESP_LOGW(TAG,"Sector 1 Write Success");
+                // }
+
+
+                // uint8_t buffer[16];
+                // // PcdSelect(ucArray_ID);              // 选中卡
+                // // 2. 认证块1
+                // PcdAuthState(PICC_AUTHENT1A, 1, card_KEY, ucArray_ID);
+
+                // // 3. 读取数据
+                // if (PcdRead(1, buffer) == MI_OK) {
+                //     // 打印验证（假设使用串口）
+                //     ESP_LOGW(TAG,"读取结果: %c %c\n", buffer[0], buffer[1]);
+                // }
                     //根据卡ID进行后续操作
                     std::string card_id = std::to_string(ucArray_ID [ 0 ]) + std::to_string(ucArray_ID [ 1 ]) + std::to_string(ucArray_ID [ 2 ]) + std::to_string(ucArray_ID [ 3 ]);
                     //输出卡ID
                     ESP_LOGI(TAG,"ID: %s", card_id.c_str());
 
-                    if(strcmp(card_id.c_str(), CardPlayer_ID) == 0) {
+                    if(strcmp(card_id.c_str(), CardPlayer_ID) == 0 && (device_Role != Player)) {
+                        last_device_Role = device_Role;
                         device_Role = Player;
                         ESP_LOGI(TAG,"Enter Player Mode\r\n");
                         SetAecMode(kAecOff);
 
-                    } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0) {
+                    } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0 && (device_Role != Role_Xiaozhi)) {
                         ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
+                        last_device_Role = device_Role;
                         device_Role = Role_Xiaozhi;
-
-
                         SetAecMode(kAecOnDeviceSide);
-                    } else if(strcmp(card_id.c_str(), CardRole_ESP_ID) == 0) {
-                        ESP_LOGI(TAG,"ESP Role Activated\r\n");
-                        device_Role = Role_ESP;
+                    } else if(strcmp(card_id.c_str(), CardRole_XiaoMing_ID) == 0 && (device_Role != Role_XiaoMing)) {
+                        ESP_LOGI(TAG,"XiaoMing Role Activated\r\n");
+                        last_device_Role = device_Role;
+                        device_Role = Role_XiaoMing;
                         SetAecMode(kAecOnDeviceSide);
                     }
                     led->Blink(200, 200);
                     led->Blink(200, 200);
                     led->Blink(200, 200);
+                    if(last_device_Role != device_Role)
+                    {
+                        Settings settings("device", true);
+                        settings.SetInt("device_role", device_Role);
+                        ESP_LOGW(TAG,"保存当前设备角色: %d", device_Role);
+                        ESP_LOGW(TAG,"=================即将重启=================");
+                        vTaskDelay( pdMS_TO_TICKS(1000) );
+                        Reboot();
+                    }
+
                 }
-            
+                // LastUID[0] = ucArray_ID[0];
+                // LastUID[1] = ucArray_ID[1];
+                // LastUID[2] = ucArray_ID[2];
+                // LastUID[3] = ucArray_ID[3];
             }
             #else
             #endif
@@ -985,9 +1038,9 @@ void Application::MainEventLoop() {
                 sleep_music_ticks_ = 0;
                 sleep_ticks_ = 0;
             }
+
             if(music->ReturnMode() == true)
             {
-                
                 if(device_state_ != kDeviceStateIdle && device_state_last_ == kDeviceStateConnecting)
                 {
                     //开始计时

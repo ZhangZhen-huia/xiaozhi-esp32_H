@@ -36,7 +36,7 @@ extern "C" {
 
 #define CardPlayer_ID           "9191006"
 #define CardRole_Xiaozhi_ID     "55138795"
-#define CardRole_ESP_ID         "6392086"
+#define CardRole_XiaoMing_ID         "6392086"
 
 
 
