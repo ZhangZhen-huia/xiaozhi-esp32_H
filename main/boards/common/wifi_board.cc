@@ -343,7 +343,7 @@ void WifiBoard::StartNetwork() {
     wifi_station.Start();
 
     //超时重新配网
-    if (!wifi_station.WaitForConnected(60 * 1000)) {
+    if (!wifi_station.WaitForConnected(20 * 1000)) {
         // wifi_station.Stop();
         wifi_config_mode_ = true;
         EnterWifiConfigMode();
@@ -494,6 +494,13 @@ std::string WifiBoard::GetDeviceStatusJson() {
 }
 
 
+void WifiBoard::StopWifiTimer()
+{
+    esp_timer_stop(clock_timer_handle_);
+    esp_timer_delete(clock_timer_handle_);
+    esp_timer_stop(clock_timer_OnConnecthandle_);
+    esp_timer_delete(clock_timer_OnConnecthandle_);
+}
 #else
 
 #include "wifi_board.h"
@@ -819,7 +826,13 @@ void WifiBoard::EnterWifiConfigMode() {
 }
 
 
-
+void WifiBoard::StopWifiTimer()
+{
+    esp_timer_stop(clock_timer_handle_);
+    esp_timer_delete(clock_timer_handle_);
+    esp_timer_stop(clock_timer_OnConnecthandle_);
+    esp_timer_delete(clock_timer_OnConnecthandle_);
+}
 
 void WifiBoard::StartNetwork() {
     // User can press BOOT button while starting to enter WiFi configuration mode

@@ -250,7 +250,12 @@ void bat_monitor_destroy(bat_monitor_handle_t handle) {
     
     // 删除ADC单次模式句柄
     adc_oneshot_del_unit(monitor->adc_handle);
-
+    
+    gpio_num_t adc_gpio = GPIO_NUM_7;  // 必须改为你的实际ADC引脚
+    
+    gpio_reset_pin(adc_gpio);
+    gpio_set_direction(adc_gpio, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(adc_gpio, GPIO_PULLDOWN_ONLY);
     monitor = NULL;
     // heap_caps_free(monitor);
 }

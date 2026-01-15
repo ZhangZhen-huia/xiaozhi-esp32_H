@@ -10,30 +10,8 @@
  * 2024-01-10     LCKFB-lp    first version
  */
 #include "esp32_rc522.h"
-#include "driver/gptimer.h"
 
-static gptimer_handle_t gptimer = NULL;
 
-void delay_us_timer_init(void)
-{
-    gptimer_config_t cfg = {
-        .clk_src = GPTIMER_CLK_SRC_DEFAULT,
-        .direction = GPTIMER_COUNT_UP,
-        .resolution_hz = 1000000, // 1 MHz → 1 µs
-    };
-    gptimer_new_timer(&cfg, &gptimer);
-    gptimer_enable(gptimer);
-}
-
-void delay_us_timer(uint32_t us)
-{
-    uint64_t start, end;
-    gptimer_get_raw_count(gptimer, &start);
-    end = start + us;
-    do {
-        gptimer_get_raw_count(gptimer, &start);
-    } while (start < end);
-}
 
 void delay_ms(unsigned int ms)
 {
@@ -42,7 +20,6 @@ void delay_ms(unsigned int ms)
 void delay_us(unsigned int us)
 {
     esp_rom_delay_us(us);
-    // delay_us_timer(us);
 }
 void delay_1ms(unsigned int ms)
 {

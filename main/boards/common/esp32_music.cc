@@ -527,6 +527,7 @@ void Esp32Music::PlayAudioStream() {
         return;
     }
     auto& app = Application::GetInstance();
+    app.GetAndClearWakeElapsedMs(); // 清除唤醒时间，避免影响后续逻辑
     // 标记是否已经处理过ID3标签
     bool id3_processed = false;
     static DeviceState current_state = app.GetDeviceState();
@@ -1143,7 +1144,7 @@ void Esp32Music::PlayAudioStream() {
     }
 
     auto state = app.GetDeviceState();
-    if(state == kDeviceStateIdle && !ManualNextPlay_ && (consecutive_decode_failures < kMaxConsecutiveDecodeFailures) && (resume_fail_count <= 3)){
+    if(state == kDeviceStateIdle && !ManualNextPlay_ && (consecutive_decode_failures < kMaxConsecutiveDecodeFailures) && (resume_fail_count <= 3) && (app.Sleep == false)){
         ESP_LOGI(TAG, "Device is idle, preparing to play next track");
         xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
         // if(IfNodeIsEnd())

@@ -107,6 +107,8 @@ public:
         }
     }
     #endif
+
+
 };
 
 class LichuangDevBoard : public WifiBoard {
@@ -115,6 +117,7 @@ private:
     Button boot_button_Boot_IO0;
     int battery_ = 0;
     bool longpress_flag_ = false;
+    sdmmc_card_t *sdcard_ = nullptr; // 增：保存已挂载的 sd 卡指针
     #if my
     Pca9557* pca9557_;
     #else
@@ -272,7 +275,7 @@ private:
                     ESP_LOGI(TAG, "Boot按键 单击：立即切换聊天状态，当前=%d", app.GetDeviceState());
                     app.ToggleChatState();
                 });
-
+                
                 // 记录时间并启动定时器：在阈值期内若未发生第二次单击则不再恢复
                 last_click_ms.store(now_ms, std::memory_order_relaxed);
                 if (click_timer) {
@@ -360,6 +363,7 @@ private:
             }
             return;
         }
+        sdcard_ = card; // 保存已挂载的 sd 卡指针
         ESP_LOGI(TAG, "Filesystem mounted");
         sdmmc_card_print_info(stdout, card);
     }
@@ -519,6 +523,65 @@ public:
     }
     virtual int GetBatteryLevel() override {
         return battery_;
+    }
+    virtual void Deinitialize() override {
+        // 在此处添加任何必要的反初始化代码
+        ESP_LOGI(TAG, "LichuangDevBoard 反初始化");
+        // 例如，删除 I2C 总线
+        if (i2c_bus_) {
+            // i2c_master_bus_rm_device(i2c_device_handle);
+            i2c_del_master_bus(i2c_bus_);
+            i2c_bus_ = nullptr;
+        }
+
+        //配置SCL/SDA为输入下拉，防止悬浮耗电
+        gpio_reset_pin(AUDIO_CODEC_I2C_SCL_PIN);  // SCL
+        gpio_set_pull_mode(AUDIO_CODEC_I2C_SCL_PIN, GPIO_PULLDOWN_ONLY);
+        gpio_set_direction(AUDIO_CODEC_I2C_SCL_PIN, GPIO_MODE_INPUT);
+        
+        gpio_reset_pin(AUDIO_CODEC_I2C_SDA_PIN);  // SDA
+        gpio_set_pull_mode(AUDIO_CODEC_I2C_SDA_PIN, GPIO_PULLDOWN_ONLY);
+        gpio_set_direction(AUDIO_CODEC_I2C_SDA_PIN, GPIO_MODE_INPUT);
+
+        // 取消挂载 SD 卡（若已挂载）
+        if (sdcard_) {
+            ESP_LOGI(TAG, "Unmounting SD card at %s", MOUNT_POINT);
+            esp_err_t rc = esp_vfs_fat_sdcard_unmount(MOUNT_POINT, sdcard_);    
+            if (rc != ESP_OK) {
+                ESP_LOGE(TAG, "Failed to unmount SD card: %s", esp_err_to_name(rc));
+            }
+            sdcard_ = nullptr;
+            ESP_LOGI(TAG, "SD card unmounted");
+        } else {
+            ESP_LOGI(TAG, "No SD card mounted");
+        }
+        // 6. 删除SDMMC主机驱动（关键！）
+        ESP_LOGI(TAG, "删除SDMMC主机驱动");
+        sdmmc_host_t host = SDMMC_HOST_DEFAULT();
+        host.deinit_p(host.slot);  // 释放SDMMC外设
+
+        // 7. 配置所有SDMMC GPIO为输入下拉（关键！）
+        ESP_LOGI(TAG, "配置SDMMC GPIO为输入下拉");
+        const gpio_num_t sdmmc_pins[] = {
+            BSP_SD_CLK,   // CLK引脚
+            BSP_SD_CMD,   // CMD引脚
+            BSP_SD_D0,    // D0引脚
+            // 即使1线模式，也配置D1-D3防止悬浮
+            GPIO_NUM_NC,  // 根据你的BSP定义D1-D3，或跳过
+            GPIO_NUM_NC,
+            GPIO_NUM_NC
+        };
+
+        gpio_deep_sleep_hold_dis();  // 全局禁用深度睡眠保持
+        
+        for (auto pin : sdmmc_pins) {
+            if (pin == GPIO_NUM_NC) continue;  // 跳过未定义的引脚
+            
+            gpio_reset_pin(pin);
+            gpio_set_direction(pin, GPIO_MODE_INPUT);
+            gpio_set_pull_mode(pin, GPIO_PULLDOWN_ONLY);
+            gpio_hold_dis(pin);
+        }
     }
 };
 

@@ -9,7 +9,8 @@
 
 #include "application.h"
 #include "system_info.h"
-
+#include "settings.h"
+#include "esp_sleep.h"
 #define TAG "main"
 
 extern "C" void app_main(void)
@@ -25,7 +26,6 @@ extern "C" void app_main(void)
         ret = nvs_flash_init();
     }
     ESP_ERROR_CHECK(ret);
-
     // Launch the application
     auto& app = Application::GetInstance();
     app.Start();

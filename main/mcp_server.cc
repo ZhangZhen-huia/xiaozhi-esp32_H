@@ -15,7 +15,7 @@
 
 #include "board.h"
 #include "settings.h"
-
+#include <random>
 
 #include "esp32_music.h"
 
@@ -356,14 +356,25 @@ void McpServer::AddCommonTools() {
                     }
                     std::string now_playing; // 要返回给调用方的播放提示
                     if (style != "") {
-                        // 把音乐库打包成 JSON 发给模型，指示模型选择符合 style 的多首歌曲
                         size_t lib_count = 0;
                         auto all_music = music->GetMusicLibrary(lib_count);
-                        size_t max_return = std::min((size_t)200, lib_count);
+                        const size_t kMaxReturn = 50;
 
+                        std::vector<size_t> indices;
+                        indices.reserve(lib_count);
+                        for (size_t i = 0; i < lib_count; ++i) indices.push_back(i);
+
+                        if (lib_count > kMaxReturn) {
+                            // 随机打乱并取前 kMaxReturn 个
+                            std::default_random_engine rng((unsigned)esp_random());
+                            std::shuffle(indices.begin(), indices.end(), rng);
+                        }
+
+                        size_t take = std::min(lib_count, kMaxReturn);
                         std::string lib_json = "[";
                         bool first = true;
-                        for (size_t i = 0; i < lib_count && i < max_return; ++i) {
+                        for (size_t j = 0; j < take; ++j) {
+                            size_t i = indices[j];
                             const char* path = all_music[i].file_path;
                             if (!path) continue;
                             auto meta = ParseSongMeta(path);
@@ -967,6 +978,9 @@ void McpServer::AddCommonTools() {
                                 std::string ch = chapters[i];
                                 size_t p = ch.find_last_of("/\\");
                                 std::string name = (p == std::string::npos) ? ch : ch.substr(p + 1);
+                                // 去掉文件扩展名（例如 .mp3 .wav 等）
+                                size_t dot = name.find_last_of('.');
+                                if (dot != std::string::npos) name = name.substr(0, dot);
                                 g_mcp_scratch += "\"";
                                 EscapeJsonAppend(name, g_mcp_scratch);
                                 g_mcp_scratch += "\"";
@@ -980,7 +994,7 @@ void McpServer::AddCommonTools() {
                             auto cats = music->GetStoryCategories();
                             g_mcp_scratch.clear();
                             g_mcp_scratch.reserve(256 + cats.size()*32);
-                            g_mcp_scratch += "{\"success\": true, \"message\"\"我可以播放以下类别的故事: : \", \"categories\": [";
+                            g_mcp_scratch += "{\"success\": true, \"message\": \"我可以播放以下类别的故事: \", \"categories\": [";
                             for (size_t i = 0; i < cats.size(); ++i) {
                                 if (i) g_mcp_scratch += ", ";
                                 g_mcp_scratch += "\"";
@@ -1018,6 +1032,9 @@ void McpServer::AddCommonTools() {
                                 std::string ch = chapters[i];
                                 size_t p = ch.find_last_of("/\\");
                                 std::string name = (p == std::string::npos) ? ch : ch.substr(p + 1);
+                                // 去掉文件扩展名（例如 .mp3 .wav 等）
+                                size_t dot = name.find_last_of('.');
+                                if (dot != std::string::npos) name = name.substr(0, dot);
                                 g_mcp_scratch += "\"";
                                 EscapeJsonAppend(name, g_mcp_scratch);
                                 g_mcp_scratch += "\"";

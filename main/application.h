@@ -26,7 +26,7 @@
 
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
-#define IDLE_DEEP_SLEEP_SECONDS (5 * 60)
+#define IDLE_DEEP_SLEEP_SECONDS (1 * 60)
 #endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -98,6 +98,7 @@ public:
     bool Wifi_Offline = false;
     Role device_Role = Role_Xiaozhi;
     Role last_device_Role = Role_Xiaozhi;
+    bool Sleep = false;
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
     DeviceFunction GetDeviceFunction() const { return device_function_; }
@@ -127,6 +128,7 @@ private:
     int clock_ticks_ = 0;
     int sleep_ticks_ = 0;
     int sleep_music_ticks_ = 0;
+    bool wake_word_detected_ = false;
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
     TaskHandle_t rfid_task_handle_ = nullptr;

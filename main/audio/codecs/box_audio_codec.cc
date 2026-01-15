@@ -89,6 +89,44 @@ BoxAudioCodec::~BoxAudioCodec() {
     audio_codec_delete_data_if(data_if_);
 }
 
+void BoxAudioCodec::Shutdown() {
+    ESP_LOGI(TAG, "Shutting down BoxAudioCodec...");
+    std::lock_guard<std::mutex> lock(data_if_mutex_);
+    // 先关闭 codec 设备（会停止底层数据流）
+    if (output_enabled_) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(output_dev_));
+        output_enabled_ = false;
+    }
+    if (input_enabled_) {
+        ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(input_dev_));
+        input_enabled_ = false;
+    }
+    // 释放 codec/dev/ctrl/interface（保守操作，保留与析构一致的顺序）
+    if (output_dev_) { esp_codec_dev_delete(output_dev_); output_dev_ = nullptr; }
+    if (input_dev_)  { esp_codec_dev_delete(input_dev_);  input_dev_ = nullptr; }
+    if (in_codec_if_)  { audio_codec_delete_codec_if(in_codec_if_); in_codec_if_ = nullptr; }
+    if (in_ctrl_if_)   { audio_codec_delete_ctrl_if(in_ctrl_if_); in_ctrl_if_ = nullptr; }
+    if (out_codec_if_) { audio_codec_delete_codec_if(out_codec_if_); out_codec_if_ = nullptr; }
+    if (out_ctrl_if_)  { audio_codec_delete_ctrl_if(out_ctrl_if_); out_ctrl_if_ = nullptr; }
+    if (gpio_if_)      { audio_codec_delete_gpio_if(gpio_if_); gpio_if_ = nullptr; }
+    if (data_if_)      { audio_codec_delete_data_if(data_if_); data_if_ = nullptr; }
+
+    if (tx_handle_) {
+        ESP_LOGI(TAG, "Disable & delete I2S TX channel");
+        i2s_channel_disable(tx_handle_);
+        i2s_del_channel(tx_handle_);
+        tx_handle_ = nullptr;
+    }
+    if (rx_handle_) {
+        ESP_LOGI(TAG, "Disable & delete I2S RX channel");
+        i2s_channel_disable(rx_handle_);
+        i2s_del_channel(rx_handle_);
+        rx_handle_ = nullptr;
+    }
+    ESP_LOGI(TAG, "BoxAudioCodec shutdown completed");
+}
+
+
 void BoxAudioCodec::CreateDuplexChannels(gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din) {
     assert(input_sample_rate_ == output_sample_rate_);
 
@@ -208,6 +246,10 @@ void BoxAudioCodec::EnableInput(bool enable) {
 
 void BoxAudioCodec::EnableOutput(bool enable) {
     std::lock_guard<std::mutex> lock(data_if_mutex_);
+    if(output_dev_ == nullptr) {
+        ESP_LOGW(TAG, "EnableOutput skipped: output_dev_ is null");
+        return;
+    }
     if (enable == output_enabled_) {
         return;
     }
@@ -236,9 +278,6 @@ int BoxAudioCodec::Read(int16_t* dest, int samples) {
 }
 // #include "esp_debug_helpers.h"  
 int BoxAudioCodec::Write(const int16_t* data, int samples) {
-    //void *caller = __builtin_return_address(0);
-    // ESP_LOGW(TAG, "Write() called from %p", caller);
-    // esp_backtrace_print(3);   // 打印 3 层回溯，最多 5 帧
     if (output_enabled_) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_write(output_dev_, (void*)data, samples * sizeof(int16_t)));
     }

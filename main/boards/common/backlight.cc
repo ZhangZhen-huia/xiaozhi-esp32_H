@@ -113,6 +113,7 @@ PwmBacklight::PwmBacklight(gpio_num_t pin, bool output_invert, uint32_t freq_hz)
 
 PwmBacklight::~PwmBacklight() {
     ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    Backlight::~Backlight();
 }
 
 void PwmBacklight::SetBrightnessImpl(uint8_t brightness) {

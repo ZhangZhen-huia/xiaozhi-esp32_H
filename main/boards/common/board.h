@@ -57,7 +57,8 @@ public:
     virtual std::string GetBoardJson() = 0;
     virtual std::string GetDeviceStatusJson() = 0;
     virtual void EnterWifiConfigMode() = 0;
-    
+    virtual void Deinitialize() = 0;
+    virtual void StopWifiTimer()=0;
 };
 
 #define DECLARE_BOARD(BOARD_CLASS_NAME) \

@@ -25,6 +25,9 @@
 #include "esp_task_wdt.h"
 #include "esp_tts.h"
 #include "bat_monitor.h"
+#include <driver/i2c_master.h>
+#include <driver/i2s_tdm.h>
+#include <driver/ledc.h>
 
 #define TAG "Application"
 
@@ -98,7 +101,7 @@ static std::atomic<int64_t> s_wake_start_ms{0};
 static inline void StartWakeTimerInternal() {
     int64_t now = esp_timer_get_time() / 1000;
     s_wake_start_ms.store(now, std::memory_order_release);
-    ESP_LOGI(TAG, "Wake timer started at %lld ms", (long long)now);
+    ESP_LOGE(TAG, "Wake timer started ");
 }
 
 static inline int64_t ConsumeWakeStartMs() {
@@ -404,7 +407,14 @@ void Application::ToggleChatState() {
     if (device_state_ == kDeviceStateIdle) {
         Schedule([this]() {
             if (!protocol_->IsAudioChannelOpened()) {
+                auto &board = Board::GetInstance();
+                auto music = board.GetMusic();
+                if(music->ReturnMode() == true)
+                {
+                    wake_word_detected_ = true;
+                }
                 SetDeviceState(kDeviceStateConnecting);
+
                 if (!protocol_->OpenAudioChannel()) {
                     return;
                 }
@@ -784,7 +794,7 @@ void Application::Start() {
 
 
     last_device_Role = device_Role;
-    SetAecMode(kAecOff);
+    // SetAecMode(kAecOff);
     ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
     std::string msg = "向用户问好";
     SendMessage(msg);
@@ -804,30 +814,96 @@ void Application::Schedule(std::function<void()> callback) {
 
 void Application::EnterDeepSleep() {
     ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
-
-
-    ESP_LOGI(TAG, "停止RFID任务,休眠Rcc522");
-    if(rfid_task_handle_ != nullptr) {
-        vTaskDelete(rfid_task_handle_);
-        rfid_task_handle_ = nullptr;
+    auto& board = Board::GetInstance();
+    auto music = board.GetMusic();
+    Sleep = true;
+    if(music->ReturnMode() == true)
+    {
+        ESP_LOGI(TAG, "退出音乐模式");
+        while(music->IsPlaying() != true)
+        {
+            vTaskDelay(pdMS_TO_TICKS(1000));   
+        }
+        music->StopStreaming();
     }
-    PcdHalt();
 
-    ESP_LOGI(TAG,"停止电量监测");
+
+    ESP_LOGI(TAG, "关闭RFID");
+    RC522_Antenna_Off(); // 关闭天线以节省功耗
+    if (PcdHalt() == MI_OK) {
+        ESP_LOGI(TAG, "PcdHalt 成功");
+    }
+    else {
+        ESP_LOGE(TAG, "PcdHalt 失败");
+    }
+    RC522_Reset_Disable(); // 禁用复位引脚以节省功耗
+   // 把用于模拟 SPI 的 GPIO 置为输入并下拉，避免被拉高耗电
+    const gpio_num_t rc_pins[] = { GPIO_CS, GPIO_SCK, GPIO_MOSI, GPIO_MISO, GPIO_RST };
+    for (gpio_num_t p : rc_pins) {
+        gpio_set_level(p, 0);
+        gpio_set_direction(p, GPIO_MODE_INPUT);
+        gpio_set_pull_mode(p, GPIO_PULLDOWN_ONLY);
+    }
+
+
+    ESP_LOGI(TAG,"停止ADC电量监测");
     bat_monitor_destroy(battery_handle);
 
+    
+    // 停止音频服务并关闭 codec 输出
+    ESP_LOGI(TAG, "停止音频服务并关闭音频输出");
+    audio_service_.Stop(); // 停止 audio service
 
-    ESP_LOGI(TAG, "关闭wifi");
+
+
+    auto codec = board.GetAudioCodec();
+    codec->Shutdown(); // 关闭 codec 输出
+    protocol_->~Protocol(); // 销毁 protocol 实例
+
+    board.Deinitialize();//关闭外设
+
+    board.StopWifiTimer();
+    // 停止定时器以降低唤醒前的活动
+    ESP_LOGI(TAG, "停止定时器");
+    if (clock_timer_handle_ != nullptr) {
+        esp_timer_stop(clock_timer_handle_);
+    }
+    if (clock_Offlinetimer_handle_ != nullptr) {
+        esp_timer_stop(clock_Offlinetimer_handle_);
+    }
+
+    ESP_LOGI(TAG, "关闭WiFi");
+    esp_wifi_disconnect();
+    vTaskDelay(pdMS_TO_TICKS(10));
     esp_wifi_stop();
+    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
+    if (netif) {
+        esp_netif_destroy(netif);
+    }
     esp_wifi_deinit();
+    esp_event_loop_delete_default();
 
+
+    ESP_LOGI(TAG, "关闭LED");
+    gpio_set_level(GPIO_NUM_6, 0);  // 输出低电平关闭LED（假设低电平点亮）
+    gpio_deep_sleep_hold_dis();  // 禁用深度睡眠保持
+
+    ESP_LOGI(TAG,"关闭夜灯");
+    ledc_set_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    ledc_update_duty(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0);
+    ledc_stop(LEDC_LOW_SPEED_MODE, LEDC_CHANNEL_0, 0);
+    // 对于背光（高电平点亮）：输出低电平
+    gpio_set_level(GPIO_NUM_42, 0);
+
+
+    vTaskDelay(pdMS_TO_TICKS(10)); // 确保所有操作完成
     //ext0 仅支持 RTC IO（例如 GPIO0），若 wake_gpio 非 RTC 引脚可能无法生效
     esp_err_t rc = esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
     if (rc != ESP_OK) {
         ESP_LOGE(TAG, "esp_sleep_enable_ext0_wakeup 返回 %d", rc);
     }
     
-    ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
+    ESP_LOGI(TAG, "=============进入深度睡眠===============");
     esp_deep_sleep_start();
 }
 
@@ -1041,12 +1117,14 @@ void Application::MainEventLoop() {
 
             if(music->ReturnMode() == true)
             {
-                if(device_state_ != kDeviceStateIdle && device_state_last_ == kDeviceStateConnecting)
+                // if(device_state_ != kDeviceStateIdle && (device_state_last_ == kDeviceStateConnecting || wake_word_detected_))
+                if(wake_word_detected_)
                 {
                     //开始计时
                     if (s_wake_start_ms.load(std::memory_order_acquire) == 0) {
                         StartWakeTimerInternal();
                     }
+                    wake_word_detected_ = false;
                 }
 
             }
@@ -1074,6 +1152,7 @@ void Application::OnWakeWordDetected() {
         auto wake_word = audio_service_.GetLastWakeWord();
 
         ESP_LOGI(TAG, "Wake word detected: %s", wake_word.c_str());
+        wake_word_detected_ = true;
 #if CONFIG_SEND_WAKE_WORD_DATA
         // Encode and send the wake word data to the server
         while (auto packet = audio_service_.PopWakeWordPacket()) {
