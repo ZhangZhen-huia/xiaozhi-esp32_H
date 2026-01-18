@@ -169,6 +169,7 @@ private:
     std::atomic<bool> is_first_play_;
     std::atomic<bool> is_downloading_;
     std::atomic<bool> ManualNextPlay_;
+    std::atomic<bool> stop_playback_;
     std::thread play_thread_;
     std::thread download_thread_;
     int64_t current_play_time_ms_;  // 当前播放时间(毫秒)
@@ -318,7 +319,7 @@ public:
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
     virtual bool ReturnMode(void)override{return  mode;}
     virtual void SetMode(bool a)override{mode = a;}
-
+    virtual void SetStopSignal(bool a)override{stop_playback_ = a;}
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;
     virtual void SetCurrentPlayList(const std::string& playlist_name)override;

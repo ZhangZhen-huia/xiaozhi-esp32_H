@@ -90,7 +90,7 @@ extern "C" {
 #define PCD_TRANSCEIVE        0x0C               //发送并接收数据
 #define PCD_RESETPHASE        0x0F               //复位
 #define PCD_CALCCRC           0x03               //CRC计算
-
+#define PCD_POWERDOWN         0x10  // 掉电模式命令 <- 添加这个
 //Mifare_One卡片命令字
 #define PICC_REQIDL           0x26               //寻天线区内未进入休眠状态
 #define PICC_REQALL           0x52               //寻天线区内全部卡
@@ -105,7 +105,7 @@ extern "C" {
 #define PICC_RESTORE          0xC2               //调块数据到缓冲区
 #define PICC_TRANSFER         0xB0               //保存缓冲区中数据
 #define PICC_HALT             0x50               //休眠
-
+#define RC522_CMD_HARD_POWERDOWN  0x00  // 硬掉电模式（自定义命令）
 /* RC522  FIFO长度定义 */
 #define DEF_FIFO_LENGTH       64                 //FIFO size=64byte
 #define MAXRLEN  18
@@ -134,6 +134,7 @@ extern "C" {
 #define     TxModeReg             0x12    //定义发送过程的数据传输速率
 #define     RxModeReg             0x13    //定义接收过程中的数据传输速率
 #define     TxControlReg          0x14    //控制天线驱动器管教TX1和TX2的逻辑特性
+#define     TxASKReg              0x15    // 发送ASK调制寄存器
 #define     TxAutoReg             0x15    //控制天线驱动器的设置
 #define     TxSelReg              0x16    //选择天线驱动器的内部源
 #define     RxSelReg              0x17    //选择内部的接收器设置
@@ -183,7 +184,7 @@ extern "C" {
 /* 和RC522通信时返回的错误代码 */
 #define         MI_OK                 0x26
 #define         MI_NOTAGERR           0xcc
-#define         MI_ERR                0xbb
+#define         MI_ERR                0xbb  //187
 
 /**********************************************************************/
 
@@ -210,11 +211,11 @@ char PcdAuthState ( uint8_t ucAuth_mode, uint8_t ucAddr, uint8_t * pKey, uint8_t
 char PcdWrite ( uint8_t ucAddr, uint8_t * pData );//在M1卡的指定块地址写入指定数据
 char PcdRead ( uint8_t ucAddr, uint8_t * pData );//读取M1卡的指定块地址的数据
 char PcdHalt( void );//让卡片进入休眠模式
-
+char PcdPowerDown(void);
 void delay_1ms(unsigned int ms);
 void delay_ms(unsigned int ms);
 void delay_1us(unsigned int us);
 void delay_us(unsigned int us);
-
+char PcdHardPowerDown(void);
 }
 #endif

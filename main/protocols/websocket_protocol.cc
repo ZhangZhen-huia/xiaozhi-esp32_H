@@ -20,6 +20,11 @@ WebsocketProtocol::~WebsocketProtocol() {
     vEventGroupDelete(event_group_handle_);
 }
 
+void WebsocketProtocol::Deinit() {
+    ESP_LOGI(TAG, "WebsocketProtocol deinit");
+    vEventGroupDelete(event_group_handle_);
+    websocket_.reset();
+}
 bool WebsocketProtocol::Start() {
     // Only connect to server when audio channel is needed
     return true;

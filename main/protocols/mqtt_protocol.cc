@@ -73,6 +73,21 @@ MqttProtocol::~MqttProtocol() {
     }
 }
 
+void MqttProtocol::Deinit() {
+    ESP_LOGI(TAG, "MqttProtocol deinit");
+    if (reconnect_timer_ != nullptr) {
+        esp_timer_stop(reconnect_timer_);
+        esp_timer_delete(reconnect_timer_);
+    }
+    udp_.reset();
+    if (mqtt_ != nullptr) {
+        mqtt_->Disconnect();
+        mqtt_.reset();
+    }
+    if (event_group_handle_ != nullptr) {
+        vEventGroupDelete(event_group_handle_);
+    }
+}
 bool MqttProtocol::Start() {
     return StartMqttClient(false);
 }

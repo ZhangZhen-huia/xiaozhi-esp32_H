@@ -92,6 +92,7 @@ BoxAudioCodec::~BoxAudioCodec() {
 void BoxAudioCodec::Shutdown() {
     ESP_LOGI(TAG, "Shutting down BoxAudioCodec...");
     std::lock_guard<std::mutex> lock(data_if_mutex_);
+
     // 先关闭 codec 设备（会停止底层数据流）
     if (output_enabled_) {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(output_dev_));
@@ -104,10 +105,12 @@ void BoxAudioCodec::Shutdown() {
     // 释放 codec/dev/ctrl/interface（保守操作，保留与析构一致的顺序）
     if (output_dev_) { esp_codec_dev_delete(output_dev_); output_dev_ = nullptr; }
     if (input_dev_)  { esp_codec_dev_delete(input_dev_);  input_dev_ = nullptr; }
+
     if (in_codec_if_)  { audio_codec_delete_codec_if(in_codec_if_); in_codec_if_ = nullptr; }
     if (in_ctrl_if_)   { audio_codec_delete_ctrl_if(in_ctrl_if_); in_ctrl_if_ = nullptr; }
     if (out_codec_if_) { audio_codec_delete_codec_if(out_codec_if_); out_codec_if_ = nullptr; }
     if (out_ctrl_if_)  { audio_codec_delete_ctrl_if(out_ctrl_if_); out_ctrl_if_ = nullptr; }
+    
     if (gpio_if_)      { audio_codec_delete_gpio_if(gpio_if_); gpio_if_ = nullptr; }
     if (data_if_)      { audio_codec_delete_data_if(data_if_); data_if_ = nullptr; }
 
@@ -124,6 +127,7 @@ void BoxAudioCodec::Shutdown() {
         rx_handle_ = nullptr;
     }
     ESP_LOGI(TAG, "BoxAudioCodec shutdown completed");
+
 }
 
 

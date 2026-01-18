@@ -48,6 +48,7 @@ static const char* const STATE_STRINGS[] = {
 };
 
 Application::Application() {
+    
     event_group_ = xEventGroupCreate();
 
 #if CONFIG_USE_DEVICE_AEC && CONFIG_USE_SERVER_AEC
@@ -513,11 +514,10 @@ bool IsWifiConfigMode() {
 }
 
 void Application::Start() {
-
+    
     // bool en = IsWifiConfigMode();
     //在这一步就已经调用了board的构造函数来进行关于板级硬件的初始化了
     auto& board = Board::GetInstance();
-
 
     //获取设备功能
     GetSwitchState();
@@ -545,12 +545,25 @@ void Application::Start() {
     // Print board name/version info
     //这里调用的是display的派生类LcdDisplay的SetChatMessage函数
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
-
+        ESP_LOGI(TAG, "关闭RFID");
 
     /* Setup the audio service */
     auto codec = board.GetAudioCodec();
+    //     char ret = PcdHardPowerDown();
+    // if (ret == MI_OK) {
+    //     ESP_LOGW(TAG, "PcdHardPowerDown 成功");
+    // }
+    // else {
+    //     ESP_LOGE(TAG, "%x", ret);
+    //     ESP_LOGE(TAG, "PcdHardPowerDown 失败");
+    // }
+
     audio_service_.Initialize(codec);
     audio_service_.Start();
+//     codec->Shutdown(); // 关闭 codec 输出
+//     board.Deinitialize();
+//    esp_deep_sleep_start();
+ 
 
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
@@ -582,7 +595,10 @@ void Application::Start() {
 
     /* Wait for the network to be ready */
     board.StartNetwork();
-
+    // codec->Shutdown();
+    
+    // vTaskDelay(pdMS_TO_TICKS(2000));
+    
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
 
@@ -749,7 +765,6 @@ void Application::Start() {
 
     SystemInfo::PrintHeapStats();
     SetDeviceState(kDeviceStateIdle);
-
     has_server_time_ = ota.HasServerTime();
     if (protocol_started) {
         std::string message = std::string(Lang::Strings::VERSION) + ota.GetCurrentVersion();
@@ -792,15 +807,15 @@ void Application::Start() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     #endif
 
-
+    // esp_deep_sleep_start();
     last_device_Role = device_Role;
-    // SetAecMode(kAecOff);
-    ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
-    std::string msg = "向用户问好";
-    SendMessage(msg);
+    SetAecMode(kAecOff);
+    // ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
+    // std::string msg = "向用户问好";
+    // SendMessage(msg);
     
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    
+    // vTaskDelay(pdMS_TO_TICKS(10000));
+
 }
 
 // Add a async task to MainLoop
@@ -816,7 +831,6 @@ void Application::EnterDeepSleep() {
     ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
     auto& board = Board::GetInstance();
     auto music = board.GetMusic();
-    Sleep = true;
     if(music->ReturnMode() == true)
     {
         ESP_LOGI(TAG, "退出音乐模式");
@@ -829,37 +843,26 @@ void Application::EnterDeepSleep() {
 
 
     ESP_LOGI(TAG, "关闭RFID");
-    RC522_Antenna_Off(); // 关闭天线以节省功耗
-    if (PcdHalt() == MI_OK) {
-        ESP_LOGI(TAG, "PcdHalt 成功");
+    char ret = PcdHardPowerDown();
+    if (ret == MI_OK) {
+        ESP_LOGW(TAG, "PcdHardPowerDown 成功");
     }
     else {
-        ESP_LOGE(TAG, "PcdHalt 失败");
+        ESP_LOGE(TAG, "%x", ret);
+        ESP_LOGE(TAG, "PcdHardPowerDown 失败");
     }
-    RC522_Reset_Disable(); // 禁用复位引脚以节省功耗
-   // 把用于模拟 SPI 的 GPIO 置为输入并下拉，避免被拉高耗电
-    const gpio_num_t rc_pins[] = { GPIO_CS, GPIO_SCK, GPIO_MOSI, GPIO_MISO, GPIO_RST };
-    for (gpio_num_t p : rc_pins) {
-        gpio_set_level(p, 0);
-        gpio_set_direction(p, GPIO_MODE_INPUT);
-        gpio_set_pull_mode(p, GPIO_PULLDOWN_ONLY);
-    }
-
-
     ESP_LOGI(TAG,"停止ADC电量监测");
     bat_monitor_destroy(battery_handle);
 
     
     // 停止音频服务并关闭 codec 输出
     ESP_LOGI(TAG, "停止音频服务并关闭音频输出");
-    audio_service_.Stop(); // 停止 audio service
 
 
-
+    audio_service_.Stop();
+    protocol_->Deinit(); // 销毁协议实例以释放资源
     auto codec = board.GetAudioCodec();
     codec->Shutdown(); // 关闭 codec 输出
-    protocol_->~Protocol(); // 销毁 protocol 实例
-
     board.Deinitialize();//关闭外设
 
     board.StopWifiTimer();
@@ -874,12 +877,7 @@ void Application::EnterDeepSleep() {
 
     ESP_LOGI(TAG, "关闭WiFi");
     esp_wifi_disconnect();
-    vTaskDelay(pdMS_TO_TICKS(10));
     esp_wifi_stop();
-    esp_netif_t *netif = esp_netif_get_handle_from_ifkey("WIFI_STA_DEF");
-    if (netif) {
-        esp_netif_destroy(netif);
-    }
     esp_wifi_deinit();
     esp_event_loop_delete_default();
 
@@ -895,8 +893,35 @@ void Application::EnterDeepSleep() {
     // 对于背光（高电平点亮）：输出低电平
     gpio_set_level(GPIO_NUM_42, 0);
 
+    // gpio_deep_sleep_hold_dis();  // 全局禁用深度睡眠保持
+    // for (int i = 0; i < 48; i++) {
+    //     gpio_num_t gpio = static_cast<gpio_num_t>(i);
+        
+    //     // 跳过唤醒引脚（GPIO0）
+    //     if (gpio == GPIO_NUM_0) continue;
+        
+    //     // 检查是否是有效的GPIO
+    //     if (gpio == GPIO_NUM_NC) continue;
+    //     if (i > 21 && i < 34) {
+    //          continue;
+    //     }
+    //     if(i == 43 || i == 44){
+    //          continue;
+    //     }
+    //     // 重置GPIO配置
+    //     gpio_reset_pin(gpio);
+        
+    //     // 配置为输入模式，禁用上下拉
+    //     gpio_config_t io_conf = {};
+    //     io_conf.pin_bit_mask = (1ULL << i);
+    //     io_conf.mode = GPIO_MODE_INPUT;
+    //     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
+    //     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
+    //     io_conf.intr_type = GPIO_INTR_DISABLE;
+    //     gpio_config(&io_conf);
+    // }
 
-    vTaskDelay(pdMS_TO_TICKS(10)); // 确保所有操作完成
+    vTaskDelay(pdMS_TO_TICKS(100)); // 确保所有操作完成
     //ext0 仅支持 RTC IO（例如 GPIO0），若 wake_gpio 非 RTC 引脚可能无法生效
     esp_err_t rc = esp_sleep_enable_ext0_wakeup(GPIO_NUM_0, 0);
     if (rc != ESP_OK) {
@@ -1100,6 +1125,7 @@ void Application::MainEventLoop() {
                 sleep_music_ticks_++;
                 if (CanEnterSleepMode() && sleep_music_ticks_ >= (4*IDLE_DEEP_SLEEP_SECONDS)) {
                     ESP_LOGI(TAG, "Music idle for %d seconds and can sleep -> entering deep sleep", (4*IDLE_DEEP_SLEEP_SECONDS));
+                    music->SetStopSignal(true);
                     // 防止重复调度：清零计时
                     sleep_music_ticks_ = 0;
                     // 在主线程上下文调度进入深度睡眠

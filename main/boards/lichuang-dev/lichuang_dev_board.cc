@@ -529,19 +529,31 @@ public:
         ESP_LOGI(TAG, "LichuangDevBoard 反初始化");
         // 例如，删除 I2C 总线
         if (i2c_bus_) {
-            // i2c_master_bus_rm_device(i2c_device_handle);
             i2c_del_master_bus(i2c_bus_);
             i2c_bus_ = nullptr;
         }
 
-        //配置SCL/SDA为输入下拉，防止悬浮耗电
-        gpio_reset_pin(AUDIO_CODEC_I2C_SCL_PIN);  // SCL
-        gpio_set_pull_mode(AUDIO_CODEC_I2C_SCL_PIN, GPIO_PULLDOWN_ONLY);
-        gpio_set_direction(AUDIO_CODEC_I2C_SCL_PIN, GPIO_MODE_INPUT);
-        
-        gpio_reset_pin(AUDIO_CODEC_I2C_SDA_PIN);  // SDA
-        gpio_set_pull_mode(AUDIO_CODEC_I2C_SDA_PIN, GPIO_PULLDOWN_ONLY);
-        gpio_set_direction(AUDIO_CODEC_I2C_SDA_PIN, GPIO_MODE_INPUT);
+    
+    // 关键步骤：将I2C引脚设置为输出低电平
+    // 这样引脚被拉到0V，上拉电阻两端电压为0，没有电流流过
+    gpio_set_direction(AUDIO_CODEC_I2C_SDA_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(AUDIO_CODEC_I2C_SDA_PIN, 1);
+    
+    gpio_set_direction(AUDIO_CODEC_I2C_SCL_PIN, GPIO_MODE_OUTPUT);
+    gpio_set_level(AUDIO_CODEC_I2C_SCL_PIN, 1);
+    
+    // 验证引脚电平
+    int sda_level = gpio_get_level(AUDIO_CODEC_I2C_SDA_PIN);
+    int scl_level = gpio_get_level(AUDIO_CODEC_I2C_SCL_PIN);
+    
+    ESP_LOGI("I2C_PWR", "I2C引脚状态: SDA=%d, SCL=%d", sda_level, scl_level);
+    
+    if (sda_level == 1 && scl_level == 1) {
+        ESP_LOGI("I2C_PWR", "✅ I2C引脚已设为高电平，上拉电阻电流已消除");
+    } else {
+        ESP_LOGE("I2C_PWR", "❌ I2C引脚设置失败");
+    }
+    
 
         // 取消挂载 SD 卡（若已挂载）
         if (sdcard_) {
@@ -560,27 +572,32 @@ public:
         sdmmc_host_t host = SDMMC_HOST_DEFAULT();
         host.deinit_p(host.slot);  // 释放SDMMC外设
 
-        // 7. 配置所有SDMMC GPIO为输入下拉（关键！）
-        ESP_LOGI(TAG, "配置SDMMC GPIO为输入下拉");
-        const gpio_num_t sdmmc_pins[] = {
-            BSP_SD_CLK,   // CLK引脚
-            BSP_SD_CMD,   // CMD引脚
-            BSP_SD_D0,    // D0引脚
-            // 即使1线模式，也配置D1-D3防止悬浮
-            GPIO_NUM_NC,  // 根据你的BSP定义D1-D3，或跳过
-            GPIO_NUM_NC,
-            GPIO_NUM_NC
-        };
 
         gpio_deep_sleep_hold_dis();  // 全局禁用深度睡眠保持
+        // CLK引脚：输出低电平（防止时钟线浮动）
+        if (BSP_SD_CLK != GPIO_NUM_NC) {
+            gpio_reset_pin(BSP_SD_CLK);
+            gpio_set_direction(BSP_SD_CLK, GPIO_MODE_OUTPUT);
+            gpio_set_level(BSP_SD_CLK, 0);
+            gpio_set_pull_mode(BSP_SD_CLK, GPIO_FLOATING);
+            gpio_hold_dis(BSP_SD_CLK);
+            ESP_LOGD(TAG, "CLK引脚配置为输出低电平");
+        }
         
-        for (auto pin : sdmmc_pins) {
-            if (pin == GPIO_NUM_NC) continue;  // 跳过未定义的引脚
-            
-            gpio_reset_pin(pin);
-            gpio_set_direction(pin, GPIO_MODE_INPUT);
-            gpio_set_pull_mode(pin, GPIO_PULLDOWN_ONLY);
-            gpio_hold_dis(pin);
+        // CMD引脚：输入高阻态（外部上拉）
+        if (BSP_SD_CMD != GPIO_NUM_NC) {
+            gpio_reset_pin(BSP_SD_CMD);
+            gpio_set_direction(BSP_SD_CMD, GPIO_MODE_INPUT);
+            gpio_set_pull_mode(BSP_SD_CMD, GPIO_FLOATING);
+            gpio_hold_dis(BSP_SD_CMD);
+            ESP_LOGD(TAG, "CMD引脚配置为输入高阻态");
+        }
+        if (BSP_SD_D0 != GPIO_NUM_NC) {
+            gpio_reset_pin(BSP_SD_D0);
+            gpio_set_direction(BSP_SD_D0, GPIO_MODE_INPUT);
+            gpio_set_pull_mode(BSP_SD_D0, GPIO_FLOATING);
+            gpio_hold_dis(BSP_SD_D0);
+            ESP_LOGD(TAG, "DATA引脚配置为输入高阻态");
         }
     }
 };

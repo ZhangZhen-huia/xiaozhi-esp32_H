@@ -238,6 +238,11 @@ void RC522_Rese( void )
         RC522_Write_Register( TModeReg, 0x8D );      //内部定时器的设置
         RC522_Write_Register( TPrescalerReg, 0x3E ); //设置定时器分频系数
         RC522_Write_Register( TxAutoReg, 0x40 );     //调制发送信号为100%ASK
+
+        RC522_SetBit_Register(GsNReg, 0xff);
+        RC522_SetBit_Register(CWGsCfgReg, 0x3f);
+        RC522_SetBit_Register(ModGsCfgReg, 0x3f);
+        RC522_SetBit_Register(RFCfgReg,0x7f);//接收增益调到最大
 }
 
 /**
@@ -642,13 +647,177 @@ char PcdHalt( void )
 {
         uint8_t ucComMF522Buf [ MAXRLEN ];
         uint32_t  ulLen;
-
+  char ret;
   ucComMF522Buf [ 0 ] = PICC_HALT;
   ucComMF522Buf [ 1 ] = 0;
 
   CalulateCRC ( ucComMF522Buf, 2, & ucComMF522Buf [ 2 ] );
-         PcdComMF522 ( PCD_TRANSCEIVE, ucComMF522Buf, 4, ucComMF522Buf, & ulLen );
+         ret =PcdComMF522 ( PCD_TRANSCEIVE, ucComMF522Buf, 4, ucComMF522Buf, & ulLen );
 
-  return MI_OK;
+  return ret;
 
+}
+
+void RC522_ForceReceiverOff(void)
+{
+ESP_LOGI("RC522", "精确关闭接收器");
+    
+    // 方法1：直接设置CommandReg的RcvOff位（位5）
+    // 这是最直接的方法，专门用于关闭接收器模拟电路
+    uint8_t cmd_reg = RC522_Read_Register(CommandReg);
+    ESP_LOGI("RC522", "原始CommandReg: 0x%02X", cmd_reg);
+    
+    // 设置RcvOff位（bit5=1），同时保持其他位不变
+    cmd_reg |= 0x20;  // 0x20 = 0010 0000，设置第5位
+    RC522_Write_Register(CommandReg, cmd_reg);
+    delay_ms(2);  // 等待寄存器更新
+    
+    // 验证设置
+    cmd_reg = RC522_Read_Register(CommandReg);
+    ESP_LOGI("RC522", "设置后CommandReg: 0x%02X", cmd_reg);
+    
+    if ((cmd_reg & 0x20) == 0x20) {
+        ESP_LOGW("RC522", "✅ 接收器已成功关闭 (RcvOff=1)");
+    } else {
+        ESP_LOGE("RC522", "❌ 接收器关闭失败");
+    }
+    
+    // 可选：同时关闭接收相关中断，防止误触发
+    RC522_ClearBit_Register(ComIEnReg, 0x20);  // 清除RxIEn位（位5）
+    
+    // 可选：降低接收增益进一步省电
+    RC522_Write_Register(RFCfgReg, 0x00);  // 将接收增益设为零
+}
+void check_rc522_low_power_status(void)
+{
+    ESP_LOGI("DEBUG", "=== RC522低功耗状态检查 ===");
+    
+    // 先检查NRSTPD引脚状态
+    int rst_state = gpio_get_level(GPIO_RST);
+    ESP_LOGI("DEBUG", "NRSTPD引脚电平: %s", rst_state ? "高电平" : "低电平");
+    
+    // 如果NRSTPD为低电平（硬掉电状态），给出警告但不读取寄存器
+    if (rst_state == 0) {
+        ESP_LOGI("DEBUG", "警告：硬掉电模式下，寄存器读取不可靠");
+        ESP_LOGI("DEBUG", "跳过寄存器检查以避免随机值");
+        ESP_LOGI("DEBUG", "=== 检查完成 ===");
+        return;
+    }
+    
+    // NRSTPD为高电平，正常读取寄存器
+    // 1. 检查PowerDown命令是否生效
+    uint8_t cmd_status = RC522_Read_Register(CommandReg);
+    ESP_LOGI("DEBUG", "CommandReg (0x01): 0x%02X", cmd_status);
+    ESP_LOGI("DEBUG", "  - bit5 (RcvOff): %d [%s]", 
+             (cmd_status>>5)&1, (cmd_status & 0x20) ? "接收器关闭" : "接收器开启");
+    ESP_LOGI("DEBUG", "  - bit4 (PowerDown): %d [%s]", 
+             (cmd_status>>4)&1, (cmd_status & 0x10) ? "PowerDown已生效" : "PowerDown未生效");
+    
+    // 2. 检查接收器状态
+    uint8_t rx_mode = RC522_Read_Register(RxModeReg);
+    ESP_LOGI("DEBUG", "RxModeReg (0x13): 0x%02X", rx_mode);
+    
+    // 3. 检查天线控制
+    uint8_t tx_ctrl = RC522_Read_Register(TxControlReg);
+    ESP_LOGI("DEBUG", "TxControlReg (0x14): 0x%02X [天线驱动器: %s]", 
+             tx_ctrl, (tx_ctrl & 0x03) ? "开启" : "关闭");
+    
+    // 4. 检查版本寄存器（确认芯片正常）
+    uint8_t version = RC522_Read_Register(VersionReg);
+    ESP_LOGI("DEBUG", "VersionReg (0x37): 0x%02X", version);
+    
+    ESP_LOGI("DEBUG", "=== 检查完成 ===");
+}
+/**
+  * @brief   : 让RC522芯片进入低功耗模式（PowerDown）
+  * @param   : 无
+  * @retval  : MI_OK成功，MI_ERR失败
+  * @note    : 进入低功耗模式前应确保天线已关闭
+*/
+char PcdPowerDown(void)
+{
+ESP_LOGI("RC522", "进入PowerDown低功耗模式");
+    
+    // 第一步：强制停止所有操作
+    RC522_Write_Register(CommandReg, PCD_IDLE);
+    delay_ms(1);
+    
+    // 第二步：关闭所有模拟电路
+    RC522_Write_Register(TxControlReg, 0x00);   // 关闭天线驱动器
+    RC522_Write_Register(TxASKReg, 0x00);       // 关闭ASK调制
+    RC522_Write_Register(TxModeReg, 0x00);      // 发射器关闭
+    RC522_Write_Register(RxModeReg, 0x00);      // 接收器关闭
+    
+    // 第三步：设置RcvOff位关闭接收器
+    uint8_t current_cmd = RC522_Read_Register(CommandReg);
+    uint8_t new_cmd = current_cmd | 0x20;  // 设置RcvOff位（bit5）
+    RC522_Write_Register(CommandReg, new_cmd);
+    delay_ms(1);
+    
+    // 第四步：进入PowerDown模式
+    RC522_Write_Register(CommandReg, 0x10);     // PowerDown位=1
+    delay_ms(5);
+    
+    // 第五步：检查配置结果（仅在NRSTPD为高时）
+    check_rc522_low_power_status();  // ✅ 正确的调用方式
+    
+    uint8_t cmd_status = RC522_Read_Register(CommandReg);
+    ESP_LOGI("RC522", "PowerDown后CommandReg: 0x%02X", cmd_status);
+    
+    // 第六步：降低SPI引脚功耗
+    gpio_set_direction(GPIO_CS, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_CS, 0);
+    
+    gpio_set_direction(GPIO_SCK, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_SCK, 0);
+    
+    gpio_set_direction(GPIO_MOSI, GPIO_MODE_OUTPUT);
+    gpio_set_level(GPIO_MOSI, 0);
+    
+    gpio_set_direction(GPIO_MISO, GPIO_MODE_INPUT);
+    gpio_set_pull_mode(GPIO_MISO, GPIO_FLOATING);
+
+    if ((cmd_status & 0x10) == 0x10) {
+        ESP_LOGI("RC522", "PowerDown低功耗配置成功");
+        return MI_OK;
+    } else {
+        ESP_LOGE("RC522", "PowerDown低功耗配置失败");
+        return MI_ERR;
+    }
+}
+
+char PcdHardPowerDown(void)
+{
+    ESP_LOGI("RC522", "进入硬掉电模式");
+    
+    // 1. 强制关闭接收器（解决RxModeReg问题）
+    RC522_ForceReceiverOff();
+    delay_ms(2);
+    
+    // 2. 执行软掉电
+    char power_down_result = PcdPowerDown();
+    
+    // 3. 即使软掉电报告失败，也继续执行硬掉电（强制关闭）
+    if (power_down_result != MI_OK) {
+        ESP_LOGW("RC522", "软掉电报告失败，但继续执行硬掉电强制关闭");
+    }
+    
+    // 4. 确保所有SPI通信完成
+    delay_ms(5);
+    
+    // 5. 拉低NRSTPD引脚，进入硬掉电模式
+    ESP_LOGI("RC522", "拉低NRSTPD引脚...");
+    RC522_Reset_Enable();  // 拉低NRSTPD并保持
+    
+    // 6. 验证NRSTPD引脚状态
+    delay_ms(1);
+    int rst_state = gpio_get_level(GPIO_RST);
+    
+    if (rst_state == 0) {
+        ESP_LOGI("RC522", "硬掉电模式已激活，NRSTPD引脚保持低电平");
+        return MI_OK;
+    } else {
+        ESP_LOGE("RC522", "硬掉电模式失败，NRSTPD引脚仍为高电平");
+        return MI_ERR;
+    }
 }

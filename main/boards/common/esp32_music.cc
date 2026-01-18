@@ -470,7 +470,7 @@ int Esp32Music::FindValidMp3SyncWord(uint8_t* data, int data_len) {
 // 流式播放音频数据
 void Esp32Music::PlayAudioStream() {
     ESP_LOGI(TAG, "Starting audio stream playback");
-    
+    stop_playback_ = false;
     // 初始化时间跟踪变量
     current_play_time_ms_ = 0;
     total_frames_decoded_ = 0;
@@ -538,6 +538,14 @@ void Esp32Music::PlayAudioStream() {
     int consecutive_decode_failures = 0;
     const int kMaxConsecutiveDecodeFailures = 3;
     int resume_fail_count = 0;
+    
+    // 保存断点（按类型）
+    if (MusicOrStory_ == MUSIC) {
+        SavePlaybackPosition();
+    } else {
+        SaveStoryPlaybackPosition();
+    }
+
     while (is_playing_) {
         // 检查设备状态，只有在空闲状态才播放音乐
         DeviceState previous_state = current_state;
@@ -782,7 +790,7 @@ void Esp32Music::PlayAudioStream() {
             resume_fail_count++;
             if (resume_fail_count > 3) {
                 ESP_LOGW(TAG, "连续寻找同步字失败达到阈值，准备重启当前文件从头开始播放");
-
+                SetStopSignal(true);
                 // 记录将要重启的文件路径与显示名（线程安全地读取）
                 std::string restart_path;
                 std::string restart_name;
@@ -1031,6 +1039,7 @@ void Esp32Music::PlayAudioStream() {
             consecutive_decode_failures++;
             ESP_LOGW(TAG, "Consecutive decode failures: %d/%d", consecutive_decode_failures, kMaxConsecutiveDecodeFailures);
             if (consecutive_decode_failures >= kMaxConsecutiveDecodeFailures) {
+                SetStopSignal(true);
                 ESP_LOGW(TAG, "连续解码失败达到阈值，准备重启当前文件从头开始播放");
                 // 记录将要重启的文件路径与显示名（线程安全地读取）
                 std::string restart_path;
@@ -1144,7 +1153,7 @@ void Esp32Music::PlayAudioStream() {
     }
 
     auto state = app.GetDeviceState();
-    if(state == kDeviceStateIdle && !ManualNextPlay_ && (consecutive_decode_failures < kMaxConsecutiveDecodeFailures) && (resume_fail_count <= 3) && (app.Sleep == false)){
+    if(state == kDeviceStateIdle && !ManualNextPlay_ && !stop_playback_){
         ESP_LOGI(TAG, "Device is idle, preparing to play next track");
         xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
         // if(IfNodeIsEnd())

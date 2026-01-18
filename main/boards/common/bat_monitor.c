@@ -6,6 +6,8 @@
 #include "esp_log.h"
 #include "freertos/FreeRTOS.h"
 #include "freertos/task.h"
+#include "driver/rtc_io.h"
+#include "driver/adc.h"      // 添加这行
 
 #define TAG "bat_monitor"
 bat_monitor_handle_t battery_handle = NULL;
@@ -240,7 +242,7 @@ void bat_monitor_destroy(bat_monitor_handle_t handle) {
     bat_monitor_t *monitor = (bat_monitor_t *)handle;
     monitor->running = false;
     
-    //等待任务结束
+    // 等待任务结束
     vTaskDelay(10);
     
     // 删除ADC校准句柄
@@ -251,11 +253,17 @@ void bat_monitor_destroy(bat_monitor_handle_t handle) {
     // 删除ADC单次模式句柄
     adc_oneshot_del_unit(monitor->adc_handle);
     
-    gpio_num_t adc_gpio = GPIO_NUM_7;  // 必须改为你的实际ADC引脚
+    gpio_num_t adc_gpio = GPIO_NUM_7;  // 假设AD_BAT1连接到GPIO7
     
-    gpio_reset_pin(adc_gpio);
-    gpio_set_direction(adc_gpio, GPIO_MODE_INPUT);
-    gpio_set_pull_mode(adc_gpio, GPIO_PULLDOWN_ONLY);
-    monitor = NULL;
+    // // ✅ 关键修正：必须禁用所有内部上拉/下拉！
+    // gpio_reset_pin(adc_gpio);
+    // gpio_set_direction(adc_gpio, GPIO_MODE_INPUT);
+    // gpio_set_pull_mode(adc_gpio, GPIO_FLOATING);  // 完全浮空，无上下拉
+    
+    
+    // 清理内存（如果使用）
     // heap_caps_free(monitor);
+    monitor = NULL;
+    
+    ESP_LOGI(TAG, "电池监测已关闭，ADC引脚设为高阻态");
 }

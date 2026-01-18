@@ -25,7 +25,7 @@ private:
 
     virtual int Read(int16_t* dest, int samples) override;
     virtual int Write(const int16_t* data, int samples) override;
-
+    int es8311_write_reg(int reg, int value);
 public:
     BoxAudioCodec(void* i2c_master_handle, int input_sample_rate, int output_sample_rate,
         gpio_num_t mclk, gpio_num_t bclk, gpio_num_t ws, gpio_num_t dout, gpio_num_t din,

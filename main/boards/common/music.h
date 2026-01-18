@@ -115,7 +115,7 @@ public:
     virtual void ScanAndLoadStory()=0;
     virtual int GetMusicOrStory_() const=0;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) = 0;
-
+    virtual void SetStopSignal(bool a)=0;
     virtual void SetCurrentCategoryName(const std::string& category) = 0;
     virtual void SetCurrentStoryName(const std::string& story) =0;
     virtual void SetCurrentChapterIndex(int index) = 0;
