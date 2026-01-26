@@ -95,152 +95,157 @@ static std::string BuildNowPlayingResult(const char* call_tool, const std::strin
     cJSON_Delete(root);
     return ret;
 }
-// 全局保存最近一次请求的播放时长（秒），由 music.play 设置，由 actually.* 在开始播放时读取并启动定时器
-static std::atomic<int> g_requested_play_duration_sec{0};
-static esp_timer_handle_t* g_play_timer_handle = nullptr;
-static std::mutex g_play_timer_mutex;
-static std::atomic<int64_t> g_play_timer_expire_us{0};
+// // 全局保存最近一次请求的播放时长（秒），由 music.play 设置，由 actually.* 在开始播放时读取并启动定时器
+// static std::atomic<int> g_requested_play_duration_sec{0};
+// static esp_timer_handle_t* g_play_timer_handle = nullptr;
+// static std::mutex g_play_timer_mutex;
+// static std::atomic<int64_t> g_play_timer_expire_us{0};
 // 启动一次性定时器（若之前存在则先取消）。在定时器回调中通过 Application::Schedule 在主线程调用停止播放。
-static void StartPlayDurationTimerIfRequested() {
-    int dur = g_requested_play_duration_sec.exchange(0);
-    if (dur <= 0) return;
-    ESP_LOGW(TAG, "Starting play duration timer for %d seconds", dur);
-    std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-    if (g_play_timer_handle) {
-        esp_timer_stop(*g_play_timer_handle);
-        esp_timer_delete(*g_play_timer_handle);
-        delete g_play_timer_handle;
-        g_play_timer_handle = nullptr;
-    }
+// static void StartPlayDurationTimerIfRequested() {
+//     int dur = g_requested_play_duration_sec.exchange(0);
+//     if (dur <= 0) return;
+//     ESP_LOGW(TAG, "Starting play duration timer for %d seconds", dur);
+//     std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+//     if (g_play_timer_handle) {
+//         esp_timer_stop(*g_play_timer_handle);
+//         esp_timer_delete(*g_play_timer_handle);
+//         delete g_play_timer_handle;
+//         g_play_timer_handle = nullptr;
+//     }
 
-    esp_timer_handle_t* th = new esp_timer_handle_t;
-    esp_timer_create_args_t args;
-    memset(&args, 0, sizeof(args));
-    args.callback = [](void* arg) {
-        // 在主线程停止播放，保证线程安全
-        Application::GetInstance().Schedule([=]() {
-            auto &board = Board::GetInstance();
-            auto m = board.GetMusic();
-            if (m) {
-                ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
-                m->SetStopSignal(true);
-                m->StopStreaming();
-                m->SetMode(false);
-            }
-        });
+//     esp_timer_handle_t* th = new esp_timer_handle_t;
+//     esp_timer_create_args_t args;
+//     memset(&args, 0, sizeof(args));
+//     args.callback = [](void* arg) {
+//         // 在主线程停止播放，保证线程安全
+//         Application::GetInstance().Schedule([=]() {
+//             auto &board = Board::GetInstance();
+//             auto m = board.GetMusic();
+//             if (m) {
+//                 ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
+//                 m->SetStopSignal(true);
+//                 m->StopStreaming();
+//                 m->SetMode(false);
+//             }
+//         });
 
-        // 清理定时器对象
-        esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
-        if (h && *h) {
-            esp_timer_stop(*h);
-            esp_timer_delete(*h);
-        }
-        delete h;
+//         // 清理定时器对象
+//         esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
+//         if (h && *h) {
+//             esp_timer_stop(*h);
+//             esp_timer_delete(*h);
+//         }
+//         delete h;
 
-        // 清全局指针
-        std::lock_guard<std::mutex> lk(g_play_timer_mutex);
-        g_play_timer_handle = nullptr;
-    };
-    args.arg = th;
-    args.name = "play_duration_timer";
+//         // 清全局指针与过期时间、请求时长
+//         {
+//             std::lock_guard<std::mutex> lk(g_play_timer_mutex);
+//             g_play_timer_handle = nullptr;
+//             g_play_timer_expire_us.store(0);
+//             g_requested_play_duration_sec.store(0);
+//         }
+//     };
+//     args.arg = th;
+//     args.name = "play_duration_timer";
 
-    if (esp_timer_create(&args, th) != ESP_OK) {
-        delete th;
-        ESP_LOGW(TAG, "Failed to create play duration timer");
-        return;
-    }
-    g_play_timer_handle = th;
-    uint64_t us = static_cast<uint64_t>(dur) * 1000000ULL;
-    // 记录到期时间，供 ExtendPlayDurationSeconds 读取剩余时间
-    uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-    g_play_timer_expire_us.store((int64_t)(now_us + us));
-    esp_timer_start_once(*th, us);
-    ESP_LOGI(TAG, "Started play duration timer: %d seconds (expire at %llu us)", dur, (unsigned long long)(now_us + us));
-}
+//     if (esp_timer_create(&args, th) != ESP_OK) {
+//         delete th;
+//         ESP_LOGW(TAG, "Failed to create play duration timer");
+//         return;
+//     }
+//     g_play_timer_handle = th;
+//     uint64_t us = static_cast<uint64_t>(dur) * 1000000ULL;
+//     // 记录到期时间，供 ExtendPlayDurationSeconds 读取剩余时间
+//     uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+//     g_play_timer_expire_us.store((int64_t)(now_us + us));
+//     esp_timer_start_once(*th, us);
+//     ESP_LOGI(TAG, "Started play duration timer: %d seconds (expire at %llu us)", dur, (unsigned long long)(now_us + us));
+// }
 
 
 
-// 创建并启动一次性播放定时器（内部使用，调用时已持有互斥/线程安全）
-static bool CreateAndStartPlayTimer(uint64_t us) {
-    std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-    // 清理旧定时器
-    if (g_play_timer_handle) {
-        esp_timer_stop(*g_play_timer_handle);
-        esp_timer_delete(*g_play_timer_handle);
-        delete g_play_timer_handle;
-        g_play_timer_handle = nullptr;
-    }
+// // 创建并启动一次性播放定时器（内部使用，调用时已持有互斥/线程安全）
+// static bool CreateAndStartPlayTimer(uint64_t us) {
+//     std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+//     // 清理旧定时器
+//     if (g_play_timer_handle) {
+//         esp_timer_stop(*g_play_timer_handle);
+//         esp_timer_delete(*g_play_timer_handle);
+//         delete g_play_timer_handle;
+//         g_play_timer_handle = nullptr;
+//     }
 
-    esp_timer_handle_t* th = new esp_timer_handle_t;
-    esp_timer_create_args_t args;
-    memset(&args, 0, sizeof(args));
-    args.callback = [](void* arg) {
-        // 在主线程停止播放，保证线程安全
-        Application::GetInstance().Schedule([=]() {
-            auto &board = Board::GetInstance();
-            auto m = board.GetMusic();
-            if (m) {
-                ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
-                m->SetStopSignal(true);
-                m->StopStreaming();
-                m->SetMode(false);
-            }
-        });
+//     esp_timer_handle_t* th = new esp_timer_handle_t;
+//     esp_timer_create_args_t args;
+//     memset(&args, 0, sizeof(args));
+//     args.callback = [](void* arg) {
+//         // 在主线程停止播放，保证线程安全
+//         Application::GetInstance().Schedule([=]() {
+//             auto &board = Board::GetInstance();
+//             auto m = board.GetMusic();
+//             if (m) {
+//                 ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
+//                 m->SetStopSignal(true);
+//                 m->StopStreaming();
+//                 m->SetMode(false);
+//             }
+//         });
 
-        // 清理定时器对象
-        esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
-        if (h && *h) {
-            esp_timer_stop(*h);
-            esp_timer_delete(*h);
-        }
-        delete h;
+//         // 清理定时器对象
+//         esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
+//         if (h && *h) {
+//             esp_timer_stop(*h);
+//             esp_timer_delete(*h);
+//         }
+//         delete h;
 
-        // 清全局指针与过期时间
-        std::lock_guard<std::mutex> lk(g_play_timer_mutex);
-        g_play_timer_handle = nullptr;
-        g_play_timer_expire_us.store(0);
-    };
-    args.arg = th;
-    args.name = "play_duration_timer";
+//         // 清全局指针与过期时间
+//         std::lock_guard<std::mutex> lk(g_play_timer_mutex);
+//         g_play_timer_handle = nullptr;
+//         g_play_timer_expire_us.store(0);
+//     };
+//     args.arg = th;
+//     args.name = "play_duration_timer";
 
-    if (esp_timer_create(&args, th) != ESP_OK) {
-        delete th;
-        ESP_LOGW(TAG, "Failed to create play duration timer");
-        return false;
-    }
-    g_play_timer_handle = th;
-    uint64_t now_us = (uint64_t)esp_timer_get_time();
-    g_play_timer_expire_us.store((int64_t)(now_us + us));
-    esp_timer_start_once(*th, us);
-    ESP_LOGI(TAG, "Started/Restarted play duration timer: %llu us", (unsigned long long)us);
-    return true;
-}
+//     if (esp_timer_create(&args, th) != ESP_OK) {
+//         delete th;
+//         ESP_LOGW(TAG, "Failed to create play duration timer");
+//         return false;
+//     }
+//     g_play_timer_handle = th;
+//     uint64_t now_us = (uint64_t)esp_timer_get_time();
+//     g_play_timer_expire_us.store((int64_t)(now_us + us));
+//     esp_timer_start_once(*th, us);
+//     ESP_LOGI(TAG, "Started/Restarted play duration timer: %llu us", (unsigned long long)us);
+//     return true;
+// }
 
-// 在已有请求机制外，提供按秒延长播放时长的 API（线程安全）
-static bool ExtendPlayDurationSeconds(int extra_seconds) {
-    if (extra_seconds <= 0) return false;
-    uint64_t extra_us = static_cast<uint64_t>(extra_seconds) * 1000000ULL;
+// // 在已有请求机制外，提供按秒延长播放时长的 API（线程安全）
+// static bool ExtendPlayDurationSeconds(int extra_seconds) {
+//     if (extra_seconds <= 0) return false;
+//     uint64_t extra_us = static_cast<uint64_t>(extra_seconds) * 1000000ULL;
 
-    // 在持锁下采样当前定时器过期时间与是否存在定时器，计算剩余时间
-    uint64_t base_remaining_us = 0;
-    {
-        std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-        uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-        int64_t expire_us = g_play_timer_expire_us.load();
-        if (g_play_timer_handle && expire_us > static_cast<int64_t>(now_us)) {
-            base_remaining_us = static_cast<uint64_t>(expire_us - static_cast<int64_t>(now_us));
-            ESP_LOGI(TAG, "Extending existing play timer: +%d s, remaining %llu us",
-                     extra_seconds, (unsigned long long)base_remaining_us);
-        } else {
-            base_remaining_us = 0;
-            ESP_LOGI(TAG, "No existing play timer, creating new one for %d s", extra_seconds);
-        }
-    } // 释放锁 — 现在安全调用会再次锁的函数
+//     // 在持锁下采样当前定时器过期时间与是否存在定时器，计算剩余时间
+//     uint64_t base_remaining_us = 0;
+//     {
+//         std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+//         uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+//         int64_t expire_us = g_play_timer_expire_us.load();
+//         if (g_play_timer_handle && expire_us > static_cast<int64_t>(now_us)) {
+//             base_remaining_us = static_cast<uint64_t>(expire_us - static_cast<int64_t>(now_us));
+//             ESP_LOGI(TAG, "Extending existing play timer: +%d s, remaining %llu us",
+//                      extra_seconds, (unsigned long long)base_remaining_us);
+//         } else {
+//             base_remaining_us = 0;
+//             ESP_LOGI(TAG, "No existing play timer, creating new one for %d s", extra_seconds);
+//         }
+//     } // 释放锁 — 现在安全调用会再次锁的函数
 
-    uint64_t new_total_us = base_remaining_us + extra_us;
-    return CreateAndStartPlayTimer(new_total_us);
-}
+//     uint64_t new_total_us = base_remaining_us + extra_us;
+//     return CreateAndStartPlayTimer(new_total_us);
+// }
 bool NotResumePlayback = 0;
+
 void McpServer::AddCommonTools() {
     // *Important* To speed up the response time, we add the common tools to the beginning of
     // the tools list to utilize the prompt cache.
@@ -251,6 +256,7 @@ void McpServer::AddCommonTools() {
     auto& board = Board::GetInstance();
     auto music = board.GetMusic();
     auto mcp = GetInstance();
+    auto app = &Application::GetInstance();
     // Do not add custom tools here.
     // Custom tools must be added in the board's InitializeTools function.
 
@@ -348,18 +354,56 @@ void McpServer::AddCommonTools() {
 
 
     if (music) {
+        AddTool("music.set_play_duration",
+                "设置当前播放的剩余时长（秒）。若设置为 0 则取消计时器。",
+                PropertyList({
+                    Property("seconds", kPropertyTypeInteger, 0, 0, 86400) // 0 表示取消计时器
+                }),
+                [music, app](const PropertyList& properties) -> ReturnValue {
+                    int seconds = properties["seconds"].value<int>();
+                    if (seconds < 0) {
+                        return std::string("{\"success\": false, \"message\": \"参数 seconds 必须 >= 0\"}");
+                    }
 
+                    // 0 表示取消当前计时器
+                    if (seconds == 0) {
+                        app->StopPlayDurationTimer();
+                        ESP_LOGI(TAG, "music.set_play_duration: cancelled play duration timer");
+                        return std::string("{\"success\": true, \"message\": \"已取消播放计时\"}");
+                    }
+
+                    // 确保正在播放（或恢复播放）
+                    if (music && music->is_paused()) {
+                        music->ResumePlayback();
+                    }
+
+                    // 启动/重置定时器到指定剩余秒数
+                    uint64_t us = static_cast<uint64_t>(seconds) * 1000000ULL;
+                    bool ok = false;
+                    // 优先使用 Application 对外的 API 创建定时器（CreateAndStartPlayTimer）
+                    // 该函数在 Application 中实现为 CreateAndStartPlayTimer(uint64_t us)
+                    // 若你的 Application API 名称不同，请改为相应的公开方法。
+                    ok = app->CreateAndStartPlayTimer(us);
+
+                    if (ok) {
+                        ESP_LOGI(TAG, "music.set_play_duration: set remaining play time to %d seconds", seconds);
+                        return std::string("{\"success\": true, \"message\": \"已设置播放剩余时长 " + std::to_string(seconds) + " 秒\"}");
+                    } else {
+                        ESP_LOGW(TAG, "music.set_play_duration: failed to set play timer");
+                        return std::string("{\"success\": false, \"message\": \"设置播放时长失败\"}");
+                    }
+                });
         AddTool("music.extend_play",
                 "延长当前播放的时长。参数: `extra`(秒)，表示在当前剩余时间基础上增加的秒数；若当前没有计时器则从现在开始计时。",
                 PropertyList({
                     Property("extra", kPropertyTypeInteger, 0, 0, 86400) // 最小 1 秒，最大 86400 秒
                 }),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,app](const PropertyList& properties) -> ReturnValue {
                     int extra = properties["extra"].value<int>();
                     if (extra <= 0) {
                         return std::string("{\"success\": false, \"message\": \"参数 extra 必须大于 0\"}");
                     }
-                    bool ok = ExtendPlayDurationSeconds(extra);
+                    bool ok = app->ExtendPlayDurationSeconds(extra);
                     if (ok) {
                         music->ResumePlayback(); // 确保播放未暂停
                         return std::string("{\"success\": true, \"message\": \"已延长播放时长 " + std::to_string(extra) + " 秒\"}");
@@ -392,21 +436,11 @@ void McpServer::AddCommonTools() {
         AddTool("stopplay",
                 "当用户说停止播放的时候调用，你必须调用这个工具来停止当前的音乐播放。不能主观臆断当前状态",
                 PropertyList(),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,app](const PropertyList& properties) -> ReturnValue {
                     music->SetMode(false);
                     music->StopStreaming(); // 停止当前播放
                     // 取消播放计时器（如果存在）
-                    {
-                        std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-                        if (g_play_timer_handle) {
-                            esp_timer_stop(*g_play_timer_handle);
-                            esp_timer_delete(*g_play_timer_handle);
-                            delete g_play_timer_handle;
-                            g_play_timer_handle = nullptr;
-                        }
-                        g_play_timer_expire_us.store(0);
-                        g_requested_play_duration_sec.store(0);
-                    }
+                   app->StopPlayDurationTimer();
                     return true;
                 });
 
@@ -502,18 +536,20 @@ void McpServer::AddCommonTools() {
                     Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
                     Property("style", kPropertyTypeString,"") //  音乐风格（可选）
                 }),
-                [music,&board](const PropertyList& properties) -> ReturnValue {
+                [music,&board,app](const PropertyList& properties) -> ReturnValue {
+                    #if !my
                     if(board.GetBatteryLevel() <= 10)
                     {
                         return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
                     }
+                    #endif
                     auto song_name = properties["songname"].value<std::string>();
                     auto singer = properties["singer"].value<std::string>();
                     auto mode = properties["mode"].value<std::string>();
                     auto goon = properties["GoOn"].value<bool>();
                     auto style = properties["style"].value<std::string>();
                     int duration = properties["duration"].value<int>();
-                    if (duration > 0) g_requested_play_duration_sec.store(duration);
+                    if (duration > 0) app->Set_PlayDuration(duration);
                     ESP_LOGW(TAG, "style: '%s'",style.c_str());
                     auto &app = Application::GetInstance();
                     // 解析播放模式（支持中文与常见英文）
@@ -741,9 +777,9 @@ void McpServer::AddCommonTools() {
         AddTool("actually.2",
         "调用完 music.play后，如果函数返回内容里出现{\"call_tool\":\"actually.2\"}，请立即再调用 actually.2，参数留空。",
         PropertyList(),
-        [music](const PropertyList& properties) -> ReturnValue {
+        [music,app](const PropertyList& properties) -> ReturnValue {
             // auto &app = Application::GetInstance();
-            StartPlayDurationTimerIfRequested();
+            app->StartPlayDurationTimerIfRequested();
             music->SetMode(true);
             music->SetMusicOrStory_(MUSIC);
             if (!music->ResumeSavedPlayback()) {
@@ -752,6 +788,7 @@ void McpServer::AddCommonTools() {
                 size_t out_count = 0;
                 auto all_music = music->GetMusicLibrary(out_count);
                 if (out_count == 0) {
+                    music->SetMode(false);
                     ESP_LOGW(TAG, "actually.2 fallback: music library empty");
                     return "{\"success\": false, \"message\": \"无法继续播放音乐: 音乐库为空\"}";
                 }
@@ -788,14 +825,15 @@ void McpServer::AddCommonTools() {
         "调用完 music.play或 next 后，如果函数返回内容里出现{\"call_tool\":\"actually.1\"}，请立即再调用 actually.1，参数留空。",
         PropertyList(),
         [music](const PropertyList& properties) -> ReturnValue {
-            music->SetMode(true);
             music->SetMusicOrStory_(MUSIC);
             auto &app = Application::GetInstance();
-
             auto list = music->GetCurrentPlayList();
-            music->PlayPlaylist(list);
-            StartPlayDurationTimerIfRequested();
-            return "{\"success\": true, \"message\": \"开始播放音乐\"}";
+            if(music->PlayPlaylist(list)) {
+                music->SetMode(true);
+                app.StartPlayDurationTimerIfRequested();
+                return "{\"success\": true, \"message\": \"开始播放音乐\"}";
+            }
+            return "{\"success\": false, \"message\": \"播放音乐失败\"}";
         });
 
         AddTool("searchmusic",
@@ -943,9 +981,12 @@ void McpServer::AddCommonTools() {
                     Property("mode", kPropertyTypeString,"下一个") // 故事切换模式，下一章、下一个
                 }),
                 [music,&board](const PropertyList& properties) -> ReturnValue {
-                    if (board.GetBatteryLevel() <= 10) {
-                        return std::string("{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}");
+                    #if !my
+                    if(board.GetBatteryLevel() <= 10)
+                    {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
                     }
+                    #endif
 
                     auto MusicOrStory_ = music->GetMusicOrStory_();
                     auto playmode = music->GetPlaybackMode();
@@ -1030,9 +1071,12 @@ void McpServer::AddCommonTools() {
                     Property("mode", kPropertyTypeString,"上一章") // 故事切换模式，上一章、上一个
                 }),
                 [music,&board](const PropertyList& properties) -> ReturnValue {
-                    if (board.GetBatteryLevel() <= 10) {
-                        return std::string("{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}");
+                    #if !my
+                    if(board.GetBatteryLevel() <= 10)
+                    {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
                     }
+                    #endif
                     auto MusicOrStory_ = music->GetMusicOrStory_();
                                         
                     std::string now_playing; // 要返回给调用方的播放提示
@@ -1243,18 +1287,20 @@ void McpServer::AddCommonTools() {
                     Property("mode", kPropertyTypeString,"顺序播放"),
                     Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
                 }),
-                [music,&board](const PropertyList& properties) -> ReturnValue {
+                [music,&board,app](const PropertyList& properties) -> ReturnValue {
+                    #if !my
                     if(board.GetBatteryLevel() <= 10)
                     {
-                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
                     }
+                    #endif
                     auto cat = properties["Category"].value<std::string>();
                     auto name = properties["Story"].value<std::string>();
                     int chapter_idx = properties["Chapter_Index"].value<int>();
                     auto goon = properties["GoOn"].value<bool>();
                     auto mode = properties["mode"].value<std::string>();
                     int duration = properties["duration"].value<int>();
-                    if (duration > 0) g_requested_play_duration_sec.store(duration);
+                    if (duration > 0) app->Set_PlayDuration(duration);
                     ESP_LOGI(TAG, "story.play called with Category: %s, Story: %s, Chapter_Index: %d, GoOn: %d, mode: %s, duration: %d",
                              cat.empty()?"":cat.c_str(), name.empty()?"":name.c_str(), chapter_idx, goon, mode.c_str(), duration);
                     // 解析播放模式（支持中文与常见英文）
@@ -1406,30 +1452,61 @@ void McpServer::AddCommonTools() {
                     return "{\"success\": false, \"message\": \"播放故事失败\"}";
                 });
             
-
-            AddTool("actually.4",
+        AddTool("actually.4",
                 "调用完 story.play后，如果函数返回内容里出现{\"call_tool\":\"actually.4\"}，请立即再调用 actually.4，参数留空。",
                 PropertyList(),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,app](const PropertyList& properties) -> ReturnValue {
                     ESP_LOGI(TAG, "actually.4 called to resume story playback");
-                    music->SetMode(true);
                     music->SetMusicOrStory_(STORY);
-                    if (!music->ResumeSavedStoryPlayback()) {
-                        ESP_LOGI("TAG", "ResumeSavedStoryPlayback failed or not possible");
+
+                    // 先尝试断点恢复播放
+                    if (music->ResumeSavedStoryPlayback()) {
+                        app->StartPlayDurationTimerIfRequested();
+                        music->SetMode(true);
+                        return "{\"success\": true, \"message\": \"播放故事成功\"}";
                     }
-                    return "{\"success\": true, \"message\": \"继续播放故事\"}";
+
+                    // 断点恢复失败，回退到从库中随机选一个故事，从第一章开始播放
+                    ESP_LOGI(TAG, "ResumeSavedStoryPlayback failed — fallback to random story");
+                    size_t count = 0;
+                    auto story_index = music->GetStoryLibrary(count);
+                    if (count == 0) {
+                        music->SetMode(false);
+                        ESP_LOGW(TAG, "actually.4 fallback: story library empty");
+                        return "{\"success\": false, \"message\": \"无法播放故事: 故事库为空\"}";
+                    }
+
+                    size_t pick = static_cast<size_t>(esp_random()) % count;
+                    // 设置选中的故事并从第1章开始
+                    music->SetCurrentStoryIndex(static_cast<int>(pick));
+                    music->SetCurrentCategoryName(story_index[pick].category);
+                    music->SetCurrentStoryName(story_index[pick].story_name);
+                    music->SetCurrentChapterIndex(0);
+
+                    // 尝试播放选中的故事
+                    if (music->SelectStoryAndPlay()) {
+                        app->StartPlayDurationTimerIfRequested();
+                        music->SetMode(true);
+                        std::string now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
+                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
+
+                    } else {
+                        music->SetMode(false);
+                        return "{\"success\": false, \"message\": \"播放故事失败\"}";
+                    }
                 });
-            
+          
             AddTool("actually.3",
                 "调用完 story.play后，如果函数返回内容里出现{\"call_tool\":\"actually.3\"}，请立即再调用 actually.3，参数留空。\n"
                 "返回：立刻开始播放，无需播报状态",
                 PropertyList(),
-                [music](const PropertyList& properties) -> ReturnValue {
+                [music,app](const PropertyList& properties) -> ReturnValue {
                     ESP_LOGI(TAG, "actually.3 called to start story playback");
-                    music->SetMode(true);
                     music->SetMusicOrStory_(STORY);
                     if(music->SelectStoryAndPlay())
                     {
+                        app->StartPlayDurationTimerIfRequested();
+                        music->SetMode(true);
                         return "{\"success\": true, \"message\": \"开始播放故事\"}";
                     }
                     return "{\"success\": false, \"message\": \"播放故事失败\"}";

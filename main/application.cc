@@ -809,12 +809,12 @@ void Application::Start() {
 
     // esp_deep_sleep_start();
     last_device_Role = device_Role;
-    SetAecMode(kAecOff);
-    // ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
-    // std::string msg = "向用户问好";
-    // SendMessage(msg);
+    // SetAecMode(kAecOff);
+    ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
+    std::string msg = "向用户问好";
+    SendMessage(msg);
     
-    // vTaskDelay(pdMS_TO_TICKS(10000));
+    vTaskDelay(pdMS_TO_TICKS(10000));
 
 }
 
@@ -893,33 +893,6 @@ void Application::EnterDeepSleep() {
     // 对于背光（高电平点亮）：输出低电平
     gpio_set_level(GPIO_NUM_42, 0);
 
-    // gpio_deep_sleep_hold_dis();  // 全局禁用深度睡眠保持
-    // for (int i = 0; i < 48; i++) {
-    //     gpio_num_t gpio = static_cast<gpio_num_t>(i);
-        
-    //     // 跳过唤醒引脚（GPIO0）
-    //     if (gpio == GPIO_NUM_0) continue;
-        
-    //     // 检查是否是有效的GPIO
-    //     if (gpio == GPIO_NUM_NC) continue;
-    //     if (i > 21 && i < 34) {
-    //          continue;
-    //     }
-    //     if(i == 43 || i == 44){
-    //          continue;
-    //     }
-    //     // 重置GPIO配置
-    //     gpio_reset_pin(gpio);
-        
-    //     // 配置为输入模式，禁用上下拉
-    //     gpio_config_t io_conf = {};
-    //     io_conf.pin_bit_mask = (1ULL << i);
-    //     io_conf.mode = GPIO_MODE_INPUT;
-    //     io_conf.pull_up_en = GPIO_PULLUP_DISABLE;
-    //     io_conf.pull_down_en = GPIO_PULLDOWN_DISABLE;
-    //     io_conf.intr_type = GPIO_INTR_DISABLE;
-    //     gpio_config(&io_conf);
-    // }
 
     vTaskDelay(pdMS_TO_TICKS(100)); // 确保所有操作完成
     //ext0 仅支持 RTC IO（例如 GPIO0），若 wake_gpio 非 RTC 引脚可能无法生效
@@ -1108,6 +1081,7 @@ void Application::MainEventLoop() {
 
             // 空闲超时自动进入深度睡眠（仅在真正可以进入睡眠时）
             if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == false)) {
+                ESP_LOGD(TAG, "空闲计时: %d 秒", sleep_ticks_);
                 sleep_ticks_++;
                 if (CanEnterSleepMode() && sleep_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
                     ESP_LOGI(TAG, "Device idle for %d seconds and can sleep -> entering deep sleep", IDLE_DEEP_SLEEP_SECONDS);
@@ -1122,6 +1096,14 @@ void Application::MainEventLoop() {
                 }
             }
             else if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == true)) {
+                if(g_duration_flag.load())
+                {
+                    ESP_LOGD(TAG, "有时间限制的播放模式下，不进入深度睡眠");
+                    //有时间限制的播放模式下，不进入深度睡眠
+                    sleep_music_ticks_ = 0;
+                    continue;
+                }
+                ESP_LOGD(TAG, "播放空闲计时: %d 秒", sleep_music_ticks_);
                 sleep_music_ticks_++;
                 if (CanEnterSleepMode() && sleep_music_ticks_ >= (4*IDLE_DEEP_SLEEP_SECONDS)) {
                     ESP_LOGI(TAG, "Music idle for %d seconds and can sleep -> entering deep sleep", (4*IDLE_DEEP_SLEEP_SECONDS));
@@ -1567,4 +1549,144 @@ void Application::AddAudioData(AudioStreamPacket&& packet) {
             audio_service_.UpdateOutputTimestamp();
         }
     }
+}
+
+static void PlayDurationTimerCallback(void* arg) {
+    // 在主线程停止播放，保证线程安全
+    Application::GetInstance().Schedule([=]() {
+        auto &board = Board::GetInstance();
+        auto m = board.GetMusic();
+        if (m) {
+            ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
+            m->SetStopSignal(true);
+            m->StopStreaming();
+            m->SetMode(false);
+        }
+    });
+
+    // 清理定时器对象
+    esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
+    if (h && *h) {
+        esp_timer_stop(*h);
+        esp_timer_delete(*h);
+    }
+    delete h;
+
+    // 清全局指针与过期时间
+    auto instance = &Application::GetInstance();
+    {
+        std::lock_guard<std::mutex> lk(instance->g_play_timer_mutex);
+        instance->g_play_timer_handle = nullptr;
+        instance->g_play_timer_expire_us.store(0);
+        // 如需清除请求时长，可在此处置零：
+        instance->g_requested_play_duration_sec.store(0);
+        instance->g_duration_flag.store(false);
+    }
+
+    ESP_LOGW(TAG, "Play duration timer callback finished: cleared timer state");
+}
+
+void Application::StartPlayDurationTimerIfRequested() {
+    int dur = g_requested_play_duration_sec.exchange(0);
+    if (dur <= 0) return;
+    g_duration_flag.store(true);
+    ESP_LOGW(TAG, "Starting play duration timer for %d seconds", dur);
+    std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+    if (g_play_timer_handle) {
+        esp_timer_stop(*g_play_timer_handle);
+        esp_timer_delete(*g_play_timer_handle);
+        delete g_play_timer_handle;
+        g_play_timer_handle = nullptr;
+    }
+
+    esp_timer_handle_t* th = new esp_timer_handle_t;
+    esp_timer_create_args_t args;
+    memset(&args, 0, sizeof(args));
+    args.callback = PlayDurationTimerCallback;
+    args.arg = th;
+    args.name = "play_duration_timer";
+
+    if (esp_timer_create(&args, th) != ESP_OK) {
+        delete th;
+        ESP_LOGW(TAG, "Failed to create play duration timer");
+        return;
+    }
+    g_play_timer_handle = th;
+    uint64_t us = static_cast<uint64_t>(dur) * 1000000ULL;
+    // 记录到期时间，供 ExtendPlayDurationSeconds 读取剩余时间
+    uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+    g_play_timer_expire_us.store((int64_t)(now_us + us));
+    esp_timer_start_once(*th, us);
+    ESP_LOGI(TAG, "Started play duration timer: %d seconds (expire at %llu us)", dur, (unsigned long long)(now_us + us));
+}
+
+
+
+// 创建并启动一次性播放定时器（内部使用，调用时已持有互斥/线程安全）
+bool Application::CreateAndStartPlayTimer(uint64_t us) {
+    std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+    // 清理旧定时器
+    if (g_play_timer_handle) {
+        esp_timer_stop(*g_play_timer_handle);
+        esp_timer_delete(*g_play_timer_handle);
+        delete g_play_timer_handle;
+        g_play_timer_handle = nullptr;
+    }
+    g_duration_flag.store(true);
+    esp_timer_handle_t* th = new esp_timer_handle_t;
+    esp_timer_create_args_t args;
+    memset(&args, 0, sizeof(args));
+    args.callback = PlayDurationTimerCallback;
+    args.arg = th;
+    args.name = "play_duration_timer";
+    if (esp_timer_create(&args, th) != ESP_OK) {
+        delete th;
+        ESP_LOGW(TAG, "Failed to create play duration timer");
+        return false;
+    }
+    g_play_timer_handle = th;
+    uint64_t now_us = (uint64_t)esp_timer_get_time();
+    g_play_timer_expire_us.store((int64_t)(now_us + us));
+    esp_timer_start_once(*th, us);
+    ESP_LOGI(TAG, "Started/Restarted play duration timer: %f s", (unsigned long long)us/1000000.0);
+    return true;
+}
+
+// 在已有请求机制外，提供按秒延长播放时长的 API（线程安全）
+bool Application::ExtendPlayDurationSeconds(int extra_seconds) {
+    if (extra_seconds <= 0) return false;
+    uint64_t extra_us = static_cast<uint64_t>(extra_seconds) * 1000000ULL;
+    g_duration_flag.store(true);
+    // 在持锁下采样当前定时器过期时间与是否存在定时器，计算剩余时间
+    uint64_t base_remaining_us = 0;
+    {
+        std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+        uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
+        int64_t expire_us = g_play_timer_expire_us.load();
+        if (g_play_timer_handle && expire_us > static_cast<int64_t>(now_us)) {
+            base_remaining_us = static_cast<uint64_t>(expire_us - static_cast<int64_t>(now_us));
+            ESP_LOGI(TAG, "Extending existing play timer: +%d s, remaining %llu us",
+                     extra_seconds, (unsigned long long)base_remaining_us);
+        } else {
+            base_remaining_us = 0;
+            ESP_LOGI(TAG, "No existing play timer, creating new one for %d s", extra_seconds);
+        }
+    } // 释放锁 — 现在安全调用会再次锁的函数
+
+    uint64_t new_total_us = base_remaining_us + extra_us;
+    return CreateAndStartPlayTimer(new_total_us);
+}
+
+void Application::StopPlayDurationTimer()
+{
+   std::lock_guard<std::mutex> lock(g_play_timer_mutex);
+   if (g_play_timer_handle) {
+       esp_timer_stop(*g_play_timer_handle);
+       esp_timer_delete(*g_play_timer_handle);
+       delete g_play_timer_handle;
+       g_play_timer_handle = nullptr;
+   }
+   g_play_timer_expire_us.store(0);
+   Set_PlayDuration(0);
+   g_duration_flag.store(false);
 }

@@ -527,34 +527,48 @@ public:
     virtual void Deinitialize() override {
         // 在此处添加任何必要的反初始化代码
         ESP_LOGI(TAG, "LichuangDevBoard 反初始化");
-        // 例如，删除 I2C 总线
         if (i2c_bus_) {
             i2c_del_master_bus(i2c_bus_);
             i2c_bus_ = nullptr;
         }
+        
 
-    
-    // 关键步骤：将I2C引脚设置为输出低电平
-    // 这样引脚被拉到0V，上拉电阻两端电压为0，没有电流流过
-    gpio_set_direction(AUDIO_CODEC_I2C_SDA_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(AUDIO_CODEC_I2C_SDA_PIN, 1);
-    
-    gpio_set_direction(AUDIO_CODEC_I2C_SCL_PIN, GPIO_MODE_OUTPUT);
-    gpio_set_level(AUDIO_CODEC_I2C_SCL_PIN, 1);
-    
-    // 验证引脚电平
-    int sda_level = gpio_get_level(AUDIO_CODEC_I2C_SDA_PIN);
-    int scl_level = gpio_get_level(AUDIO_CODEC_I2C_SCL_PIN);
-    
-    ESP_LOGI("I2C_PWR", "I2C引脚状态: SDA=%d, SCL=%d", sda_level, scl_level);
-    
-    if (sda_level == 1 && scl_level == 1) {
-        ESP_LOGI("I2C_PWR", "✅ I2C引脚已设为高电平，上拉电阻电流已消除");
-    } else {
-        ESP_LOGE("I2C_PWR", "❌ I2C引脚设置失败");
-    }
-    
+        // 3.1 先输出低电平
+        gpio_set_direction(AUDIO_CODEC_I2C_SDA_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_direction(AUDIO_CODEC_I2C_SCL_PIN, GPIO_MODE_OUTPUT);
+        gpio_set_level(AUDIO_CODEC_I2C_SDA_PIN, 0);
+        gpio_set_level(AUDIO_CODEC_I2C_SCL_PIN, 0);
+        delay_ms(1);
+        
+        // 3.2 然后输出高电平
+        gpio_set_level(AUDIO_CODEC_I2C_SDA_PIN, 1);
+        gpio_set_level(AUDIO_CODEC_I2C_SCL_PIN, 1);
+        delay_ms(1);
+        
+        // 3.3 最后设为高阻态
+        gpio_config_t io_conf = {
+            .pin_bit_mask = (1ULL << AUDIO_CODEC_I2C_SDA_PIN) | (1ULL << AUDIO_CODEC_I2C_SCL_PIN),
+            .mode = GPIO_MODE_INPUT,
+            .pull_up_en = GPIO_PULLUP_DISABLE,
+            .pull_down_en = GPIO_PULLDOWN_DISABLE,
+            .intr_type = GPIO_INTR_DISABLE,
+        };
+        gpio_config(&io_conf);
+        
+        // 步骤4：读取并记录状态
+        delay_ms(5);
+        int sda = gpio_get_level(AUDIO_CODEC_I2C_SDA_PIN);
+        int scl = gpio_get_level(AUDIO_CODEC_I2C_SCL_PIN);
 
+        ESP_LOGI("I2C", "总线释放后: SDA=%d, SCL=%d", sda, scl);
+        
+        if (sda == 1 && scl == 1) {
+            ESP_LOGI("I2C", "✅ 总线已成功释放");
+        } else {
+            ESP_LOGW("I2C", "⚠️ 总线可能仍被占用");
+            if (sda == 0) ESP_LOGW("I2C", "   SDA被拉低，可能ES8311/ES7210未关闭");
+            if (scl == 0) ESP_LOGW("I2C", "   SCL被拉低，检查其他I2C设备");
+        }
         // 取消挂载 SD 卡（若已挂载）
         if (sdcard_) {
             ESP_LOGI(TAG, "Unmounting SD card at %s", MOUNT_POINT);

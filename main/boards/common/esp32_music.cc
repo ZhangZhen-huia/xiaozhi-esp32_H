@@ -539,6 +539,7 @@ void Esp32Music::PlayAudioStream() {
     const int kMaxConsecutiveDecodeFailures = 3;
     int resume_fail_count = 0;
     
+    
     // 保存断点（按类型）
     if (MusicOrStory_ == MUSIC) {
         SavePlaybackPosition();
@@ -1145,6 +1146,7 @@ void Esp32Music::PlayAudioStream() {
     // 停止播放标志
     is_playing_ = false;
 
+    ESP_LOGW(TAG,"Save playback position after finishing playback");
     // 保存断点（按类型）
     if (MusicOrStory_ == MUSIC) {
         SavePlaybackPosition();
@@ -1733,6 +1735,7 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
             std::lock_guard<std::mutex> lock(current_play_file_mutex_);
             current_play_file_ = nullptr;
             current_play_file_offset_ = 0;
+            file = nullptr;  
         }
         is_downloading_ = false;
         return;
@@ -1777,7 +1780,7 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
                     std::lock_guard<std::mutex> lock(current_play_file_mutex_);
                     cur_offset = current_play_file_offset_;
                 }
-                if (file_size > 0 && cur_offset >= file_size && first_resume) {
+                if (file_size > 0 && file_size - cur_offset < 2048 && first_resume) {
                     ESP_LOGI(TAG, "SD card file reached EOF at offset %zu (size %zu), rewinding to 0", cur_offset, file_size);
                     if (fseek(file, 0, SEEK_SET) == 0) {
                         {
@@ -1795,7 +1798,40 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
                     ESP_LOGI(TAG, "SD card file read completed, total: %u bytes", (unsigned)total_read);
                 }
             } else {
-                ESP_LOGE(TAG, "Failed to read from file");
+                // 非 EOF 的读取失败：可能为 SD 卡错误/拔出
+                if (ferror(file) || !file_exists(file_path)) {
+                    ESP_LOGE(TAG, "SD read error or card removed for %s", file_path.c_str());
+                    // 标记停止，唤醒等待的线程并调度主线程停止播放
+                    is_downloading_ = false;
+                    is_playing_ = false;
+                    {
+                        std::lock_guard<std::mutex> lock(buffer_mutex_);
+                        if (g_buffer_sema) {
+                            for (int i = 0; i < kBufferSemaphoreMax; ++i) xSemaphoreGive(g_buffer_sema);
+                        } else {
+                            buffer_cv_.notify_all();
+                        }
+                    }
+                    // 关闭文件并清理 current_play_file_
+                    fclose(file);
+                    {
+                        std::lock_guard<std::mutex> lock(current_play_file_mutex_);
+                        current_play_file_ = nullptr;
+                        current_play_file_offset_ = 0;
+                        file = nullptr;  
+                    }
+                    // 通过主线程安全地停止播放和做额外清理
+                    app.Schedule([this]() {
+                        ESP_LOGW(TAG, "Scheduled StopStreaming due to SD failure");
+                        this->SetMode(false);
+                        this->SetStopSignal(true);
+                        this->StopStreaming();
+
+                    });
+                    break;
+                } else {
+                    ESP_LOGE(TAG, "Failed to read from file");
+                }
             }
             break;
         }
@@ -1850,7 +1886,12 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
         }
     }
     
-    fclose(file);
+    // 确保文件已关闭（若未在错误分支关闭）
+    if (file) 
+    {
+        fclose(file);
+        file = nullptr;  
+    }
 
     // 清理 current_play_file_（保留偏移读取，对外可查询）
     {

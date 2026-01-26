@@ -26,7 +26,7 @@
 
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
-#define IDLE_DEEP_SLEEP_SECONDS (1 * 60)
+#define IDLE_DEEP_SLEEP_SECONDS (1 * 10)
 #endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -98,11 +98,21 @@ public:
     bool Wifi_Offline = false;
     Role device_Role = Role_Xiaozhi;
     Role last_device_Role = Role_Xiaozhi;
-
+    // 全局保存最近一次请求的播放时长（秒），由 music.play 设置，由 actually.* 在开始播放时读取并启动定时器
+    std::atomic<int> g_requested_play_duration_sec{0};
+    esp_timer_handle_t* g_play_timer_handle = nullptr;
+    std::mutex g_play_timer_mutex;
+    std::atomic<int64_t> g_play_timer_expire_us{0};
+    std::atomic<bool> g_duration_flag = false;
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
     DeviceFunction GetDeviceFunction() const { return device_function_; }
     void Resetsleep_music_ticks_(){sleep_music_ticks_ = 0;};
+    void StartPlayDurationTimerIfRequested();
+    bool CreateAndStartPlayTimer(uint64_t us);
+    bool ExtendPlayDurationSeconds(int extra_seconds);
+    void Set_PlayDuration(int duration){g_requested_play_duration_sec.store(duration);};
+    void StopPlayDurationTimer();
 private:
     Application();
     ~Application();
@@ -135,6 +145,8 @@ private:
 
     bool ble_wifi_config_enabled_ = true;
     
+
+
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
