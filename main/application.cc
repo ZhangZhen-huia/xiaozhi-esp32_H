@@ -831,15 +831,8 @@ void Application::EnterDeepSleep() {
     ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
     auto& board = Board::GetInstance();
     auto music = board.GetMusic();
-    if(music->ReturnMode() == true)
-    {
-        ESP_LOGI(TAG, "退出音乐模式");
-        while(music->IsPlaying() != true)
-        {
-            vTaskDelay(pdMS_TO_TICKS(1000));   
-        }
-        music->StopStreaming();
-    }
+    music->StopStreaming();
+    
 
 
     ESP_LOGI(TAG, "关闭RFID");
@@ -1105,8 +1098,8 @@ void Application::MainEventLoop() {
                 }
                 ESP_LOGD(TAG, "播放空闲计时: %d 秒", sleep_music_ticks_);
                 sleep_music_ticks_++;
-                if (CanEnterSleepMode() && sleep_music_ticks_ >= (4*IDLE_DEEP_SLEEP_SECONDS)) {
-                    ESP_LOGI(TAG, "Music idle for %d seconds and can sleep -> entering deep sleep", (4*IDLE_DEEP_SLEEP_SECONDS));
+                if (CanEnterSleepMode() && sleep_music_ticks_ >= IDLE_DEEP_SLEEP_MUSIC_SECONDS) {
+                    ESP_LOGI(TAG, "Music idle for %d seconds and can sleep -> entering deep sleep", IDLE_DEEP_SLEEP_MUSIC_SECONDS);
                     music->SetStopSignal(true);
                     // 防止重复调度：清零计时
                     sleep_music_ticks_ = 0;
@@ -1665,8 +1658,8 @@ bool Application::ExtendPlayDurationSeconds(int extra_seconds) {
         int64_t expire_us = g_play_timer_expire_us.load();
         if (g_play_timer_handle && expire_us > static_cast<int64_t>(now_us)) {
             base_remaining_us = static_cast<uint64_t>(expire_us - static_cast<int64_t>(now_us));
-            ESP_LOGI(TAG, "Extending existing play timer: +%d s, remaining %llu us",
-                     extra_seconds, (unsigned long long)base_remaining_us);
+            ESP_LOGI(TAG, "Extending existing play timer: +%d s, remaining %f s",
+                     extra_seconds, base_remaining_us / 1000000.0f);
         } else {
             base_remaining_us = 0;
             ESP_LOGI(TAG, "No existing play timer, creating new one for %d s", extra_seconds);

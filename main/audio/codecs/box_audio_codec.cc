@@ -308,7 +308,7 @@ int BoxAudioCodec::es8311_enter_minimum_power_mode() {
     bool power_ok = es8311_verify_low_power();
     
     if (power_ok) {
-        ESP_LOGW(TAG, "✅ ES8311 entered minimum power mode (<1mA expected)");
+        ESP_LOGW(TAG, "✅ ES8311 entered minimum power mode )");
         return 0;
     } else {
         ESP_LOGW(TAG, "⚠️ ES8311 may not be in lowest power state");
@@ -563,7 +563,7 @@ int BoxAudioCodec::es7210_enter_minimum_power_mode() {
     bool power_ok = es7210_verify_low_power();
     
     if (power_ok) {
-        ESP_LOGW(TAG, "✅ ES7210成功进入最低功耗模式 (期望电流<0.1mA)");
+        ESP_LOGW(TAG, "✅ ES7210成功进入最低功耗模式 ");
         return 0;
     } else {
         ESP_LOGW(TAG, "⚠️ ES7210可能未进入最低功耗状态");
@@ -583,30 +583,23 @@ void BoxAudioCodec::Shutdown() {
         ESP_ERROR_CHECK_WITHOUT_ABORT(esp_codec_dev_close(input_dev_));
         input_enabled_ = false;
     }
-    // // 释放 codec/dev/ctrl/interface（保守操作，保留与析构一致的顺序）
-    // if (output_dev_) { esp_codec_dev_delete(output_dev_); output_dev_ = nullptr; }
-    // if (input_dev_)  { esp_codec_dev_delete(input_dev_);  input_dev_ = nullptr; }
 
-    // if (in_codec_if_)  { audio_codec_delete_codec_if(in_codec_if_); in_codec_if_ = nullptr; }
-    // if (in_ctrl_if_)   { audio_codec_delete_ctrl_if(in_ctrl_if_); in_ctrl_if_ = nullptr; }
-    // if (out_codec_if_) { audio_codec_delete_codec_if(out_codec_if_); out_codec_if_ = nullptr; }
-    // if (out_ctrl_if_)  { audio_codec_delete_ctrl_if(out_ctrl_if_); out_ctrl_if_ = nullptr; }
-    
-    // if (gpio_if_)      { audio_codec_delete_gpio_if(gpio_if_); gpio_if_ = nullptr; }
-    // if (data_if_)      { audio_codec_delete_data_if(data_if_); data_if_ = nullptr; }
-    
+
     es7210_enter_minimum_power_mode();
     es8311_enter_minimum_power_mode();
     
+    esp_codec_dev_delete(output_dev_);
+    esp_codec_dev_delete(input_dev_);
+    
     if (tx_handle_) {
         ESP_LOGI(TAG, "Disable & delete I2S TX channel");
-        i2s_channel_disable(tx_handle_);
+        // i2s_channel_disable(tx_handle_);
         i2s_del_channel(tx_handle_);
         tx_handle_ = nullptr;
     }
     if (rx_handle_) {
         ESP_LOGI(TAG, "Disable & delete I2S RX channel");
-        i2s_channel_disable(rx_handle_);
+        // i2s_channel_disable(rx_handle_);
         i2s_del_channel(rx_handle_);
         rx_handle_ = nullptr;
     }

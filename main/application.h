@@ -26,7 +26,8 @@
 
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
-#define IDLE_DEEP_SLEEP_SECONDS (1 * 10)
+#define IDLE_DEEP_SLEEP_SECONDS (1 * 30)
+#define IDLE_DEEP_SLEEP_MUSIC_SECONDS (5 * 60)
 #endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -104,6 +105,9 @@ public:
     std::mutex g_play_timer_mutex;
     std::atomic<int64_t> g_play_timer_expire_us{0};
     std::atomic<bool> g_duration_flag = false;
+    
+    bool wake_word_detected_ = false;
+    
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
     DeviceFunction GetDeviceFunction() const { return device_function_; }
@@ -138,7 +142,7 @@ private:
     int clock_ticks_ = 0;
     int sleep_ticks_ = 0;
     int sleep_music_ticks_ = 0;
-    bool wake_word_detected_ = false;
+    
     TaskHandle_t check_new_version_task_handle_ = nullptr;
     TaskHandle_t main_event_loop_task_handle_ = nullptr;
     TaskHandle_t rfid_task_handle_ = nullptr;

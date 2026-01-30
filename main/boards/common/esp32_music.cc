@@ -1207,7 +1207,7 @@ void Esp32Music::PlayAudioStream() {
 
 
 void Esp32Music::NextPlayTask(void* arg) {
-    
+    auto &app = Application::GetInstance();
     while(1)
     {
         EventBits_t bits = xEventGroupWaitBits(event_group_, PLAY_EVENT_NEXT, pdTRUE, pdFALSE, portMAX_DELAY);
@@ -1233,14 +1233,37 @@ void Esp32Music::NextPlayTask(void* arg) {
                     }
                     StopStreaming();
                     EnableRecord(true, MUSIC);
-                    PlayPlaylist(current_playlist_name_);
+                   while(PlayPlaylist(current_playlist_name_) == false && app.GetDeviceState() == kDeviceStateIdle)
+                   {
+                        ESP_LOGW(TAG, "Failed to play playlist %s, reverting to default", current_playlist_name_.c_str());
+                        if (MusicPlayback_mode_ == PLAYBACK_MODE_ORDER)
+                        {
+                            NextPlayIndexOrder(current_playlist_name_);
+
+                        }
+                        else if (MusicPlayback_mode_ == PLAYBACK_MODE_RANDOM)
+                        {
+                            NextPlayIndexRandom(current_playlist_name_);
+
+                        }
+                        StopStreaming();
+                        PlayPlaylist(current_playlist_name_);
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                   }
                 }
                 else
                 {
                     StopStreaming();
                     EnableRecord(false, MUSIC);
                     SetPlayIndex(default_musiclist_, NextNodeIndex(MUSIC));
-                    PlayPlaylist(default_musiclist_);
+                    while(PlayPlaylist(default_musiclist_) == false && app.GetDeviceState() == kDeviceStateIdle)
+                    {
+                        ESP_LOGW(TAG, "Failed to play playlist %s, reverting to default", current_playlist_name_.c_str());
+                        StopStreaming();
+                        SetPlayIndex(default_musiclist_, NextNodeIndex(MUSIC));
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                        
+                    }
                 }
             }
             else if(MusicOrStory_ == STORY)
@@ -1255,7 +1278,13 @@ void Esp32Music::NextPlayTask(void* arg) {
                     NextChapterInStory(current_category_name_, current_story_name_);
                     StopStreaming();
                     EnableRecord(true, STORY);
-                    SelectStoryAndPlay();
+                    while(SelectStoryAndPlay()==false && app.GetDeviceState() == kDeviceStateIdle)
+                    {
+                        NextChapterInStory(current_category_name_, current_story_name_);
+                        StopStreaming();
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+
+                    }
                 }
                 else
                 {
@@ -1264,7 +1293,14 @@ void Esp32Music::NextPlayTask(void* arg) {
                     size_t idx = NextNodeIndex(STORY);
                     SetCurrentStoryName(ps_story_index_[idx].story_name);
                     SetCurrentCategoryName(ps_story_index_[idx].category);
-                    SelectStoryAndPlay();
+                    while(SelectStoryAndPlay()==false && app.GetDeviceState() == kDeviceStateIdle)
+                    {
+                        idx = NextNodeIndex(STORY);
+                        SetCurrentStoryName(ps_story_index_[idx].story_name);
+                        SetCurrentCategoryName(ps_story_index_[idx].category);
+                        StopStreaming();
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                    }
                 }
             }
         }
