@@ -95,155 +95,6 @@ static std::string BuildNowPlayingResult(const char* call_tool, const std::strin
     cJSON_Delete(root);
     return ret;
 }
-// // 全局保存最近一次请求的播放时长（秒），由 music.play 设置，由 actually.* 在开始播放时读取并启动定时器
-// static std::atomic<int> g_requested_play_duration_sec{0};
-// static esp_timer_handle_t* g_play_timer_handle = nullptr;
-// static std::mutex g_play_timer_mutex;
-// static std::atomic<int64_t> g_play_timer_expire_us{0};
-// 启动一次性定时器（若之前存在则先取消）。在定时器回调中通过 Application::Schedule 在主线程调用停止播放。
-// static void StartPlayDurationTimerIfRequested() {
-//     int dur = g_requested_play_duration_sec.exchange(0);
-//     if (dur <= 0) return;
-//     ESP_LOGW(TAG, "Starting play duration timer for %d seconds", dur);
-//     std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-//     if (g_play_timer_handle) {
-//         esp_timer_stop(*g_play_timer_handle);
-//         esp_timer_delete(*g_play_timer_handle);
-//         delete g_play_timer_handle;
-//         g_play_timer_handle = nullptr;
-//     }
-
-//     esp_timer_handle_t* th = new esp_timer_handle_t;
-//     esp_timer_create_args_t args;
-//     memset(&args, 0, sizeof(args));
-//     args.callback = [](void* arg) {
-//         // 在主线程停止播放，保证线程安全
-//         Application::GetInstance().Schedule([=]() {
-//             auto &board = Board::GetInstance();
-//             auto m = board.GetMusic();
-//             if (m) {
-//                 ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
-//                 m->SetStopSignal(true);
-//                 m->StopStreaming();
-//                 m->SetMode(false);
-//             }
-//         });
-
-//         // 清理定时器对象
-//         esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
-//         if (h && *h) {
-//             esp_timer_stop(*h);
-//             esp_timer_delete(*h);
-//         }
-//         delete h;
-
-//         // 清全局指针与过期时间、请求时长
-//         {
-//             std::lock_guard<std::mutex> lk(g_play_timer_mutex);
-//             g_play_timer_handle = nullptr;
-//             g_play_timer_expire_us.store(0);
-//             g_requested_play_duration_sec.store(0);
-//         }
-//     };
-//     args.arg = th;
-//     args.name = "play_duration_timer";
-
-//     if (esp_timer_create(&args, th) != ESP_OK) {
-//         delete th;
-//         ESP_LOGW(TAG, "Failed to create play duration timer");
-//         return;
-//     }
-//     g_play_timer_handle = th;
-//     uint64_t us = static_cast<uint64_t>(dur) * 1000000ULL;
-//     // 记录到期时间，供 ExtendPlayDurationSeconds 读取剩余时间
-//     uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-//     g_play_timer_expire_us.store((int64_t)(now_us + us));
-//     esp_timer_start_once(*th, us);
-//     ESP_LOGI(TAG, "Started play duration timer: %d seconds (expire at %llu us)", dur, (unsigned long long)(now_us + us));
-// }
-
-
-
-// // 创建并启动一次性播放定时器（内部使用，调用时已持有互斥/线程安全）
-// static bool CreateAndStartPlayTimer(uint64_t us) {
-//     std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-//     // 清理旧定时器
-//     if (g_play_timer_handle) {
-//         esp_timer_stop(*g_play_timer_handle);
-//         esp_timer_delete(*g_play_timer_handle);
-//         delete g_play_timer_handle;
-//         g_play_timer_handle = nullptr;
-//     }
-
-//     esp_timer_handle_t* th = new esp_timer_handle_t;
-//     esp_timer_create_args_t args;
-//     memset(&args, 0, sizeof(args));
-//     args.callback = [](void* arg) {
-//         // 在主线程停止播放，保证线程安全
-//         Application::GetInstance().Schedule([=]() {
-//             auto &board = Board::GetInstance();
-//             auto m = board.GetMusic();
-//             if (m) {
-//                 ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
-//                 m->SetStopSignal(true);
-//                 m->StopStreaming();
-//                 m->SetMode(false);
-//             }
-//         });
-
-//         // 清理定时器对象
-//         esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
-//         if (h && *h) {
-//             esp_timer_stop(*h);
-//             esp_timer_delete(*h);
-//         }
-//         delete h;
-
-//         // 清全局指针与过期时间
-//         std::lock_guard<std::mutex> lk(g_play_timer_mutex);
-//         g_play_timer_handle = nullptr;
-//         g_play_timer_expire_us.store(0);
-//     };
-//     args.arg = th;
-//     args.name = "play_duration_timer";
-
-//     if (esp_timer_create(&args, th) != ESP_OK) {
-//         delete th;
-//         ESP_LOGW(TAG, "Failed to create play duration timer");
-//         return false;
-//     }
-//     g_play_timer_handle = th;
-//     uint64_t now_us = (uint64_t)esp_timer_get_time();
-//     g_play_timer_expire_us.store((int64_t)(now_us + us));
-//     esp_timer_start_once(*th, us);
-//     ESP_LOGI(TAG, "Started/Restarted play duration timer: %llu us", (unsigned long long)us);
-//     return true;
-// }
-
-// // 在已有请求机制外，提供按秒延长播放时长的 API（线程安全）
-// static bool ExtendPlayDurationSeconds(int extra_seconds) {
-//     if (extra_seconds <= 0) return false;
-//     uint64_t extra_us = static_cast<uint64_t>(extra_seconds) * 1000000ULL;
-
-//     // 在持锁下采样当前定时器过期时间与是否存在定时器，计算剩余时间
-//     uint64_t base_remaining_us = 0;
-//     {
-//         std::lock_guard<std::mutex> lock(g_play_timer_mutex);
-//         uint64_t now_us = static_cast<uint64_t>(esp_timer_get_time());
-//         int64_t expire_us = g_play_timer_expire_us.load();
-//         if (g_play_timer_handle && expire_us > static_cast<int64_t>(now_us)) {
-//             base_remaining_us = static_cast<uint64_t>(expire_us - static_cast<int64_t>(now_us));
-//             ESP_LOGI(TAG, "Extending existing play timer: +%d s, remaining %llu us",
-//                      extra_seconds, (unsigned long long)base_remaining_us);
-//         } else {
-//             base_remaining_us = 0;
-//             ESP_LOGI(TAG, "No existing play timer, creating new one for %d s", extra_seconds);
-//         }
-//     } // 释放锁 — 现在安全调用会再次锁的函数
-
-//     uint64_t new_total_us = base_remaining_us + extra_us;
-//     return CreateAndStartPlayTimer(new_total_us);
-// }
 bool NotResumePlayback = 0;
 
 void McpServer::AddCommonTools() {
@@ -352,7 +203,28 @@ void McpServer::AddCommonTools() {
                 return msg;
             });
 
-
+    // AddTool("cAI",
+    //         "切换智能体角色时调用这个工具，告诉用户你现在切换到了哪个角色",
+    //         PropertyList(),
+    //         [](const PropertyList& properties) -> ReturnValue {
+    //             auto &app = Application::GetInstance();
+    //             std::string msg;
+    //             if(app.device_Role == Role_Xiaozhi)
+    //             {
+    //                 ESP_LOGE(TAG,"调用cAI工具，当前角色默认智能体\r\n");
+    //                 msg = "调用switch_agent工具切换智能体为默认智能体";
+    //             }
+    //             else if(app.device_Role == Role_XiaoMing)
+    //             {
+    //                 msg = "调用switch_agent工具切换智能体为小明";
+    //             }
+    //             else if(app.device_Role == Player)
+    //             {
+    //                 ESP_LOGE(TAG,"调用cAI工具，当前角色播放小助手\r\n");
+    //                 msg = "调用switch_agent工具切换智能体为播放小助手智能体";
+    //             }
+    //             return msg;
+    //         });
     if (music) {
         AddTool("music.set_play_duration",
                 "设置当前播放的剩余时长（秒）。若设置为 0 则取消计时器。",

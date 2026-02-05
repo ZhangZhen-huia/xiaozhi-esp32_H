@@ -68,7 +68,7 @@ std::string WifiBoard::GetBoardType() {
     return "wifi";
 }
 
-void WifiBoard::EnterWifiConfigMode() {  
+void WifiBoard::EnterWifiConfigMode() {
     auto& application = Application::GetInstance();
     ESP_LOGI(TAG, "Entering WiFi config mode via BLUFI");
     application.SetDeviceState(kDeviceStateWifiConfiguring);
@@ -340,6 +340,7 @@ void WifiBoard::StartNetwork() {
         notification += ssid;
         display->ShowNotification(notification.c_str(), 30000);
     });
+
     wifi_station.Start();
 
     //超时重新配网

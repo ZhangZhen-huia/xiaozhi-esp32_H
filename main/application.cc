@@ -545,26 +545,14 @@ void Application::Start() {
     // Print board name/version info
     //这里调用的是display的派生类LcdDisplay的SetChatMessage函数
     display->SetChatMessage("system", SystemInfo::GetUserAgent().c_str());
-        ESP_LOGI(TAG, "关闭RFID");
 
     /* Setup the audio service */
     auto codec = board.GetAudioCodec();
-    //     char ret = PcdHardPowerDown();
-    // if (ret == MI_OK) {
-    //     ESP_LOGW(TAG, "PcdHardPowerDown 成功");
-    // }
-    // else {
-    //     ESP_LOGE(TAG, "%x", ret);
-    //     ESP_LOGE(TAG, "PcdHardPowerDown 失败");
-    // }
 
     audio_service_.Initialize(codec);
     audio_service_.Start();
-//     codec->Shutdown(); // 关闭 codec 输出
-//     board.Deinitialize();
-//    esp_deep_sleep_start();
- 
 
+ 
     AudioServiceCallbacks callbacks;
     callbacks.on_send_queue_available = [this]() {
         xEventGroupSetBits(event_group_, MAIN_EVENT_SEND_AUDIO);
@@ -595,9 +583,6 @@ void Application::Start() {
 
     /* Wait for the network to be ready */
     board.StartNetwork();
-    // codec->Shutdown();
-    
-    // vTaskDelay(pdMS_TO_TICKS(2000));
     
     // Update the status bar immediately to show the network state
     display->UpdateStatusBar(true);
@@ -773,6 +758,7 @@ void Application::Start() {
         // Play the success sound to indicate the device is ready
         audio_service_.PlaySound(Lang::Sounds::OGG_SUCCESS);
     }
+
     auto music = board.GetMusic();
     if(music) {
         music->ScanAndLoadMusic();
@@ -807,7 +793,6 @@ void Application::Start() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     #endif
 
-    // esp_deep_sleep_start();
     last_device_Role = device_Role;
     // SetAecMode(kAecOff);
     ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
@@ -909,6 +894,7 @@ void Application::RFID_TASK()
 
     auto &board = Board::GetInstance();
     auto led = board.GetLed();
+    
     while(1)
     {
         #if !my
@@ -956,24 +942,29 @@ void Application::RFID_TASK()
                     std::string card_id = std::to_string(ucArray_ID [ 0 ]) + std::to_string(ucArray_ID [ 1 ]) + std::to_string(ucArray_ID [ 2 ]) + std::to_string(ucArray_ID [ 3 ]);
                     //输出卡ID
                     ESP_LOGI(TAG,"ID: %s", card_id.c_str());
-
                     if(strcmp(card_id.c_str(), CardPlayer_ID) == 0 && (device_Role != Player)) {
+                        // SetAecMode(kAecOff);
                         last_device_Role = device_Role;
                         device_Role = Player;
                         ESP_LOGI(TAG,"Enter Player Mode\r\n");
-                        SetAecMode(kAecOff);
+                        std::string msg = "切换到播放器智能体";
+                        SendMessage(msg);
 
                     } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0 && (device_Role != Role_Xiaozhi)) {
                         ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
+                        // SetAecMode(kAecOnDeviceSide);
                         last_device_Role = device_Role;
                         device_Role = Role_Xiaozhi;
-                        SetAecMode(kAecOnDeviceSide);
+                        std::string msg = "切换到默认智能体";
+                        SendMessage(msg);
+                        
                     } else if(strcmp(card_id.c_str(), CardRole_XiaoMing_ID) == 0 && (device_Role != Role_XiaoMing)) {
                         ESP_LOGI(TAG,"XiaoMing Role Activated\r\n");
                         last_device_Role = device_Role;
                         device_Role = Role_XiaoMing;
-                        SetAecMode(kAecOnDeviceSide);
+                        // SetAecMode(kAecOnDeviceSide);
                     }
+
                     led->Blink(200, 200);
                     led->Blink(200, 200);
                     led->Blink(200, 200);
@@ -982,9 +973,6 @@ void Application::RFID_TASK()
                         Settings settings("device", true);
                         settings.SetInt("device_role", device_Role);
                         ESP_LOGW(TAG,"保存当前设备角色: %d", device_Role);
-                        ESP_LOGW(TAG,"=================即将重启=================");
-                        vTaskDelay( pdMS_TO_TICKS(1000) );
-                        Reboot();
                     }
 
                 }
@@ -1065,11 +1053,11 @@ void Application::MainEventLoop() {
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
                 SystemInfo::PrintHeapStats();
             }   
-            if(Offline_ticks_>=10)         
+            if(Offline_ticks_>=3)         
             {
                 Offline_ticks_=0;
                 esp_timer_stop(clock_Offlinetimer_handle_);
-                // SetDeviceState(kDeviceStateWifiConfiguring);
+                SetDeviceState(kDeviceStateWifiConfiguring);
             }
 
             // 空闲超时自动进入深度睡眠（仅在真正可以进入睡眠时）
