@@ -177,8 +177,6 @@ private:
 
         // 单击处理：
         boot_button_Boot_IO0.OnClick([this]() {
-            data[0] = 91;  // 清零缓冲区
-            data[1] = 91;  // 清零缓冲区
             auto& app = Application::GetInstance();
             // 获取设备功能
             auto device_function = app.GetDeviceFunction();
@@ -220,9 +218,6 @@ private:
                         dir = 1;
                     }
                 }
-                    data[0] = 91+idx;  //
-                    data[1] = 91+idx;  //
-                    ESP_LOGW(TAG, "%d %d",data[0],data[1]);
                 ESP_LOGI(TAG, "Nightlight brightness: %u -> %u", (unsigned)cur, (unsigned)levels[idx]);
                 GetBacklight()->SetBrightness(levels[idx], true, true);
 
@@ -497,6 +492,7 @@ public:
         #endif
         RC522_Init();
         RC522_Rese(); // 复位RC522
+        RC522_Config_Type('A');
         InitializeSwitches();
     }
 #if my

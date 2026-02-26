@@ -217,5 +217,22 @@ void delay_ms(unsigned int ms);
 void delay_1us(unsigned int us);
 void delay_us(unsigned int us);
 char PcdHardPowerDown(void);
+
+typedef struct {
+    char version[4];   // RFID标签版本 (3字符 + '\0')
+    char type[4];      // RFID类型 (3字符)
+    char role[4];      // 角色代码 (3字符)
+    char timbre[4];    // 音色代码 (3字符)
+    char reserve[4];   // 备用码 (3字符)
+    char crc[5];       // CRC校验码 (4字符 + '\0')
+} rfid_fields_t;
+
+//读取NTAG21x卡片的用户内存
+char PcdNTAG21xAnticollSelect(uint8_t *pSnr);
+char NTAG21x_FastRead(uint8_t start_page, uint8_t end_page, uint8_t *out_data, uint16_t *out_len, int max_retry);
+char NTAG21x_ReadStableUserMemory(uint8_t *out_data, uint16_t *out_len, int max_retry_per_segment);
+int extract_avery_string(uint8_t *data, uint16_t len, char *out_str, uint16_t *out_len);
+int parse_rfid_packet(const uint8_t *packet, rfid_fields_t *fields);
+int find_and_parse_rfid_data(const uint8_t *user_mem, uint16_t mem_len, rfid_fields_t *fields);
 }
 #endif

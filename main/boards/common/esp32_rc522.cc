@@ -332,14 +332,17 @@ char PcdComMF522 ( uint8_t ucCommand, uint8_t * pInData, uint8_t ucInLenByte, ui
     if ( ucCommand == PCD_TRANSCEIVE )
                         RC522_SetBit_Register(BitFramingReg,0x80);                                  //StartSend置位启动数据发送 该位与收发命令使用时才有效
 
-    ul = 1000;//根据时钟频率调整，操作M1卡最大等待时间25ms
+    ul = 5000;//根据时钟频率调整，操作M1卡最大等待时间25ms
 
     do                                                                                                                 //认证 与寻卡等待时间
     {
          ucN = RC522_Read_Register ( ComIrqReg );                                                        //查询事件中断
          ul --;
     } while ( ( ul != 0 ) && ( ! ( ucN & 0x01 ) ) && ( ! ( ucN & ucWaitFor ) ) );                //退出条件i=0,定时器中断，与写空闲命令
-
+    // uint8_t com_irq = ucN;
+    // uint8_t err_reg = RC522_Read_Register(ErrorReg);
+    // ESP_LOGW("RC522_DBG", "PcdComMF522: ComIrqReg=0x%02X, ErrorReg=0x%02X, FIFOLevel=%d",
+    //      com_irq, err_reg, RC522_Read_Register(FIFOLevelReg));
     RC522_ClearBit_Register ( BitFramingReg, 0x80 );                                        //清理允许StartSend位
 
     if ( ul != 0 )
@@ -820,4 +823,346 @@ char PcdHardPowerDown(void)
         ESP_LOGE("RC522", "硬掉电模式失败，NRSTPD引脚仍为高电平");
         return MI_ERR;
     }
+}
+
+
+// NTAG21x 命令
+#define NTAG_CMD_READ           0x30    // 读4页
+#define NTAG_CMD_FAST_READ      0x3A    // 读多页
+#define NTAG_CMD_WRITE          0xA2    // 写1页
+#define NTAG_CMD_GET_VERSION    0x60    // 获取版本
+#define NTAG_CMD_READ_CNT       0x39    // 读NFC计数器
+#define NTAG_CMD_PWD_AUTH       0x1B    // 密码验证
+#define NTAG_CMD_READ_SIG       0x3C    // 读原始签名
+
+/**
+ * @brief  : NTAG21x 防冲突与选择（获取完整7字节UID）
+ * @param  : pSnr: 输出7字节UID缓冲区
+ * @retval : MI_OK 成功，MI_ERR 失败
+ */
+char PcdNTAG21xAnticollSelect(uint8_t *pSnr)
+{
+    char status;
+    uint8_t buf[MAXRLEN];
+    uint32_t len;
+    uint8_t sak;
+
+    // 初始化寄存器（与 PcdAnticoll 一致）
+    RC522_ClearBit_Register(Status2Reg, 0x08);
+    RC522_Write_Register(BitFramingReg, 0x00);
+    RC522_ClearBit_Register(CollReg, 0x80);
+
+    // 级联级别1 (CL1) 防冲突
+    buf[0] = 0x93;
+    buf[1] = 0x20;
+    ESP_LOGD("RC522", "Sending CL1 anticoll: %02X %02X", buf[0], buf[1]);
+    status = PcdComMF522(PCD_TRANSCEIVE, buf, 2, buf, &len);
+    ESP_LOGD("RC522", "CL1 anticoll: status=%d, len=%d bits", status, len);
+    if (len >= 40) {
+        ESP_LOGD("RC522", "  data: %02X %02X %02X %02X %02X", buf[0], buf[1], buf[2], buf[3], buf[4]);
+    }
+    if (status != MI_OK || len != 40) return MI_ERR;
+
+    uint8_t cl1_uid[4] = {buf[0], buf[1], buf[2], buf[3]};
+    uint8_t bcc0 = buf[4];
+
+    // 级联选择 CL1
+    buf[0] = 0x93;
+    buf[1] = 0x70;
+    memcpy(&buf[2], cl1_uid, 4);
+    buf[6] = bcc0;
+    CalulateCRC(buf, 7, &buf[7]);
+    ESP_LOGD("RC522", "Sending CL1 select: %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+             buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8]);
+    status = PcdComMF522(PCD_TRANSCEIVE, buf, 9, buf, &len);
+    ESP_LOGD("RC522", "CL1 select: status=%d, len=%d bits, SAK=0x%02X", status, len, buf[0]);
+    if (status != MI_OK || len != 24) return MI_ERR; // SAK(1) + CRC(2) = 24 bits
+
+    sak = buf[0];
+
+    if (sak & 0x04) {
+        ESP_LOGD("RC522", "SAK indicates cascade level 2, proceeding to CL2...");
+
+        // 保存 CL1 返回的真正 UID 前三个字节（跳过 CT）
+        uint8_t uid0 = cl1_uid[1];  // buf[1] = 04
+        uint8_t uid1 = cl1_uid[2];  // buf[2] = E2
+        uint8_t uid2 = cl1_uid[3];  // buf[3] = 42
+
+        // 再次初始化寄存器
+        RC522_Write_Register(BitFramingReg, 0x00);
+        RC522_ClearBit_Register(CollReg, 0x80);
+
+        // 级联级别2 (CL2) 防冲突
+        buf[0] = 0x95;
+        buf[1] = 0x20;
+        ESP_LOGD("RC522", "Sending CL2 anticoll: %02X %02X", buf[0], buf[1]);
+        status = PcdComMF522(PCD_TRANSCEIVE, buf, 2, buf, &len);
+        ESP_LOGD("RC522", "CL2 anticoll: status=%d, len=%d bits", status, len);
+        if (len >= 40) {
+            ESP_LOGD("RC522", "  data: %02X %02X %02X %02X %02X", buf[0], buf[1], buf[2], buf[3], buf[4]);
+        }
+        if (status != MI_OK || len != 40) return MI_ERR;
+
+        // 组合完整7字节UID
+        pSnr[0] = uid0;
+        pSnr[1] = uid1;
+        pSnr[2] = uid2;
+        pSnr[3] = buf[0];  // A2
+        pSnr[4] = buf[1];  // F8
+        pSnr[5] = buf[2];  // 11
+        pSnr[6] = buf[3];  // 90
+        uint8_t bcc1 = buf[4];
+
+        // 级联选择 CL2
+        buf[0] = 0x95;
+        buf[1] = 0x70;
+        buf[2] = pSnr[3];
+        buf[3] = pSnr[4];
+        buf[4] = pSnr[5];
+        buf[5] = pSnr[6];
+        buf[6] = bcc1;
+        CalulateCRC(buf, 7, &buf[7]);
+        ESP_LOGD("RC522", "Sending CL2 select: %02X %02X %02X %02X %02X %02X %02X %02X %02X",
+                 buf[0], buf[1], buf[2], buf[3], buf[4], buf[5], buf[6], buf[7], buf[8]);
+        status = PcdComMF522(PCD_TRANSCEIVE, buf, 9, buf, &len);
+        ESP_LOGD("RC522", "CL2 select: status=%d, len=%d bits", status, len);
+        if (status != MI_OK || len != 24) return MI_ERR;
+    } else {
+        ESP_LOGD("RC522", "No cascade needed, UID length 4 bytes");
+        memcpy(pSnr, cl1_uid, 4);
+    }
+    return MI_OK;}
+
+
+
+
+
+
+
+/**
+ * 读取NTAG21x单页，带重试和超时增强
+ * @param page_addr 页地址
+ * @param out_4bytes 输出4字节缓冲区
+ * @return MI_OK 成功，MI_ERR 失败
+ */
+char NTAG21x_ReadSinglePage(uint8_t page_addr, uint8_t *out_4bytes) {
+    const int max_retry = 5;
+    for (int retry = 0; retry < max_retry; retry++) {
+        uint8_t cmd[4] = {0x30, page_addr};
+        uint8_t resp[32];
+        uint32_t resp_bits;
+        CalulateCRC(cmd, 2, &cmd[2]);
+
+        char status = PcdComMF522(PCD_TRANSCEIVE, cmd, 4, resp, &resp_bits);
+        if (status == MI_OK && resp_bits == 144) { // 144 bits = 16数据 + 2CRC
+            uint8_t offset = (page_addr & 0x03) * 4;
+            memcpy(out_4bytes, resp + offset, 4);
+            return MI_OK;
+        }
+        ESP_LOGD("NTAG21x", "Read page %d failed (retry %d), status=%d, bits=%lu",
+                 page_addr, retry, status, (unsigned long)resp_bits);
+        delay_ms(20); // 重试前等待
+    }
+    return MI_ERR;
+}
+
+
+/**
+ * 使用FAST_READ命令一次性读取从start_page到end_page的所有页
+ * @param start_page 起始页
+ * @param end_page   结束页（包含）
+ * @param out_data   输出缓冲区，大小至少 (end_page-start_page+1)*4
+ * @param out_len    返回实际字节数
+ * @param max_retry  最大重试次数
+ * @return MI_OK 成功，MI_ERR 失败
+ */
+char NTAG21x_FastRead(uint8_t start_page, uint8_t end_page, uint8_t *out_data, uint16_t *out_len, int max_retry) {
+    for (int retry = 0; retry < max_retry; retry++) {
+        uint8_t cmd[5] = {0x3A, start_page, end_page};
+        uint8_t resp[1024]; // 足够容纳最大响应
+        uint32_t resp_bits;
+        CalulateCRC(cmd, 3, &cmd[3]);
+
+        char status = PcdComMF522(PCD_TRANSCEIVE, cmd, 5, resp, &resp_bits);
+        if (status == MI_OK) {
+            uint16_t expected_bits = (end_page - start_page + 1) * 4 * 8 + 16; // 数据+2字节CRC
+            if (resp_bits == expected_bits) {
+                uint16_t data_bytes = (end_page - start_page + 1) * 4;
+                memcpy(out_data, resp, data_bytes);
+                *out_len = data_bytes;
+                return MI_OK;
+            } else {
+                ESP_LOGD("NTAG21x", "FAST_READ length mismatch: got %lu bits, expected %d", (unsigned long)resp_bits, expected_bits);
+            }
+        }
+        ESP_LOGD("NTAG21x", "FAST_READ failed (retry %d), status=%d", retry, status);
+        delay_ms(20);
+    }
+    return MI_ERR;
+}
+
+
+
+
+/**
+ * 稳定读取 NTAG21x 全部用户内存（页 0x04~0x27），每次最多读 4 页，失败重试直到成功
+ * @param out_data 输出缓冲区（至少 144 字节）
+ * @param out_len 返回实际读取字节数
+ * @param max_retry_per_segment 每段最大重试次数
+ * @return MI_OK 成功，MI_ERR 失败（超过重试）
+ */
+char NTAG21x_ReadStableUserMemory(uint8_t *out_data, uint16_t *out_len, int max_retry_per_segment) {
+    const uint8_t start_page = 0x04;
+    const uint8_t end_page = 0x27;
+    const uint8_t step = 4;  // 每次最多读 4 页
+    uint8_t page = start_page;
+    uint16_t offset = 0;
+
+    while (page <= end_page) {
+        uint8_t to = page + step - 1;
+        if (to > end_page) to = end_page;
+
+        uint8_t buf[16];  // 最多 4 页 = 16 字节
+        uint16_t len = 0;
+        int retry = 0;
+        char status = MI_ERR;
+
+        while (retry < max_retry_per_segment) {
+            status = NTAG21x_FastRead(page, to, buf, &len, 1);  // 内部已重试，这里再外层重试
+            if (status == MI_OK && len == (to - page + 1) * 4) {
+                break;
+            }
+            ESP_LOGD("NTAG21x", "Read pages %d-%d failed (retry %d), status=%d", page, to, retry, status);
+            retry++;
+            delay_ms(20);
+        }
+
+        if (status != MI_OK) {
+            ESP_LOGD("NTAG21x", "Failed to read pages %d-%d after %d retries", page, to, max_retry_per_segment);
+            return MI_ERR;
+        }
+
+        memcpy(out_data + offset, buf, len);
+        offset += len;
+        page = to + 1;
+        delay_ms(5);  // 页间延时
+    }
+
+    *out_len = offset;
+    ESP_LOGI("NTAG21x", "Stable read success, total %d bytes", offset);
+    return MI_OK;
+}
+
+/**
+ * 从用户内存中提取以 "avery" 开头的连续 ASCII 字符串
+ * @param data 用户内存数据
+ * @param len 数据长度
+ * @param out_str 输出缓冲区（至少 64 字节）
+ * @param out_len 返回字符串长度
+ * @return 1 成功，0 失败
+ */
+int extract_avery_string(uint8_t *data, uint16_t len, char *out_str, uint16_t *out_len) {
+    const uint8_t header[] = {'a', 'v', 'e', 'r', 'y'};
+    for (uint16_t i = 0; i <= len - 5; i++) {
+        if (memcmp(data + i, header, 5) == 0) {
+            // 找到起始码，开始提取后续可打印 ASCII，直到遇到 0x00、0xFE 或不可打印
+            uint16_t j = i;
+            uint16_t str_len = 0;
+            while (j < len && data[j] >= 0x20 && data[j] <= 0x7E && data[j] != 0xFE) {
+                out_str[str_len++] = data[j++];
+            }
+            out_str[str_len] = '\0';
+            *out_len = str_len;
+            ESP_LOGI("EXTRACT", "Found header at offset %d, extracted: %s", i, out_str);
+            return 1;
+        }
+    }
+    ESP_LOGE("EXTRACT", "Header 'avery' not found");
+    return 0;
+}
+
+
+// CRC-16/CCITT 计算（多项式 0x1021，初始值 0xFFFF）
+static uint16_t crc16_ccitt(const uint8_t *data, uint16_t len) {
+    uint16_t crc = 0xFFFF;
+    for (uint16_t i = 0; i < len; i++) {
+        crc ^= (uint16_t)data[i] << 8;
+        for (int j = 0; j < 8; j++) {
+            if (crc & 0x8000)
+                crc = (crc << 1) ^ 0x1021;
+            else
+                crc <<= 1;
+        }
+    }
+    return crc;
+}
+/**
+ * 解析 RFID 数据包（22字节，含起始码 "avery"）
+ * @param packet 指向22字节数据的指针（必须从 'a' 开始）
+ * @param fields 输出解析后的字段
+ * @return 1成功，0失败
+ */
+int parse_rfid_packet(const uint8_t *packet, rfid_fields_t *fields) {
+    // 检查起始码（可选）
+    if (memcmp(packet, "avery", 5) != 0) {
+        ESP_LOGE("PARSE", "起始码错误");
+        return 0;
+    }
+
+    // 提取各字段（均为3字节ASCII）
+    memcpy(fields->version, packet + 6, 3);
+    fields->version[3] = '\0';
+    memcpy(fields->type, packet + 10, 3);
+    fields->type[3] = '\0';
+    memcpy(fields->role, packet + 14, 3);
+    fields->role[3] = '\0';
+    memcpy(fields->timbre, packet + 18, 3);
+    fields->timbre[3] = '\0';
+    memcpy(fields->reserve, packet + 22, 3);
+    fields->reserve[3] = '\0';
+    memcpy(fields->crc, packet + 26, 4);
+
+    char *endptr;
+    uint16_t stored_crc = (uint16_t)strtol(fields->crc, &endptr, 16);
+    // if (*endptr != '\0') return 0;
+    // return 1;
+
+    
+    uint16_t calc_crc = crc16_ccitt(packet, 25); // 计算前25字节的CRC
+
+    ESP_LOGI("PARSE", "版本: %s", fields->version);
+    ESP_LOGI("PARSE", "类型: %s", fields->type);
+    ESP_LOGI("PARSE", "角色: %s", fields->role);
+    ESP_LOGI("PARSE", "音色: %s", fields->timbre);
+    ESP_LOGI("PARSE", "备用: %s", fields->reserve);
+    ESP_LOGI("PARSE", "CRC: 存储 0x%04X, 计算 0x%04X", stored_crc, calc_crc);
+
+    if (stored_crc != calc_crc) {
+        ESP_LOGE("PARSE", "CRC 校验失败");
+        return 0;
+    }
+
+    ESP_LOGI("PARSE", "数据包有效");
+    return 1;
+}
+
+
+
+/**
+ * 在用户内存中查找 "avery" 并解析数据包
+ * @param user_mem  用户内存数据（从页0x04开始）
+ * @param mem_len   数据长度
+ * @param fields    输出解析后的字段
+ * @return 1成功，0失败
+ */
+int find_and_parse_rfid_data(const uint8_t *user_mem, uint16_t mem_len, rfid_fields_t *fields) {
+    const uint8_t header[] = {'a','v','e','r','y'};
+    for (uint16_t i = 0; i <= mem_len - 22; i++) {  // 至少22字节才能包含完整数据包
+        if (memcmp(user_mem + i, header, 5) == 0) {
+            // 找到起始码，尝试解析
+            return parse_rfid_packet(user_mem + i, fields);
+        }
+    }
+    ESP_LOGE("PARSE", "未找到起始码 'avery'");
+    return 0;
 }

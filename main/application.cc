@@ -571,10 +571,7 @@ void Application::Start() {
         vTaskDelete(NULL);
     }, "main_event_loop", 2048 * 4, this, 5, &main_event_loop_task_handle_);
 
-    xTaskCreate([](void* arg) { 
-        ((Application*)arg)->RFID_TASK();
-        vTaskDelete(NULL);
-    }, "rfid_task", 2048 * 4, this, 2, &rfid_task_handle_);
+
 
     /* Start the clock timer to update the status bar */
     //该定时器任务会在定时结束对应的event_group_设置MAIN_EVENT_CLOCK_TICK位
@@ -800,6 +797,11 @@ void Application::Start() {
     SendMessage(msg);
     
     vTaskDelay(pdMS_TO_TICKS(10000));
+    
+    xTaskCreate([](void* arg) { 
+        ((Application*)arg)->RFID_TASK();
+        vTaskDelete(NULL);
+    }, "rfid_task", 2048 * 4, this, 2, &rfid_task_handle_);
 
 }
 
@@ -883,107 +885,181 @@ void Application::EnterDeepSleep() {
     esp_deep_sleep_start();
 }
 
-uint8_t read_write_data[16]={0};//读写数据缓存
-uint8_t card_KEY[6] ={0xff,0xff,0xff,0xff,0xff,0xff};//默认密码
-uint8_t ucArray_ID [ 4 ];
-uint8_t ucStatusReturn;    //返回状态
-uint8_t data[16] = {0};  // 16字节缓冲区，全部初始化为0
-uint8_t LastUID[4] = {0}; // 上次读取的卡片ID
+
+
+std::string UID;
+std::string LastUID;
+
 void Application::RFID_TASK()
 {
 
     auto &board = Board::GetInstance();
     auto led = board.GetLed();
-    
     while(1)
     {
         #if !my
-            if ( ( ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID ) ) != MI_OK )
-            {
-                ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID );
-            }
-            
-            if ( ucStatusReturn == MI_OK  )
-            {
 
-            /* 防冲突操作，被选中的卡片序列传入数组ucArray_ID中 */
-            if ( PcdAnticoll ( ucArray_ID ) == MI_OK )
-            {
-                ESP_LOGW(TAG,"Card Detected: %02X %02X %02X %02X", ucArray_ID[0], ucArray_ID[1], ucArray_ID[2], ucArray_ID[3]);
-                // if(LastUID[0] == ucArray_ID[0] &&
-                //    LastUID[1] == ucArray_ID[1] &&
-                //    LastUID[2] == ucArray_ID[2] &&
-                //    LastUID[3] == ucArray_ID[3])
-                // {
-                //     vTaskDelay( pdMS_TO_TICKS(500) );
-                //     continue; // 如果和上次读取的卡片ID相同，则跳过后续操作
-                // }
-                // ESP_LOGW(TAG,"Card Detected: %02X %02X %02X %02X", ucArray_ID[0], ucArray_ID[1], ucArray_ID[2], ucArray_ID[3]);
-                // PcdSelect(ucArray_ID);              // 选中卡
-                // // 2. 认证块1（第一个数据块）
-                // PcdAuthState(PICC_AUTHENT1A, 1, card_KEY, ucArray_ID);
-                // // 3. 写入数据到块1
-                // if (PcdWrite(1, data) == MI_OK) {
-                //     ESP_LOGW(TAG,"Sector 1 Write Success");
-                // }
+        uint8_t atqa[2];
+        if (PcdRequest(0x52, atqa) != MI_OK) {
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
 
+        uint8_t uid[7];
+        if (PcdNTAG21xAnticollSelect(uid) != MI_OK) {
+            ESP_LOGD("MAIN", "Anti-collision failed");
+            vTaskDelay(pdMS_TO_TICKS(500));
+            continue;
+        }
+        ESP_LOGI(TAG, "UID: %02X %02X %02X %02X %02X %02X %02X",
+                 uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
+        UID = std::to_string(uid[0]) + std::to_string(uid[1]) + std::to_string(uid[2]) + std::to_string(uid[3]) + std::to_string(uid[4]) + std::to_string(uid[5]) + std::to_string(uid[6]);
+        uint8_t user_memory[256];
+        uint16_t data_len;
+        // 使用稳定读取函数，每段最多重试 3 次
+        if (NTAG21x_ReadStableUserMemory(user_memory, &data_len, 3) == MI_OK) {
 
-                // uint8_t buffer[16];
-                // // PcdSelect(ucArray_ID);              // 选中卡
-                // // 2. 认证块1
-                // PcdAuthState(PICC_AUTHENT1A, 1, card_KEY, ucArray_ID);
-
-                // // 3. 读取数据
-                // if (PcdRead(1, buffer) == MI_OK) {
-                //     // 打印验证（假设使用串口）
-                //     ESP_LOGW(TAG,"读取结果: %c %c\n", buffer[0], buffer[1]);
-                // }
-                    //根据卡ID进行后续操作
-                    std::string card_id = std::to_string(ucArray_ID [ 0 ]) + std::to_string(ucArray_ID [ 1 ]) + std::to_string(ucArray_ID [ 2 ]) + std::to_string(ucArray_ID [ 3 ]);
-                    //输出卡ID
-                    ESP_LOGI(TAG,"ID: %s", card_id.c_str());
-                    if(strcmp(card_id.c_str(), CardPlayer_ID) == 0 && (device_Role != Player)) {
-                        // SetAecMode(kAecOff);
-                        last_device_Role = device_Role;
-                        device_Role = Player;
-                        ESP_LOGI(TAG,"Enter Player Mode\r\n");
-                        std::string msg = "切换到播放器智能体";
-                        SendMessage(msg);
-
-                    } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0 && (device_Role != Role_Xiaozhi)) {
-                        ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
-                        // SetAecMode(kAecOnDeviceSide);
-                        last_device_Role = device_Role;
-                        device_Role = Role_Xiaozhi;
-                        std::string msg = "切换到默认智能体";
-                        SendMessage(msg);
-                        
-                    } else if(strcmp(card_id.c_str(), CardRole_XiaoMing_ID) == 0 && (device_Role != Role_XiaoMing)) {
-                        ESP_LOGI(TAG,"XiaoMing Role Activated\r\n");
-                        last_device_Role = device_Role;
-                        device_Role = Role_XiaoMing;
-                        // SetAecMode(kAecOnDeviceSide);
-                    }
-
-                    led->Blink(200, 200);
-                    led->Blink(200, 200);
-                    led->Blink(200, 200);
-                    if(last_device_Role != device_Role)
-                    {
-                        Settings settings("device", true);
-                        settings.SetInt("device_role", device_Role);
-                        ESP_LOGW(TAG,"保存当前设备角色: %d", device_Role);
-                    }
-
+                if(UID == LastUID) {
+                    vTaskDelay(pdMS_TO_TICKS(500));
+                    continue; // 如果和上次读取的卡片ID相同，则跳过后续操作
                 }
-                // LastUID[0] = ucArray_ID[0];
-                // LastUID[1] = ucArray_ID[1];
-                // LastUID[2] = ucArray_ID[2];
-                // LastUID[3] = ucArray_ID[3];
+                rfid_fields_t fields;
+                if (find_and_parse_rfid_data(user_memory, data_len, &fields)) {
+                    // 解析成功，字段已存入 fields 结构体
+                    // 可进一步使用 fields.version, fields.type 等
+                        std::string version = fields.version;
+                        std::string type    = fields.type;
+                        std::string role    = fields.role;
+                        std::string timbre  = fields.timbre;
+                        std::string reserve = fields.reserve;
+                    if(type == "000") {
+                        ESP_LOGW(TAG,"卡片");
+                        if(role == "000") {
+                            ESP_LOGW(TAG,"小智");
+                            std::string msg = "切换到默认智能体";
+                            SendMessage(msg);
+
+                        } else if(role == "001") {
+                            ESP_LOGW(TAG,"播放器");
+                            std::string msg = "切换到播放器智能体";
+                            SendMessage(msg);
+                        }
+                        // 根据需要执行对应操作，例如切换到播放器模式
+                    } 
+                    else if(type == "001") {
+                        ESP_LOGW(TAG,"公仔");
+                        // 根据需要执行对应操作，例如切换到小智模式
+                    } 
+ 
+                } else {
+                    ESP_LOGE("MAIN", "数据解析失败");
+                }
+
             }
+        LastUID = UID;
+        PcdHalt();
+        vTaskDelay(pdMS_TO_TICKS(3000));
+    
+    
+                        
+            // if ( ( ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID ) ) != MI_OK )
+            // {
+            //     ucStatusReturn = PcdRequest ( PICC_REQALL, ucArray_ID );
+            // }
+            
+            // if ( ucStatusReturn == MI_OK  )
+            // {
+
+            // /* 防冲突操作，被选中的卡片序列传入数组ucArray_ID中 */
+            // if ( PcdAnticoll ( ucArray_ID ) == MI_OK )
+            // {
+            //     ESP_LOGW(TAG,"Card Detected: %02X %02X %02X %02X", ucArray_ID[0], ucArray_ID[1], ucArray_ID[2], ucArray_ID[3]);
+            //     if(LastUID[0] == ucArray_ID[0] &&
+            //        LastUID[1] == ucArray_ID[1] &&
+            //        LastUID[2] == ucArray_ID[2] &&
+            //        LastUID[3] == ucArray_ID[3])
+            //     {
+            //         vTaskDelay( pdMS_TO_TICKS(500) );
+            //         continue; // 如果和上次读取的卡片ID相同，则跳过后续操作
+            //     }
+            //     ESP_LOGW(TAG,"Card Detected: %02X %02X %02X %02X", ucArray_ID[0], ucArray_ID[1], ucArray_ID[2], ucArray_ID[3]);
+            //     // PcdSelect(ucArray_ID);              // 选中卡
+
+            //     // // 2. 认证块1（第一个数据块）
+            //     // if(PcdAuthState(PICC_AUTHENT1A, 1, card_KEY, ucArray_ID) != MI_OK)
+            //     // {
+            //     //     ESP_LOGE(TAG,"Authentication Failed for block 1");
+            //     // }
+
+            //     // // WriteRfidTag(ucArray_ID, "000", "000", "001", "000", "000");
+            //     // // 3. 写入数据到块1
+            //     // if (PcdWrite(1, data) == MI_OK) {
+            //     //     ESP_LOGW(TAG,"Sector 1 Write Success");
+            //     // }
+            //     // else {
+            //     //     ESP_LOGE(TAG,"Sector 1 Write Failed");
+            //     // }
+
+
+            //     // uint8_t buffer[16];
+            //     // // 2. 认证块1
+            //     // PcdAuthState(PICC_AUTHENT1A, 1, card_KEY, ucArray_ID);
+
+            //     // // 3. 读取数据
+            //     // if (PcdRead(1, buffer) == MI_OK) {
+            //     //     // 打印验证（假设使用串口）
+            //     //     ESP_LOGW(TAG,"读取结果: %c %c\n", buffer[0], buffer[1]);
+            //     // }
+            //     // else
+            //     // {
+            //     //     ESP_LOGE(TAG,"读取失败");
+            //     // }
+            //         //根据卡ID进行后续操作
+            //         std::string card_id = std::to_string(ucArray_ID [ 0 ]) + std::to_string(ucArray_ID [ 1 ]) + std::to_string(ucArray_ID [ 2 ]) + std::to_string(ucArray_ID [ 3 ]);
+            //         //输出卡ID
+            //         ESP_LOGI(TAG,"ID: %s", card_id.c_str());
+            //         if(strcmp(card_id.c_str(), CardPlayer_ID) == 0 && (device_Role != Player)) {
+            //             // SetAecMode(kAecOff);
+            //             last_device_Role = device_Role;
+            //             device_Role = Player;
+            //             ESP_LOGI(TAG,"Enter Player Mode\r\n");
+            //             std::string msg = "切换到播放器智能体";
+            //             SendMessage(msg);
+
+            //         } else if(strcmp(card_id.c_str(), CardRole_Xiaozhi_ID) == 0 && (device_Role != Role_Xiaozhi)) {
+            //             ESP_LOGI(TAG,"Xiaozhi Role Activated\r\n");
+            //             // SetAecMode(kAecOnDeviceSide);
+            //             last_device_Role = device_Role;
+            //             device_Role = Role_Xiaozhi;
+            //             std::string msg = "切换到默认智能体";
+            //             SendMessage(msg);
+                        
+            //         } else if(strcmp(card_id.c_str(), CardRole_XiaoMing_ID) == 0 && (device_Role != Role_XiaoMing)) {
+            //             ESP_LOGI(TAG,"XiaoMing Role Activated\r\n");
+            //             last_device_Role = device_Role;
+            //             device_Role = Role_XiaoMing;
+            //             // SetAecMode(kAecOnDeviceSide);
+            //         }
+
+            //         led->Blink(200, 200);
+            //         led->Blink(200, 200);
+            //         led->Blink(200, 200);
+            //         if(last_device_Role != device_Role)
+            //         {
+            //             Settings settings("device", true);
+            //             settings.SetInt("device_role", device_Role);
+            //             ESP_LOGW(TAG,"保存当前设备角色: %d", device_Role);
+            //         }
+
+            //     }
+            //     // LastUID[0] = ucArray_ID[0];
+            //     // LastUID[1] = ucArray_ID[1];
+            //     // LastUID[2] = ucArray_ID[2];
+            //     // LastUID[3] = ucArray_ID[3];
+            // }
             #else
             #endif
-            vTaskDelay( pdMS_TO_TICKS(500) );
+            // vTaskDelay( pdMS_TO_TICKS(500) );
     }
 } 
 // The Main Event Loop controls the chat state and websocket connection

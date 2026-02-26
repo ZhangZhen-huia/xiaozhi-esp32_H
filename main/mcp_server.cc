@@ -203,28 +203,6 @@ void McpServer::AddCommonTools() {
                 return msg;
             });
 
-    // AddTool("cAI",
-    //         "切换智能体角色时调用这个工具，告诉用户你现在切换到了哪个角色",
-    //         PropertyList(),
-    //         [](const PropertyList& properties) -> ReturnValue {
-    //             auto &app = Application::GetInstance();
-    //             std::string msg;
-    //             if(app.device_Role == Role_Xiaozhi)
-    //             {
-    //                 ESP_LOGE(TAG,"调用cAI工具，当前角色默认智能体\r\n");
-    //                 msg = "调用switch_agent工具切换智能体为默认智能体";
-    //             }
-    //             else if(app.device_Role == Role_XiaoMing)
-    //             {
-    //                 msg = "调用switch_agent工具切换智能体为小明";
-    //             }
-    //             else if(app.device_Role == Player)
-    //             {
-    //                 ESP_LOGE(TAG,"调用cAI工具，当前角色播放小助手\r\n");
-    //                 msg = "调用switch_agent工具切换智能体为播放小助手智能体";
-    //             }
-    //             return msg;
-    //         });
     if (music) {
         AddTool("music.set_play_duration",
                 "设置当前播放的剩余时长（秒）。若设置为 0 则取消计时器。",
