@@ -27,9 +27,10 @@
 
 #include "assets/lang_config.h"
 
-extern uint8_t data[16];
 
 #define TAG "LichuangDevBoard"
+extern std::atomic<bool> triple_press_window_expired;
+
 
 #if my
 class Pca9557 : public I2cDevice {
@@ -174,6 +175,16 @@ private:
             args.skip_unhandled_events = false;
             esp_timer_create(&args, &click_timer);
         }
+
+        boot_button_Boot_IO0.OnMultipleClick([this]() {
+            if(!triple_press_window_expired.load(std::memory_order_acquire))
+            {
+                auto& app = Application::GetInstance();
+                if (app.GetDeviceState() == kDeviceStateStarting && !WifiStation::GetInstance().IsConnected()) {
+                    ResetWifiConfiguration();
+                }
+            }
+        },3);
 
         // 单击处理：
         boot_button_Boot_IO0.OnClick([this]() {
@@ -422,6 +433,7 @@ private:
                             {
                                 if(percentage <= 10)
                                 {
+                                    #if battery_check
                                     ESP_LOGI(TAG, "电量过低，强制停止播放音乐");
                                     music->SetMode(false);
                                     if(music->IsPlaying())
@@ -429,6 +441,7 @@ private:
                                     vTaskDelay(pdMS_TO_TICKS(1000));
                                     app.AbortSpeaking(AbortReason::kAbortReasonNone);
                                     app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                    #endif
                                 }
                                 else 
                                 {

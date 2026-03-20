@@ -512,12 +512,14 @@ bool IsWifiConfigMode() {
     Settings settings("wifi", true);
     return settings.GetInt("force_ap") == 1 || ssid_list.empty();
 }
-
+std::atomic<bool> triple_press_window_expired{false};
 void Application::Start() {
     
     // bool en = IsWifiConfigMode();
     //在这一步就已经调用了board的构造函数来进行关于板级硬件的初始化了
     auto& board = Board::GetInstance();
+
+    ESP_LOGI(TAG, "Flag observed true,继续后续流程");
 
     //获取设备功能
     GetSwitchState();
@@ -534,6 +536,23 @@ void Application::Start() {
         ESP_LOGI(TAG, "Switch state: Unknown mode, proceed with normal mode");
     }
     SetDeviceState(kDeviceStateStarting);
+
+
+    
+
+    esp_timer_handle_t triple_press_timer = nullptr;
+    esp_timer_create_args_t triple_press_timer_args = {
+        .callback = [](void* arg) {
+            auto flag = static_cast<std::atomic<bool>*>(arg);
+            flag->store(true, std::memory_order_release);
+            ESP_LOGI(TAG, "3s timer expired, flag set");
+        },
+        .arg = &triple_press_window_expired,
+        .name = "triple_press_timer",
+    };
+    ESP_ERROR_CHECK(esp_timer_create(&triple_press_timer_args, &triple_press_timer));
+    ESP_ERROR_CHECK(esp_timer_start_once(triple_press_timer, 3 * 1000 * 1000)); // 3 秒
+
 
     Settings settings("device", true);
     device_Role = (Role)settings.GetInt("device_role");
@@ -1138,6 +1157,14 @@ void Application::MainEventLoop() {
 
             // 空闲超时自动进入深度睡眠（仅在真正可以进入睡眠时）
             if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == false)) {
+                if(g_duration_flag.load())
+                {
+                    ESP_LOGE(TAG, "已经有定时了，待定时结束在进入深度睡眠");
+                    //有时间限制的播放模式下，不进入深度睡眠
+                    sleep_ticks_ = 0;
+                    continue;
+                }
+
                 ESP_LOGD(TAG, "空闲计时: %d 秒", sleep_ticks_);
                 sleep_ticks_++;
                 if (CanEnterSleepMode() && sleep_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
@@ -1155,7 +1182,7 @@ void Application::MainEventLoop() {
             else if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == true)) {
                 if(g_duration_flag.load())
                 {
-                    ESP_LOGD(TAG, "有时间限制的播放模式下，不进入深度睡眠");
+                    ESP_LOGE(TAG, "已经有定时了，待定时结束在进入深度睡眠");
                     //有时间限制的播放模式下，不进入深度睡眠
                     sleep_music_ticks_ = 0;
                     continue;
@@ -1610,16 +1637,8 @@ void Application::AddAudioData(AudioStreamPacket&& packet) {
 
 static void PlayDurationTimerCallback(void* arg) {
     // 在主线程停止播放，保证线程安全
-    Application::GetInstance().Schedule([=]() {
-        auto &board = Board::GetInstance();
-        auto m = board.GetMusic();
-        if (m) {
-            ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
-            m->SetStopSignal(true);
-            m->StopStreaming();
-            m->SetMode(false);
-        }
-    });
+    auto &app = Application::GetInstance();
+
 
     // 清理定时器对象
     esp_timer_handle_t* h = static_cast<esp_timer_handle_t*>(arg);
@@ -1640,6 +1659,21 @@ static void PlayDurationTimerCallback(void* arg) {
         instance->g_duration_flag.store(false);
     }
 
+    Application::GetInstance().Schedule([=]() {
+        auto &board = Board::GetInstance();
+        ESP_LOGE(TAG,"关机！！！！！！！！！！！！！！！！！！！！！！！");
+        auto m = board.GetMusic();
+        auto &app = Application::GetInstance();
+        if (m) {
+            ESP_LOGW(TAG, "Play duration timer expired, stopping playback");
+            vTaskDelay(pdMS_TO_TICKS(5000)); // 确保播放停止命令先行执行
+            m->SetStopSignal(true);
+            m->StopStreaming();
+            m->SetMode(false);
+            app.EnterDeepSleep();
+        }
+    });
+    
     ESP_LOGW(TAG, "Play duration timer callback finished: cleared timer state");
 }
 

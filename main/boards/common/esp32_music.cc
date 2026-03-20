@@ -467,9 +467,12 @@ int Esp32Music::FindValidMp3SyncWord(uint8_t* data, int data_len) {
     return -1;
 }
 
+
+int skip=0;
 // 流式播放音频数据
 void Esp32Music::PlayAudioStream() {
     ESP_LOGI(TAG, "Starting audio stream playback");
+    
     stop_playback_ = false;
     // 初始化时间跟踪变量
     current_play_time_ms_ = 0;
@@ -791,7 +794,18 @@ void Esp32Music::PlayAudioStream() {
             resume_fail_count++;
             if (resume_fail_count > 3) {
                 ESP_LOGW(TAG, "连续寻找同步字失败达到阈值，准备重启当前文件从头开始播放");
-                SetStopSignal(true);
+                
+                if(skip++ >=2)
+                {
+                    SetStopSignal(false);
+                    skip=0;
+                    ESP_LOGE(TAG, "多次失败跳过当前音频");
+                    break;
+                }
+                else                    
+                {
+                    SetStopSignal(true);
+                }
                 // 记录将要重启的文件路径与显示名（线程安全地读取）
                 std::string restart_path;
                 std::string restart_name;
@@ -1040,7 +1054,17 @@ void Esp32Music::PlayAudioStream() {
             consecutive_decode_failures++;
             ESP_LOGW(TAG, "Consecutive decode failures: %d/%d", consecutive_decode_failures, kMaxConsecutiveDecodeFailures);
             if (consecutive_decode_failures >= kMaxConsecutiveDecodeFailures) {
-                SetStopSignal(true);
+                if(skip++ >=2)
+                {
+                    SetStopSignal(false);
+                    skip=0;
+                    ESP_LOGE(TAG, "多次失败跳过当前音频");
+                    break;
+                }
+                else                    
+                {
+                    SetStopSignal(true);
+                }
                 ESP_LOGW(TAG, "连续解码失败达到阈值，准备重启当前文件从头开始播放");
                 // 记录将要重启的文件路径与显示名（线程安全地读取）
                 std::string restart_path;
@@ -1158,50 +1182,8 @@ void Esp32Music::PlayAudioStream() {
     if(state == kDeviceStateIdle && !ManualNextPlay_ && !stop_playback_){
         ESP_LOGI(TAG, "Device is idle, preparing to play next track");
         xEventGroupSetBits(event_group_, PLAY_EVENT_NEXT);
-        // if(IfNodeIsEnd())
-        // {
-        //     if(MusicPlayback_mode_ == PLAYBACK_MODE_ONCE)
-        //     {
-        //         ESP_LOGI(TAG, "Once playback mode active, not sending further commands");
-        //         return;
-        //     }
-        //     else if (MusicPlayback_mode_ == PLAYBACK_MODE_ORDER)
-        //     {
-        //         NextPlayIndexOrder(current_playlist_name_);
-
-        //     }
-        //     else if (MusicPlayback_mode_ == PLAYBACK_MODE_RANDOM)
-        //     {
-        //         NextPlayIndexRandom(current_playlist_name_);
-
-        //     }
-        //     EnableRecord(true);
-        //     PlayPlaylist(current_playlist_name_);
-        // }
-        // else
-        // {
-        //     EnableRecord(false);
-        //     SetPlayIndex(default_musiclist_, NextNodeIndex());
-        //     PlayPlaylist(default_musiclist_);
-        // }
     }
 
-    
-    // auto state = app.GetDeviceState();
-    // if(state == kDeviceStateIdle){
-        
-    //     if(MusicPlayback_mode_ == PLAYBACK_MODE_ONCE)
-    //         {
-    //             ESP_LOGI(TAG, "Once playback mode active, stopping playback");
-    //             //等待线程自动结束，不用做任何处理
-    //             std::string msg = "再见,你不需要回应"; 
-    //             app.SendMessage(msg);
-    //         }
-    //     else{
-    //             std::string msg = "播放下一首";
-    //             app.SendMessage(msg);
-    //         }        
-    // }
     
 }
 

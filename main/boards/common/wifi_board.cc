@@ -90,7 +90,6 @@ void WifiBoard::EnterWifiConfigMode() {
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
     snprintf(blufi_device_name, sizeof(blufi_device_name), "CYBER_%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     ESP_LOGI(TAG, "BLUFI device name: %s", blufi_device_name);
-    
     // 用于控制配网流程的状态变量
     static bool wifi_config_completed = false;
     static bool ota_check_completed = false;
@@ -162,8 +161,8 @@ void WifiBoard::EnterWifiConfigMode() {
         // 检查BLE是否仍然连接
         if (!blufi_wificfg_is_ble_connected()) {
             ESP_LOGW(TAG, "BLE disconnected while waiting for IP, will continue waiting for reconnection");
+            esp_timer_start_once(clock_timer_handle_, 1000000*10); // 每10秒提醒一次
         }
-        
         // 检查超时
         int64_t elapsed = (esp_timer_get_time() / 1000) - ip_wait_start;
         if (elapsed > IP_WAIT_TIMEOUT_MS) {

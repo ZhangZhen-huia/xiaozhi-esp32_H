@@ -204,63 +204,55 @@ void McpServer::AddCommonTools() {
             });
 
     if (music) {
-        AddTool("music.set_play_duration",
-                "设置当前播放的剩余时长（秒）。若设置为 0 则取消计时器。",
-                PropertyList({
-                    Property("seconds", kPropertyTypeInteger, 0, 0, 86400) // 0 表示取消计时器
-                }),
-                [music, app](const PropertyList& properties) -> ReturnValue {
-                    int seconds = properties["seconds"].value<int>();
-                    if (seconds < 0) {
-                        return std::string("{\"success\": false, \"message\": \"参数 seconds 必须 >= 0\"}");
-                    }
+            AddTool("music.set_play_duration",
+            "设置一个全局倒计时（秒）。若设置为 0 则取消定时器，与当前播放状态无关。",
+            PropertyList({
+                Property("seconds", kPropertyTypeInteger, 0, 0, 86400)
+            }),
+            [app,music](const PropertyList& properties) -> ReturnValue {
+                int seconds = properties["seconds"].value<int>();
+                if (seconds < 0) {
+                    return std::string("{\"success\": false, \"message\": \"参数 seconds 必须 >= 0\"}");
+                }
+                if (seconds == 0) {
+                    app->StopPlayDurationTimer();
+                    ESP_LOGI(TAG, "music.set_play_duration: cancelled global timer");
+                    return std::string("{\"success\": true, \"message\": \"已取消全局计时\"}");
+                }
 
-                    // 0 表示取消当前计时器
-                    if (seconds == 0) {
-                        app->StopPlayDurationTimer();
-                        ESP_LOGI(TAG, "music.set_play_duration: cancelled play duration timer");
-                        return std::string("{\"success\": true, \"message\": \"已取消播放计时\"}");
-                    }
+                // 确保正在播放（或恢复播放）
+                if (music && music->is_paused()) {
+                    music->ResumePlayback();
+                }
 
-                    // 确保正在播放（或恢复播放）
-                    if (music && music->is_paused()) {
-                        music->ResumePlayback();
-                    }
+                uint64_t us = static_cast<uint64_t>(seconds) * 1000000ULL;
+                bool ok = app->CreateAndStartPlayTimer(us);
+                if (ok) {
+                    ESP_LOGI(TAG, "music.set_play_duration: set global countdown to %d seconds", seconds);
+                    return std::string("{\"success\": true, \"message\": \"已设置全局剩余时长 " + std::to_string(seconds) + " 秒\"}");
+                }
+                ESP_LOGW(TAG, "music.set_play_duration: failed to start global timer");
+                return std::string("{\"success\": false, \"message\": \"设置全局计时失败\"}");
+            });
 
-                    // 启动/重置定时器到指定剩余秒数
-                    uint64_t us = static_cast<uint64_t>(seconds) * 1000000ULL;
-                    bool ok = false;
-                    // 优先使用 Application 对外的 API 创建定时器（CreateAndStartPlayTimer）
-                    // 该函数在 Application 中实现为 CreateAndStartPlayTimer(uint64_t us)
-                    // 若你的 Application API 名称不同，请改为相应的公开方法。
-                    ok = app->CreateAndStartPlayTimer(us);
-
-                    if (ok) {
-                        ESP_LOGI(TAG, "music.set_play_duration: set remaining play time to %d seconds", seconds);
-                        return std::string("{\"success\": true, \"message\": \"已设置播放剩余时长 " + std::to_string(seconds) + " 秒\"}");
-                    } else {
-                        ESP_LOGW(TAG, "music.set_play_duration: failed to set play timer");
-                        return std::string("{\"success\": false, \"message\": \"设置播放时长失败\"}");
-                    }
-                });
         AddTool("music.extend_play",
-                "延长当前播放的时长。参数: `extra`(秒)，表示在当前剩余时间基础上增加的秒数；若当前没有计时器则从现在开始计时。",
-                PropertyList({
-                    Property("extra", kPropertyTypeInteger, 0, 0, 86400) // 最小 1 秒，最大 86400 秒
-                }),
-                [music,app](const PropertyList& properties) -> ReturnValue {
-                    int extra = properties["extra"].value<int>();
-                    if (extra <= 0) {
-                        return std::string("{\"success\": false, \"message\": \"参数 extra 必须大于 0\"}");
-                    }
-                    bool ok = app->ExtendPlayDurationSeconds(extra);
-                    if (ok) {
-                        music->ResumePlayback(); // 确保播放未暂停
-                        return std::string("{\"success\": true, \"message\": \"已延长播放时长 " + std::to_string(extra) + " 秒\"}");
-                    } else {
-                        return std::string("{\"success\": false, \"message\": \"无法延长播放时长\"}");
-                    }
-                });
+            "延长当前全局计时（秒）。若当前没有计时器则自动从现在开始计时。",
+            PropertyList({
+                Property("extra", kPropertyTypeInteger, 0, 0, 86400)
+            }),
+            [app](const PropertyList& properties) -> ReturnValue {
+                int extra = properties["extra"].value<int>();
+                if (extra <= 0) {
+                    return std::string("{\"success\": false, \"message\": \"参数 extra 必须大于 0\"}");
+                }
+                bool ok = app->ExtendPlayDurationSeconds(extra);
+                if (ok) {
+                    ESP_LOGI(TAG, "music.extend_play: extended global countdown by %d seconds", extra);
+                    return std::string("{\"success\": true, \"message\": \"已延长全局计时 " + std::to_string(extra) + " 秒\"}");
+                }
+                return std::string("{\"success\": false, \"message\": \"无法延长全局计时\"}");
+            });
+
         AddTool("currentplay",
                 "获取当前播放的音乐或者故事名字\n"
                 "返回值：当前正在播放的内容",
@@ -388,10 +380,13 @@ void McpServer::AddCommonTools() {
                 }),
                 [music,&board,app](const PropertyList& properties) -> ReturnValue {
                     #if !my
+
+                    #if battery_check
                     if(board.GetBatteryLevel() <= 10)
                     {
                         return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
                     }
+                    #endif
                     #endif
                     auto song_name = properties["songname"].value<std::string>();
                     auto singer = properties["singer"].value<std::string>();
@@ -456,7 +451,7 @@ void McpServer::AddCommonTools() {
                         lib_json += "]";
 
                         std::string ai_instr;
-                        ai_instr.reserve(256 + lib_json.size() + style.size());
+                        // ai_instr.reserve(256 + lib_json.size() + style.size());
                         ai_instr += "{";
                         ai_instr += "\"call_tool\":\"music.create_style_playlist\",";
                         ai_instr += "\"style\":\"";
@@ -465,9 +460,10 @@ void McpServer::AddCommonTools() {
                         ai_instr += "\"library\":";
                         ai_instr += lib_json;
                         ai_instr += ",";
-                        ai_instr += "\"instruction\":\"请从 field 'library' 中选择多首最符合 style 的歌曲，返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 3 首歌曲用于连续播放。\"";
+                        ai_instr += "\"instruction\":\"请从 field 'library' 中选择多首最符合 style 的歌曲，依据知识库来判断，最后返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 3 首歌曲用于连续播放。\"";
+                        
+                        // ai_instr += "\"instruction\":\"请从 知识库 中选择多首最符合 style 的歌曲，最后返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 5 首歌曲用于连续播放。\"";
                         ai_instr += "}";
-
                         // 构造返回 JSON，包含 ai_instruction（供小智调用工具）
                         cJSON *root = cJSON_CreateObject();
                         cJSON_AddBoolToObject(root, "success", true);
@@ -495,6 +491,32 @@ void McpServer::AddCommonTools() {
                             {
                                 music->StopStreaming();
                             }
+                        }
+                        if(music->GetPlaybackMode() == PLAYBACK_MODE_RANDOM)
+                        {
+                            size_t lib_count = 0;
+                            auto all_music = music->GetMusicLibrary(lib_count);
+                            if (lib_count == 0) {
+                                return "{\"success\": false, \"message\": \"音乐库为空，无法随机播放\"}";
+                            }
+                            size_t pick = static_cast<size_t>(esp_random() % lib_count);
+                            const char* path = all_music[pick].file_path;
+                            if (!path || !path[0]) {
+                                return "{\"success\": false, \"message\": \"随机选曲失败，请重试\"}";
+                            }
+
+                            auto list = music->GetDefaultList();
+                            music->SetCurrentPlayList(list);
+                            music->SetPlayIndex(list, static_cast<int>(pick));
+                            music->EnableRecord(true, MUSIC);
+
+                            std::string now_playing = path;
+                            size_t pos = now_playing.find_last_of("/\\");
+                            if (pos != std::string::npos) now_playing = now_playing.substr(pos + 1);
+                            pos = now_playing.find_last_of('.');
+                            if (pos != std::string::npos) now_playing = now_playing.substr(0, pos);
+
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报一下）将为你播放", now_playing);
                         }
                         if (music->IfSavedMusicPosition()) {
                             ESP_LOGI(TAG, "Resuming saved playback position");
@@ -832,12 +854,13 @@ void McpServer::AddCommonTools() {
                 }),
                 [music,&board](const PropertyList& properties) -> ReturnValue {
                     #if !my
+                    #if battery_check
                     if(board.GetBatteryLevel() <= 10)
                     {
                         return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
                     }
                     #endif
-
+                    #endif
                     auto MusicOrStory_ = music->GetMusicOrStory_();
                     auto playmode = music->GetPlaybackMode();
                     std::string now_playing; // 要返回给调用方的播放提示
@@ -922,10 +945,12 @@ void McpServer::AddCommonTools() {
                 }),
                 [music,&board](const PropertyList& properties) -> ReturnValue {
                     #if !my
+                    #if battery_check
                     if(board.GetBatteryLevel() <= 10)
                     {
                         return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
                     }
+                    #endif
                     #endif
                     auto MusicOrStory_ = music->GetMusicOrStory_();
                                         
@@ -1132,17 +1157,19 @@ void McpServer::AddCommonTools() {
                 PropertyList({
                     Property("Category", kPropertyTypeString, ""),
                     Property("Story", kPropertyTypeString, ""),
-                    Property("Chapter_Index", kPropertyTypeInteger, 0, 0, 1000),
+                    Property("Chapter_Index", kPropertyTypeInteger, 1, 1, 1000),
                     Property("GoOn", kPropertyTypeBoolean,false),
                     Property("mode", kPropertyTypeString,"顺序播放"),
                     Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
                 }),
                 [music,&board,app](const PropertyList& properties) -> ReturnValue {
                     #if !my
+                    #if battery_check
                     if(board.GetBatteryLevel() <= 10)
                     {
                         return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
                     }
+                    #endif
                     #endif
                     auto cat = properties["Category"].value<std::string>();
                     auto name = properties["Story"].value<std::string>();
@@ -1212,10 +1239,10 @@ void McpServer::AddCommonTools() {
                         music->SetCurrentStoryIndex(index);
                         music->SetCurrentCategoryName(found_cat);
                         music->SetCurrentStoryName(final_name);
-                        if(chapter_idx == 0)
-                        {
-                            chapter_idx = 1; // 默认从第一章开始播放
-                        }
+                        // if(chapter_idx == 0)
+                        // {
+                        //     chapter_idx = 1; // 默认从第一章开始播放
+                        // }
                         music->SetCurrentChapterIndex(chapter_idx-1);
                         now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
                         return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
@@ -1261,8 +1288,8 @@ void McpServer::AddCommonTools() {
                         music->SetCurrentStoryIndex(index);
                         music->SetCurrentStoryName(final_name);
                         music->SetCurrentCategoryName(cat);
-                        if(chapter_idx <=0 )
-                            chapter_idx = 1;
+                        // if(chapter_idx <=0 )
+                        //     chapter_idx = 1;
 
                         
                         auto chapters = music->GetCurrentChapterName();
@@ -1273,11 +1300,11 @@ void McpServer::AddCommonTools() {
                         if(pos != std::string::npos)
                             chapters = chapters.substr(0, pos);
 
-                        if(chapter_idx == 0)
-                        {
-                            chapter_idx = 1; // 默认从第一章开始播放
-                        }
-
+                        // if(chapter_idx == 0)
+                        // {
+                        //     chapter_idx = 1; // 默认从第一章开始播放
+                        // }
+                        ESP_LOGE(TAG, "chapter_idx=%d",chapter_idx);
                         music->SetCurrentChapterIndex(chapter_idx-1);
                         now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章" + chapters;
                         return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);

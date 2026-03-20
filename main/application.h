@@ -23,7 +23,7 @@
 
 
 #define my 0
-
+#define battery_check 0
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
 #define IDLE_DEEP_SLEEP_SECONDS (1 * 30)
