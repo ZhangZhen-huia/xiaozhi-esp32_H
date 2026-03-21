@@ -358,29 +358,17 @@ void McpServer::AddCommonTools() {
             // 返回 payload，包含 ai_instruction 让模型调用 actually.1 来开始播放，并读出第一首
             return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "已创建并将为你播放：", now_playing);
         });
-
-        AddTool("music.play",
-                "用于播放某种风格的音乐,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1，仅仅用来播放音乐\n"
+        AddTool("General.Play",
+                "当用户没有具体表明是要播放音乐还是故事的时候调用，用于判断用户说的内容是音乐还是故事，并且根据用户说的内容来播放相应的音乐或者故事\n"
                 "参数:\n"
-                "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
-                "  `singer`: 歌手名称，可选，默认为空字符串。\n"
-                "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` 、 `循环播放`\n"
-                "   `GoOn`: 继续播放标志位，默认为空字符串。\n"
-                "  `duration`: 播放时长（秒），可选，默认为 0，表示无限制。\n"
-                "  `style`: 音乐风格，可选，默认为空字符串。\n"
-                "返回:\n"
-                "  播放状态信息，播报要播放的内容，并指示调用下一个工具actually.2或者actually.1。",
+                "  `name`: 要播放的名称,非必须,默认为空字符串。\n"
+                "  `artist`: 艺术家\n",
                 PropertyList({
-                    Property("songname", kPropertyTypeString,""), // 歌曲名称（可选）
-                    Property("singer", kPropertyTypeString,""), // 歌手名称（可选）
-                    Property("mode", kPropertyTypeString,"顺序播放"),// 播放模式（可选）
-                    Property("GoOn", kPropertyTypeBoolean,false),// 
-                    Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
-                    Property("style", kPropertyTypeString,"") //  音乐风格（可选）
+                    Property("name", kPropertyTypeString,""),
+                    Property("artist", kPropertyTypeString,"")
                 }),
                 [music,&board,app](const PropertyList& properties) -> ReturnValue {
                     #if !my
-
                     #if battery_check
                     if(board.GetBatteryLevel() <= 10)
                     {
@@ -388,263 +376,674 @@ void McpServer::AddCommonTools() {
                     }
                     #endif
                     #endif
-                    auto song_name = properties["songname"].value<std::string>();
-                    auto singer = properties["singer"].value<std::string>();
-                    auto mode = properties["mode"].value<std::string>();
-                    auto goon = properties["GoOn"].value<bool>();
-                    auto style = properties["style"].value<std::string>();
-                    int duration = properties["duration"].value<int>();
-                    if (duration > 0) app->Set_PlayDuration(duration);
-                    ESP_LOGW(TAG, "style: '%s'",style.c_str());
-                    auto &app = Application::GetInstance();
-                    // 解析播放模式（支持中文与常见英文）
+                    if (!music) {
+                        return "{\"success\": false, \"message\": \"设备未初始化音频模块\"}";
+                    }
+
+                    auto name = properties["name"].value<std::string>();
+                    auto artist = properties["artist"].value<std::string>();
+                    std::string query;
+                    if (!artist.empty() && !name.empty()) query = artist + "-" + name;
+                    else if (!name.empty()) query = name;
+                    else query = artist;
+
+                    auto music_impl = static_cast<Esp32Music*>(music);
+                    std::vector<const PSMediaInfo*> hits;
+                    if (!query.empty()) {
+                        hits = music_impl->FuzzySearchMedia(query, 6);
+                    } else {
+                        const auto& view = music_impl->GetUnifiedMediaView();
+                        size_t take = std::min<size_t>(6, view.size());
+                        for (size_t i = 0; i < take; ++i) hits.push_back(view[i]);
+                    }
+
+                    if (hits.empty()) {
+                        return "{\"success\": false, \"message\": \"未找到匹配的音乐或故事\"}";
+                    }
+
+                    auto trim = [](std::string s) {
+                        auto is_space = [](int ch){ return std::isspace(ch); };
+                        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char ch){ return !is_space(ch); }));
+                        s.erase(std::find_if(s.rbegin(), s.rend(), [&](unsigned char ch){ return !is_space(ch); }).base(), s.end());
+                        return s;
+                    };
+                    auto split_pair = [&](const std::string& disp) {
+                        auto pos = disp.find('-');
+                        if (pos == std::string::npos) return std::make_pair(std::string(), trim(disp));
+                        return std::make_pair(trim(disp.substr(0, pos)), trim(disp.substr(pos + 1)));
+                    };
+
+                    const PSMediaInfo* best = hits.front();
+                    cJSON* root = cJSON_CreateObject();
+                    cJSON_AddBoolToObject(root, "success", true);
+                    cJSON_AddStringToObject(root, "message", "我找到了这些可能的内容");
+                    cJSON* candidates = cJSON_CreateArray();
+                    for (const auto* item : hits) {
+                        cJSON_AddItemToArray(candidates, cJSON_CreateString(item->display_name.c_str()));
+                    }
+                    cJSON_AddItemToObject(root, "candidates", candidates);
+
+                    std::string speak;
+                    cJSON* ai = cJSON_CreateObject();
+                    if (best->type == PSMediaType::kMusic) {
+                        auto pair = split_pair(best->display_name);
+                        cJSON_AddStringToObject(ai, "call_tool", "music.play");
+                        cJSON* args = cJSON_CreateObject();
+                        if (!pair.first.empty())
+                            cJSON_AddStringToObject(args, "singer", pair.first.c_str());
+                        if (!pair.second.empty())
+                            cJSON_AddStringToObject(args, "songname", pair.second.c_str());
+                        cJSON_AddItemToObject(ai, "arguments", args);
+                        speak = "找到歌曲 " + best->display_name + "，需要我播放吗？";
+                    } else {
+                        auto pair = split_pair(best->display_name);
+                        cJSON_AddStringToObject(ai, "call_tool", "story.play");
+                        cJSON* args = cJSON_CreateObject();
+                        if (!pair.first.empty())
+                            cJSON_AddStringToObject(args, "Category", pair.first.c_str());
+                        if (!pair.second.empty())
+                            cJSON_AddStringToObject(args, "Story", pair.second.c_str());
+                        cJSON_AddItemToObject(ai, "arguments", args);
+                        speak = "找到故事 " + best->display_name + "，需要我播放吗？";
+                    }
+                    cJSON_AddStringToObject(ai, "speak", speak.c_str());
+                    cJSON_AddItemToObject(root, "ai_instruction", ai);
+
+                    char* out = cJSON_PrintUnformatted(root);
+                    std::string ret = out ? out : "{}";
+                    if (out) cJSON_free(out);
+                    cJSON_Delete(root);
+                    return ret;
+                });
+        AddTool("general.play",
+                "用于播放本地的音乐或故事。当无具体类型时，将通过智能推断并播放。返回后续需要调用的 actually 工具。\n"
+                "参数:\n"
+                "  `name`: 歌曲名或故事名（可选）。\n"
+                "  `artist`: 歌手名或故事类别（可选）。\n"
+                "  `target`: 明确播放类型，`music` 或 `story`（可选，未知留空）。\n"
+                "  `mode`: 播放模式，`顺序`、`随机`、`循环`（可选）。\n"
+                "  `GoOn`: 继续播放标志，`true` 继续当前/上次播放（可选）。\n"
+                "  `duration`: 全局定时倒计时（秒），0为无限制。\n"
+                "  `style`: 仅限音乐：风格如流行、摇滚等（可选）。\n"
+                "  `Chapter_Index`: 仅限故事：要播放的章节号（默认1）。\n",
+                PropertyList({
+                    Property("name", kPropertyTypeString, ""),
+                    Property("artist", kPropertyTypeString, ""),
+                    Property("target", kPropertyTypeString, ""),
+                    Property("mode", kPropertyTypeString, "顺序播放"),
+                    Property("GoOn", kPropertyTypeBoolean, false),
+                    Property("duration", kPropertyTypeInteger, 0, 0, 86400),
+                    Property("style", kPropertyTypeString, ""),
+                    Property("Chapter_Index", kPropertyTypeInteger, 1, 1, 1000)
+                }),
+                [music, &board, app](const PropertyList& properties) -> ReturnValue {
+                    #if !my
+                    #if battery_check
+                    if(board.GetBatteryLevel() <= 10) {
+                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
+                    }
+                    #endif
+                    #endif
+                    if (!music) return "{\"success\": false, \"message\": \"设备未初始化音频模块\"}";
+
+                    auto name = properties["name"].value<std::string>();
+                    auto artist = properties["artist"].value<std::string>();
+                    auto target_raw = properties["target"].value<std::string>();
                     auto mode_str = properties["mode"].value<std::string>();
-                    std::string m = NormalizeForSearch(mode_str);
-                    if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+                    auto goon = properties["GoOn"].value<bool>();
+                    int duration = properties["duration"].value<int>();
+                    auto style = properties["style"].value<std::string>();
+                    int chapter_idx = properties["Chapter_Index"].value<int>();
+
+                    if (duration > 0) app->Set_PlayDuration(duration);
+
+                    auto music_impl = static_cast<Esp32Music*>(music);
+                    
+                    std::string target = NormalizeForSearch(target_raw);
+                    bool force_music = (target == "music" || target == "音乐");
+                    bool force_story = (target == "story" || target == "故事");
+
+                    // 如果未明确指定目标，根据特有参数或模糊搜索进行推断
+                    if (!force_music && !force_story) {
+                        if (!style.empty()) {
+                            force_music = true;
+                        } else if (chapter_idx > 1) {
+                            force_story = true;
+                        } else if (goon) {
+                            auto mos = music->GetMusicOrStory_();
+                            if (mos == STORY) force_story = true;
+                            else force_music = true;
+                        } else if (!name.empty() || !artist.empty()) {
+                            std::string query;
+                            if (!artist.empty() && !name.empty()) query = artist + "-" + name;
+                            else if (!name.empty()) query = name;
+                            else query = artist;
+
+                            auto hits = music_impl->FuzzySearchMedia(query, 1);
+                            if (!hits.empty()) {
+                                if (hits.front()->type == PSMediaType::kMusic) force_music = true;
+                                else force_story = true;
+                                ESP_LOGI(TAG, "general.play fuzz-inferred target: %s (matched: %s)", 
+                                         force_music ? "music" : "story", hits.front()->display_name.c_str());
+                            } else {
+                                force_music = true; // 无法分辨时暂时回退到音乐统一报错
+                            }
+                        } else {
+                            force_music = true;
+                        }
+                    }
+
+                    // 设置播放模式
+                    std::string m = mode_str;
+                    if (m.find("随机") != std::string::npos || m == "random" || m == "shuffle") {
                         music->SetRandomMode(true);
                         ESP_LOGI(TAG, "Set Random Play Mode");
-                    }
-                    else if (m == "循环播放" || m== "循环" || m == "loop") {
+                    } else if (m.find("循环") != std::string::npos || m == "loop") {
                         music->SetLoopMode(true);
                         ESP_LOGI(TAG, "Set Loop Play Mode");
-                    }
-                    else {//默认顺序播放
+                    } else {
                         music->SetOrderMode(true);
                         ESP_LOGI(TAG, "Set Order Play Mode");
                     }
-                    std::string now_playing; // 要返回给调用方的播放提示
-                    if (style != "") {
-                        size_t lib_count = 0;
-                        auto all_music = music->GetMusicLibrary(lib_count);
-                        const size_t kMaxReturn = 50;
 
-                        std::vector<size_t> indices;
-                        indices.reserve(lib_count);
-                        for (size_t i = 0; i < lib_count; ++i) indices.push_back(i);
+                    std::string now_playing;
 
-                        if (lib_count > kMaxReturn) {
-                            // 随机打乱并取前 kMaxReturn 个
-                            std::default_random_engine rng((unsigned)esp_random());
-                            std::shuffle(indices.begin(), indices.end(), rng);
-                        }
+                    if (force_story) {
+                        // ==================== STORY 分支 ====================
+                        std::string cat = artist;
+                        std::string story_name = name;
 
-                        size_t take = std::min(lib_count, kMaxReturn);
-                        std::string lib_json = "[";
-                        bool first = true;
-                        for (size_t j = 0; j < take; ++j) {
-                            size_t i = indices[j];
-                            const char* path = all_music[i].file_path;
-                            if (!path) continue;
-                            auto meta = ParseSongMeta(path);
-                            if (!first) lib_json += ",";
-                            first = false;
-                            lib_json += "{\"index\":";
-                            lib_json += std::to_string(i);
-                            lib_json += ",\"title\":\"";
-                            EscapeJsonAppend(meta.title, lib_json);
-                            lib_json += "\",\"artist\":\"";
-                            EscapeJsonAppend(meta.artist, lib_json);
-                            lib_json += "\",\"path\":\"";
-                            EscapeJsonAppend(path, lib_json);
-                            lib_json += "\"}";
-                        }
-                        lib_json += "]";
-
-                        std::string ai_instr;
-                        // ai_instr.reserve(256 + lib_json.size() + style.size());
-                        ai_instr += "{";
-                        ai_instr += "\"call_tool\":\"music.create_style_playlist\",";
-                        ai_instr += "\"style\":\"";
-                        EscapeJsonAppend(style, ai_instr);
-                        ai_instr += "\",";
-                        ai_instr += "\"library\":";
-                        ai_instr += lib_json;
-                        ai_instr += ",";
-                        ai_instr += "\"instruction\":\"请从 field 'library' 中选择多首最符合 style 的歌曲，依据知识库来判断，最后返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 3 首歌曲用于连续播放。\"";
-                        
-                        // ai_instr += "\"instruction\":\"请从 知识库 中选择多首最符合 style 的歌曲，最后返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 5 首歌曲用于连续播放。\"";
-                        ai_instr += "}";
-                        // 构造返回 JSON，包含 ai_instruction（供小智调用工具）
-                        cJSON *root = cJSON_CreateObject();
-                        cJSON_AddBoolToObject(root, "success", true);
-                        cJSON_AddStringToObject(root, "now_playing", ("正在为你挑选 " + style + " 歌曲").c_str());
-                        cJSON *ai = cJSON_CreateObject();
-                        cJSON_AddStringToObject(ai, "call_tool", "music.create_style_playlist");
-                        cJSON_AddStringToObject(ai, "instruction", ai_instr.c_str());
-                        cJSON_AddStringToObject(ai, "speak", ("我会为你挑选并播放 " + style + " 风格的歌曲").c_str());
-                        cJSON_AddItemToObject(root, "ai_instruction", ai);
-                        char *out = cJSON_PrintUnformatted(root);
-                        std::string ret = out ? out : std::string("{}");
-                        if (out) cJSON_free(out);
-                        cJSON_Delete(root);
-                        return ret;
-                    }
-                    else if((song_name.empty() && singer.empty())) {
-                        if(music->is_paused())
-                        {
-                            if(music->GetMusicOrStory_() == MUSIC)
-                            {
-                                music->ResumePlayback();
-                                return true;
+                        if ((cat.empty() && story_name.empty() && chapter_idx <= 1) || goon) {
+                            ESP_LOGI(TAG, "Continuing last story playback");
+                            if (music->is_paused()) {
+                                if (music->GetMusicOrStory_() == STORY) { music->ResumePlayback(); return true; }
+                                else if (music->GetMusicOrStory_() == MUSIC) music->StopStreaming();
                             }
-                            else if(music->GetMusicOrStory_() == STORY)
-                            {
-                                music->StopStreaming();
+                            if (music->IfSavedStoryPosition()) {
+                                now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
+                            } else {
+                                return "{\"success\": false, \"message\": \"没有保存的故事播放记录\"}";
                             }
+                        } else if (cat.empty() && !story_name.empty()) {
+                            auto index = music->FindStoryIndexFuzzy(story_name);  
+                            if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                            size_t count = 0;
+                            auto storys = music->GetStoryLibrary(count);
+                            music->SetCurrentStoryIndex(index);
+                            music->SetCurrentCategoryName(storys[index].category);
+                            music->SetCurrentStoryName(storys[index].story_name);
+                            music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
+                            std::string name = storys[index].story_name;
+                            now_playing =  name + " 第" + std::to_string(chapter_idx) + "章";
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+                        } else if (!cat.empty() && story_name.empty()) {
+                            music->SetCurrentCategoryName(cat);
+                            auto stories = music->GetStoriesInCategory(cat);
+                            if (stories.empty()) return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
+                            story_name = stories[esp_random() % stories.size()];
+                            auto index = music->FindStoryIndexInCategory(cat, story_name);
+                            if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                            size_t count = 0;
+                            auto storys = music->GetStoryLibrary(count);
+                            music->SetCurrentStoryName(storys[index].story_name);
+                            music->SetCurrentStoryIndex(index);
+                            music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
+                            now_playing = cat + " 故事：" + storys[index].story_name + " 第" + std::to_string(chapter_idx) + "章";
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+                        } else {
+                            auto index = music->FindStoryIndexInCategory(cat, story_name);
+                            if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                            size_t count = 0;
+                            auto storys = music->GetStoryLibrary(count);
+                            music->SetCurrentStoryIndex(index);
+                            music->SetCurrentStoryName(storys[index].story_name);
+                            music->SetCurrentCategoryName(cat);
+                            music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
+                            now_playing = cat + " 故事：" + storys[index].story_name + " 第" + std::to_string(chapter_idx) + "章";
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
                         }
-                        if(music->GetPlaybackMode() == PLAYBACK_MODE_RANDOM)
-                        {
+
+                    } else {
+                        // ==================== MUSIC 分支 ====================
+                        std::string song_name = name;
+                        std::string singer = artist;
+
+                        if (!style.empty()) {
                             size_t lib_count = 0;
                             auto all_music = music->GetMusicLibrary(lib_count);
-                            if (lib_count == 0) {
-                                return "{\"success\": false, \"message\": \"音乐库为空，无法随机播放\"}";
+                            const size_t kMaxReturn = 50;
+                            std::vector<size_t> indices;
+                            indices.reserve(lib_count);
+                            for (size_t i = 0; i < lib_count; ++i) indices.push_back(i);
+                            if (lib_count > kMaxReturn) {
+                                std::default_random_engine rng((unsigned)esp_random());
+                                std::shuffle(indices.begin(), indices.end(), rng);
                             }
-                            size_t pick = static_cast<size_t>(esp_random() % lib_count);
-                            const char* path = all_music[pick].file_path;
-                            if (!path || !path[0]) {
-                                return "{\"success\": false, \"message\": \"随机选曲失败，请重试\"}";
+                            size_t take = std::min(lib_count, kMaxReturn);
+                            std::string lib_json = "[";
+                            bool first = true;
+                            for (size_t j = 0; j < take; ++j) {
+                                size_t i = indices[j];
+                                const char* path = all_music[i].file_path;
+                                if (!path) continue;
+                                auto meta = ParseSongMeta(path);
+                                if (!first) lib_json += ",";
+                                first = false;
+                                lib_json += "{\"index\":" + std::to_string(i) + ",\"title\":\"";
+                                EscapeJsonAppend(meta.title, lib_json);
+                                lib_json += "\",\"artist\":\"";
+                                EscapeJsonAppend(meta.artist, lib_json);
+                                lib_json += "\",\"path\":\"";
+                                EscapeJsonAppend(path, lib_json);
+                                lib_json += "\"}";
+                            }
+                            lib_json += "]";
+
+                            std::string ai_instr = "{\"call_tool\":\"music.create_style_playlist\",\"style\":\"";
+                            EscapeJsonAppend(style, ai_instr);
+                            ai_instr += "\",\"library\":" + lib_json + ",\"instruction\":\"请从 field 'library' 中选择多首最符合 style 的歌曲并调用 music.create_style_playlist 工具。至少返回 3 首歌曲用于连续播放。\"}";
+                            
+                            cJSON *root = cJSON_CreateObject();
+                            cJSON_AddBoolToObject(root, "success", true);
+                            cJSON_AddStringToObject(root, "now_playing", ("正在为你挑选 " + style + " 歌曲").c_str());
+                            cJSON *ai = cJSON_CreateObject();
+                            cJSON_AddStringToObject(ai, "call_tool", "music.create_style_playlist");
+                            cJSON_AddStringToObject(ai, "instruction", ai_instr.c_str());
+                            cJSON_AddStringToObject(ai, "speak", ("我会为你挑选并播放 " + style + " 风格的歌曲").c_str());
+                            cJSON_AddItemToObject(root, "ai_instruction", ai);
+                            char *out = cJSON_PrintUnformatted(root);
+                            std::string ret = out ? out : "{}";
+                            if (out) cJSON_free(out);
+                            cJSON_Delete(root);
+                            return ret;
+
+                        } else if (song_name.empty() && singer.empty()) {
+                            if (music->is_paused()) {
+                                if (music->GetMusicOrStory_() == MUSIC) { music->ResumePlayback(); return true; }
+                                else if (music->GetMusicOrStory_() == STORY) music->StopStreaming();
+                            }
+                            if (music->GetPlaybackMode() == PLAYBACK_MODE_RANDOM && !goon) {
+                                size_t lib_count = 0;
+                                auto all_music = music->GetMusicLibrary(lib_count);
+                                if (lib_count == 0) return "{\"success\": false, \"message\": \"音乐库为空，无法随机播放\"}";
+                                size_t pick = static_cast<size_t>(esp_random() % lib_count);
+                                const char* path = all_music[pick].file_path;
+                                if (!path || !path[0]) return "{\"success\": false, \"message\": \"随机选曲失败\"}";
+
+                                auto list = music->GetDefaultList();
+                                music->SetCurrentPlayList(list);
+                                music->SetPlayIndex(list, static_cast<int>(pick));
+                                music->EnableRecord(true, MUSIC);
+
+                                now_playing = path;
+                                size_t pos = now_playing.find_last_of("/\\");
+                                if (pos != std::string::npos) now_playing = now_playing.substr(pos + 1);
+                                pos = now_playing.find_last_of('.');
+                                if (pos != std::string::npos) now_playing = now_playing.substr(0, pos);
+
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报）将为你播放", now_playing);
+                            }
+                            if (music->IfSavedMusicPosition()) {
+                                ESP_LOGI(TAG, "Resuming saved playback position");
+                                now_playing = music->GetCurrentSongName();
+                                music->EnableRecord(true, MUSIC);
+                                ESP_LOGI(TAG, "Resuming song: %s", now_playing.c_str());
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.2\"}", "（简短播报）将为你继续播放", now_playing);
+                            } else {
+                                return "{\"success\": false, \"message\": \"没有保存的音乐播放记录\"}";
                             }
 
-                            auto list = music->GetDefaultList();
-                            music->SetCurrentPlayList(list);
-                            music->SetPlayIndex(list, static_cast<int>(pick));
+                        } else if (!song_name.empty() && singer.empty()) {
+                            if (music->is_paused()) music->StopStreaming();
+                            auto index = music->SearchMusicIndexFromlist(song_name);
+                            if (index >= 0) {
+                                auto playlist_name = music->GetDefaultList();
+                                music->SetPlayIndex(playlist_name, index);
+                                music->SetCurrentPlayList(playlist_name);
+                                music->EnableRecord(true, MUSIC);
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报）将为你播放", song_name);
+                            } else {
+                                return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+                            }
+
+                        } else if (!singer.empty() && song_name.empty()) {
+                            if (music->is_paused()) music->StopStreaming();
+                            size_t out_count = 0;
+                            auto all_music = music->GetMusicLibrary(out_count);
+                            auto norm_singer = singer;
+                            std::vector<std::string> file_paths;
+                            for (size_t i = 0; i < out_count; ++i) {
+                                const char* path = all_music[i].file_path;
+                                if (!path) continue;
+                                auto meta = ParseSongMeta(path);
+                                if (meta.norm_artist.find(norm_singer) != std::string::npos) {
+                                    file_paths.emplace_back(path);
+                                }
+                            }
+                            if (file_paths.empty()) return "{\"success\": false, \"message\": \"未找到歌手相关的歌曲\"}";
+                            
                             music->EnableRecord(true, MUSIC);
+                            std::string temp_playlist_name = "SearchResults_" + singer;
+                            music->CreatePlaylist(temp_playlist_name, file_paths);
+                            music->SetCurrentPlayList(temp_playlist_name);
 
-                            std::string now_playing = path;
+                            now_playing = file_paths[0];
                             size_t pos = now_playing.find_last_of("/\\");
                             if (pos != std::string::npos) now_playing = now_playing.substr(pos + 1);
                             pos = now_playing.find_last_of('.');
                             if (pos != std::string::npos) now_playing = now_playing.substr(0, pos);
 
-                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报一下）将为你播放", now_playing);
-                        }
-                        if (music->IfSavedMusicPosition()) {
-                            ESP_LOGI(TAG, "Resuming saved playback position");
-                            now_playing = music->GetCurrentSongName();
-                            music->EnableRecord(true, MUSIC);
-                            ESP_LOGI(TAG, "Resuming song: %s", now_playing.c_str());
-                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.2\"}", "（简短播报一下）将为你继续播放", now_playing);
-                        } else {
-                            return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
-                        }
-                    }
-                    else if(!song_name.empty() && singer.empty())
-                    {
-                        if(music->is_paused())
-                        {
-                            music->StopStreaming(); // 停止当前播放
-                        }
-                        ESP_LOGI(TAG, "Playing song: %s", song_name.c_str());
-                        auto index = music->SearchMusicIndexFromlist(song_name);
-                        auto playlist_name = music->GetDefaultList();
-                        if(index >=0 ) {
-                            music->SetPlayIndex(playlist_name, index);
-                            music->SetCurrentPlayList(playlist_name);
-                            // 把找到的歌曲信息保存并返回，同时告诉 AI 调用另一个工具去播放
-                            now_playing = song_name;
-                            // 构造 ai_instruction（机器可解析的调用指令：call_tool/play_music）
-                            music->EnableRecord(true, MUSIC);
-                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报一下）将为你播放", now_playing);
-                        }  else {
-                            return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
-                        }
-                    }
-                    else if(!singer.empty() && song_name.empty())
-                    {
-                        if(music->is_paused())
-                        {
-                            music->StopStreaming(); // 停止当前播放
-                        }
-                        // 直接使用 PSRAM 中的音乐库，避免大拷贝
-                        size_t out_count = 0;
-                        auto all_music = (music)->GetMusicLibrary(out_count);
-                        auto norm_singer = NormalizeForSearch(singer);
-                        std::vector<std::string> file_paths;
-                        for (size_t i = 0; i < out_count; ++i) {
-                            const char* path = all_music[i].file_path;
-                            if (!path) continue;
-                            auto meta = ParseSongMeta(path);
-                            if (meta.norm_artist.find(norm_singer) != std::string::npos) {
-                                file_paths.emplace_back(path);
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "读出来：将为你播放", now_playing);
+
+                        } else if (!singer.empty() && !song_name.empty()) {
+                            music->SetMode(true);
+                            music->SetMusicOrStory_(MUSIC);
+                            if (music->is_paused()) music->StopStreaming();
+
+                            auto need_title = song_name;
+                            auto need_artist = singer;
+                            auto index = music->SearchMusicIndexFromlistByArtSong(need_title, need_artist);
+                            if (index >= 0) {
+                                music->SetPlayIndex(music->GetDefaultList(), index);
+                                music->EnableRecord(true, MUSIC);
+                                music->SetCurrentPlayList(music->GetDefaultList());
+                                now_playing = singer + " - " + song_name;
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "读出来：将为你播放", now_playing);
                             }
-                        }
-                        if (file_paths.empty()) {
-                            return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
-                        }
-                        music->EnableRecord(true, MUSIC);
-                        // 创建临时播放列表
-                        std::string temp_playlist_name = "SearchResults_" + singer;
-                        music->CreatePlaylist(temp_playlist_name, file_paths);
-                        music->SetCurrentPlayList(temp_playlist_name);
-
-                        size_t pos = file_paths[0].find_last_of("/\\");
-                        if (pos != std::string::npos) 
-                            now_playing = file_paths[0].substr(pos + 1);
-
-                        pos = now_playing.find_last_of('.');
-                        if (pos != std::string::npos)
-                            now_playing = now_playing.substr(0, pos);
-
-                        ESP_LOGI(TAG, "Playing songs by singer: %s,->  %s", singer.c_str(),now_playing.c_str());
-
-
-                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "读出来：将为你播放", now_playing);
-                    }
-                    else if(!singer.empty() && !song_name.empty())
-                    {
-                        music->SetMode(true);
-                        music->SetMusicOrStory_(MUSIC);
-                        if(music->is_paused())
-                        {
-                            music->StopStreaming(); // 停止当前播放
-                        }
-                        ESP_LOGI(TAG, "Playing song: %s by singer: %s", song_name.c_str(), singer.c_str());
-                        // 直接在 PSRAM 中查找匹配项并播放
-                        size_t out_count = 0;
-                        auto all_music = static_cast<Esp32Music*>(music)->GetMusicLibrary(out_count);
-                        bool found = false;
-                        auto need_title = NormalizeForSearch(song_name);
-                        auto need_artist = NormalizeForSearch(singer);
-                        auto index = music->SearchMusicIndexFromlistByArtSong(need_title,need_artist);
-                        const char* path = all_music[index].file_path;
-                        auto meta = ParseSongMeta(path);
-                        if (meta.norm_title == need_title && meta.norm_artist == need_artist) {
-                            music->SetPlayIndex(music->GetDefaultList(), index);
-                            music->EnableRecord(true, MUSIC);
-                            // 找到匹配的歌曲和歌手
-                            if (!music->PlayFromSD(path, song_name)) {
-                                return "{\"success\": false, \"message\": \"播放失败\"}";
-                            }
-                            music->SetCurrentPlayList(music->GetDefaultList());
-                            now_playing = singer + " - " + song_name;
-                            found = true;
-                        }
-                        
-                        if (!found) {
                             return "{\"success\": false, \"message\": \"未找到匹配的歌曲和歌手\"}";
                         }
-
+                        
+                        return "{\"success\": false, \"message\": \"播放失败，未知参数组合\"}";
                     }
-                    else if(goon)
-                    {
-                        if(music->is_paused())
-                        {
-                            music->ResumePlayback();
-                            return true;
-                        }
-                        if (music->IfSavedMusicPosition()) {
-                            ESP_LOGI(TAG, "Resuming saved playback position");
-                            now_playing = music->GetCurrentSongName();
-                            music->EnableRecord(true, MUSIC);
-                            ESP_LOGI(TAG, "Resuming song: %s", now_playing.c_str());
-                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.2\"}", "（简短播报一下）将为你继续播放", now_playing);
-                        } else {
-                            return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
-                        }
-                    }
-                    
-                    return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
                 });
+
+        // AddTool("music.play",
+        //         "用于播放某种风格的音乐,从SD卡播放指定的本地音乐文件,你需要读出来要播放的音乐，然后调用完之后根据当前工具返回值来调用下一个工具，出现actually.2就调用工具actually.2，出现actually.1就调用工具actually.1，仅仅用来播放音乐\n"
+        //         "参数:\n"
+        //         "  `songname`: 要播放的歌曲名称,非必须,默认为空字符串。\n"
+        //         "  `singer`: 歌手名称，可选，默认为空字符串。\n"
+        //         "  `mode`: 播放模式，可选：`顺序播放`、`随机播放` 、 `循环播放`\n"
+        //         "   `GoOn`: 继续播放标志位，默认为空字符串。\n"
+        //         "  `duration`: 播放时长（秒），可选，默认为 0，表示无限制。\n"
+        //         "  `style`: 音乐风格，可选，默认为空字符串。\n"
+        //         "返回:\n"
+        //         "  播放状态信息，播报要播放的内容，并指示调用下一个工具actually.2或者actually.1。",
+        //         PropertyList({
+        //             Property("songname", kPropertyTypeString,""), // 歌曲名称（可选）
+        //             Property("singer", kPropertyTypeString,""), // 歌手名称（可选）
+        //             Property("mode", kPropertyTypeString,"顺序播放"),// 播放模式（可选）
+        //             Property("GoOn", kPropertyTypeBoolean,false),// 
+        //             Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
+        //             Property("style", kPropertyTypeString,"") //  音乐风格（可选）
+        //         }),
+        //         [music,&board,app](const PropertyList& properties) -> ReturnValue {
+        //             #if !my
+
+        //             #if battery_check
+        //             if(board.GetBatteryLevel() <= 10)
+        //             {
+        //                 return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
+        //             }
+        //             #endif
+        //             #endif
+        //             auto song_name = properties["songname"].value<std::string>();
+        //             auto singer = properties["singer"].value<std::string>();
+        //             auto mode = properties["mode"].value<std::string>();
+        //             auto goon = properties["GoOn"].value<bool>();
+        //             auto style = properties["style"].value<std::string>();
+        //             int duration = properties["duration"].value<int>();
+        //             if (duration > 0) app->Set_PlayDuration(duration);
+        //             ESP_LOGW(TAG, "style: '%s'",style.c_str());
+        //             auto &app = Application::GetInstance();
+        //             // 解析播放模式（支持中文与常见英文）
+        //             auto mode_str = properties["mode"].value<std::string>();
+        //             std::string m = NormalizeForSearch(mode_str);
+        //             if(m == "随机播放" || m == "随机" || m == "shuffle" || m == "random") {
+        //                 music->SetRandomMode(true);
+        //                 ESP_LOGI(TAG, "Set Random Play Mode");
+        //             }
+        //             else if (m == "循环播放" || m== "循环" || m == "loop") {
+        //                 music->SetLoopMode(true);
+        //                 ESP_LOGI(TAG, "Set Loop Play Mode");
+        //             }
+        //             else {//默认顺序播放
+        //                 music->SetOrderMode(true);
+        //                 ESP_LOGI(TAG, "Set Order Play Mode");
+        //             }
+        //             std::string now_playing; // 要返回给调用方的播放提示
+        //             if (style != "") {
+        //                 size_t lib_count = 0;
+        //                 auto all_music = music->GetMusicLibrary(lib_count);
+        //                 const size_t kMaxReturn = 50;
+
+        //                 std::vector<size_t> indices;
+        //                 indices.reserve(lib_count);
+        //                 for (size_t i = 0; i < lib_count; ++i) indices.push_back(i);
+
+        //                 if (lib_count > kMaxReturn) {
+        //                     // 随机打乱并取前 kMaxReturn 个
+        //                     std::default_random_engine rng((unsigned)esp_random());
+        //                     std::shuffle(indices.begin(), indices.end(), rng);
+        //                 }
+
+        //                 size_t take = std::min(lib_count, kMaxReturn);
+        //                 std::string lib_json = "[";
+        //                 bool first = true;
+        //                 for (size_t j = 0; j < take; ++j) {
+        //                     size_t i = indices[j];
+        //                     const char* path = all_music[i].file_path;
+        //                     if (!path) continue;
+        //                     auto meta = ParseSongMeta(path);
+        //                     if (!first) lib_json += ",";
+        //                     first = false;
+        //                     lib_json += "{\"index\":";
+        //                     lib_json += std::to_string(i);
+        //                     lib_json += ",\"title\":\"";
+        //                     EscapeJsonAppend(meta.title, lib_json);
+        //                     lib_json += "\",\"artist\":\"";
+        //                     EscapeJsonAppend(meta.artist, lib_json);
+        //                     lib_json += "\",\"path\":\"";
+        //                     EscapeJsonAppend(path, lib_json);
+        //                     lib_json += "\"}";
+        //                 }
+        //                 lib_json += "]";
+
+        //                 std::string ai_instr;
+        //                 // ai_instr.reserve(256 + lib_json.size() + style.size());
+        //                 ai_instr += "{";
+        //                 ai_instr += "\"call_tool\":\"music.create_style_playlist\",";
+        //                 ai_instr += "\"style\":\"";
+        //                 EscapeJsonAppend(style, ai_instr);
+        //                 ai_instr += "\",";
+        //                 ai_instr += "\"library\":";
+        //                 ai_instr += lib_json;
+        //                 ai_instr += ",";
+        //                 ai_instr += "\"instruction\":\"请从 field 'library' 中选择多首最符合 style 的歌曲，依据知识库来判断，最后返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 3 首歌曲用于连续播放。\"";
+                        
+        //                 // ai_instr += "\"instruction\":\"请从 知识库 中选择多首最符合 style 的歌曲，最后返回并调用工具 music.create_style_playlist，工具参数为 { \\\"tracks\\\": <字符串数组或以逗号分隔的索引列表> }。至少返回 5 首歌曲用于连续播放。\"";
+        //                 ai_instr += "}";
+        //                 // 构造返回 JSON，包含 ai_instruction（供小智调用工具）
+        //                 cJSON *root = cJSON_CreateObject();
+        //                 cJSON_AddBoolToObject(root, "success", true);
+        //                 cJSON_AddStringToObject(root, "now_playing", ("正在为你挑选 " + style + " 歌曲").c_str());
+        //                 cJSON *ai = cJSON_CreateObject();
+        //                 cJSON_AddStringToObject(ai, "call_tool", "music.create_style_playlist");
+        //                 cJSON_AddStringToObject(ai, "instruction", ai_instr.c_str());
+        //                 cJSON_AddStringToObject(ai, "speak", ("我会为你挑选并播放 " + style + " 风格的歌曲").c_str());
+        //                 cJSON_AddItemToObject(root, "ai_instruction", ai);
+        //                 char *out = cJSON_PrintUnformatted(root);
+        //                 std::string ret = out ? out : std::string("{}");
+        //                 if (out) cJSON_free(out);
+        //                 cJSON_Delete(root);
+        //                 return ret;
+        //             }
+        //             else if((song_name.empty() && singer.empty())) {
+        //                 if(music->is_paused())
+        //                 {
+        //                     if(music->GetMusicOrStory_() == MUSIC)
+        //                     {
+        //                         music->ResumePlayback();
+        //                         return true;
+        //                     }
+        //                     else if(music->GetMusicOrStory_() == STORY)
+        //                     {
+        //                         music->StopStreaming();
+        //                     }
+        //                 }
+        //                 if(music->GetPlaybackMode() == PLAYBACK_MODE_RANDOM)
+        //                 {
+        //                     size_t lib_count = 0;
+        //                     auto all_music = music->GetMusicLibrary(lib_count);
+        //                     if (lib_count == 0) {
+        //                         return "{\"success\": false, \"message\": \"音乐库为空，无法随机播放\"}";
+        //                     }
+        //                     size_t pick = static_cast<size_t>(esp_random() % lib_count);
+        //                     const char* path = all_music[pick].file_path;
+        //                     if (!path || !path[0]) {
+        //                         return "{\"success\": false, \"message\": \"随机选曲失败，请重试\"}";
+        //                     }
+
+        //                     auto list = music->GetDefaultList();
+        //                     music->SetCurrentPlayList(list);
+        //                     music->SetPlayIndex(list, static_cast<int>(pick));
+        //                     music->EnableRecord(true, MUSIC);
+
+        //                     std::string now_playing = path;
+        //                     size_t pos = now_playing.find_last_of("/\\");
+        //                     if (pos != std::string::npos) now_playing = now_playing.substr(pos + 1);
+        //                     pos = now_playing.find_last_of('.');
+        //                     if (pos != std::string::npos) now_playing = now_playing.substr(0, pos);
+
+        //                     return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报一下）将为你播放", now_playing);
+        //                 }
+        //                 if (music->IfSavedMusicPosition()) {
+        //                     ESP_LOGI(TAG, "Resuming saved playback position");
+        //                     now_playing = music->GetCurrentSongName();
+        //                     music->EnableRecord(true, MUSIC);
+        //                     ESP_LOGI(TAG, "Resuming song: %s", now_playing.c_str());
+        //                     return BuildNowPlayingPayload("{\"call_tool\":\"actually.2\"}", "（简短播报一下）将为你继续播放", now_playing);
+        //                 } else {
+        //                     return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
+        //                 }
+        //             }
+        //             else if(!song_name.empty() && singer.empty())
+        //             {
+        //                 if(music->is_paused())
+        //                 {
+        //                     music->StopStreaming(); // 停止当前播放
+        //                 }
+        //                 ESP_LOGI(TAG, "Playing song: %s", song_name.c_str());
+        //                 auto index = music->SearchMusicIndexFromlist(song_name);
+        //                 auto playlist_name = music->GetDefaultList();
+        //                 if(index >=0 ) {
+        //                     music->SetPlayIndex(playlist_name, index);
+        //                     music->SetCurrentPlayList(playlist_name);
+        //                     // 把找到的歌曲信息保存并返回，同时告诉 AI 调用另一个工具去播放
+        //                     now_playing = song_name;
+        //                     // 构造 ai_instruction（机器可解析的调用指令：call_tool/play_music）
+        //                     music->EnableRecord(true, MUSIC);
+        //                     return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报一下）将为你播放", now_playing);
+        //                 }  else {
+        //                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+        //                 }
+        //             }
+        //             else if(!singer.empty() && song_name.empty())
+        //             {
+        //                 if(music->is_paused())
+        //                 {
+        //                     music->StopStreaming(); // 停止当前播放
+        //                 }
+        //                 // 直接使用 PSRAM 中的音乐库，避免大拷贝
+        //                 size_t out_count = 0;
+        //                 auto all_music = (music)->GetMusicLibrary(out_count);
+        //                 auto norm_singer = NormalizeForSearch(singer);
+        //                 std::vector<std::string> file_paths;
+        //                 for (size_t i = 0; i < out_count; ++i) {
+        //                     const char* path = all_music[i].file_path;
+        //                     if (!path) continue;
+        //                     auto meta = ParseSongMeta(path);
+        //                     if (meta.norm_artist.find(norm_singer) != std::string::npos) {
+        //                         file_paths.emplace_back(path);
+        //                     }
+        //                 }
+        //                 if (file_paths.empty()) {
+        //                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲\"}";
+        //                 }
+        //                 music->EnableRecord(true, MUSIC);
+        //                 // 创建临时播放列表
+        //                 std::string temp_playlist_name = "SearchResults_" + singer;
+        //                 music->CreatePlaylist(temp_playlist_name, file_paths);
+        //                 music->SetCurrentPlayList(temp_playlist_name);
+
+        //                 size_t pos = file_paths[0].find_last_of("/\\");
+        //                 if (pos != std::string::npos) 
+        //                     now_playing = file_paths[0].substr(pos + 1);
+
+        //                 pos = now_playing.find_last_of('.');
+        //                 if (pos != std::string::npos)
+        //                     now_playing = now_playing.substr(0, pos);
+
+        //                 ESP_LOGI(TAG, "Playing songs by singer: %s,->  %s", singer.c_str(),now_playing.c_str());
+
+
+        //                 return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "读出来：将为你播放", now_playing);
+        //             }
+        //             else if(!singer.empty() && !song_name.empty())
+        //             {
+        //                 music->SetMode(true);
+        //                 music->SetMusicOrStory_(MUSIC);
+        //                 if(music->is_paused())
+        //                 {
+        //                     music->StopStreaming(); // 停止当前播放
+        //                 }
+        //                 ESP_LOGI(TAG, "Playing song: %s by singer: %s", song_name.c_str(), singer.c_str());
+        //                 // 直接在 PSRAM 中查找匹配项并播放
+        //                 size_t out_count = 0;
+        //                 auto all_music = static_cast<Esp32Music*>(music)->GetMusicLibrary(out_count);
+        //                 bool found = false;
+        //                 auto need_title = NormalizeForSearch(song_name);
+        //                 auto need_artist = NormalizeForSearch(singer);
+        //                 auto index = music->SearchMusicIndexFromlistByArtSong(need_title,need_artist);
+        //                 const char* path = all_music[index].file_path;
+        //                 auto meta = ParseSongMeta(path);
+        //                 if (meta.norm_title == need_title && meta.norm_artist == need_artist) {
+        //                     music->SetPlayIndex(music->GetDefaultList(), index);
+        //                     music->EnableRecord(true, MUSIC);
+        //                     // 找到匹配的歌曲和歌手
+        //                     if (!music->PlayFromSD(path, song_name)) {
+        //                         return "{\"success\": false, \"message\": \"播放失败\"}";
+        //                     }
+        //                     music->SetCurrentPlayList(music->GetDefaultList());
+        //                     now_playing = singer + " - " + song_name;
+        //                     found = true;
+        //                 }
+                        
+        //                 if (!found) {
+        //                     return "{\"success\": false, \"message\": \"未找到匹配的歌曲和歌手\"}";
+        //                 }
+
+        //             }
+        //             else if(goon)
+        //             {
+        //                 if(music->is_paused())
+        //                 {
+        //                     music->ResumePlayback();
+        //                     return true;
+        //                 }
+        //                 if (music->IfSavedMusicPosition()) {
+        //                     ESP_LOGI(TAG, "Resuming saved playback position");
+        //                     now_playing = music->GetCurrentSongName();
+        //                     music->EnableRecord(true, MUSIC);
+        //                     ESP_LOGI(TAG, "Resuming song: %s", now_playing.c_str());
+        //                     return BuildNowPlayingPayload("{\"call_tool\":\"actually.2\"}", "（简短播报一下）将为你继续播放", now_playing);
+        //                 } else {
+        //                     return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
+        //                 }
+        //             }
+                    
+        //             return "{\"success\": true, \"message\": \"本地音乐开始播放\"}";
+        //         });
 
         AddTool("actually.2",
         "调用完 music.play后，如果函数返回内容里出现{\"call_tool\":\"actually.2\"}，请立即再调用 actually.2，参数留空。",

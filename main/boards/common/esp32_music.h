@@ -84,6 +84,13 @@ struct StoryEntry {
     std::string norm_story;
 };
 
+enum class PSMediaType : uint8_t { kMusic = 0, kStory = 1 };
+
+struct PSMediaInfo {
+    PSMediaType type;
+    std::string display_name;   // 音乐: 歌手-歌曲; 故事: 类别-故事
+    std::string norm_name;      // 规范化名称，供模糊搜索
+};
 
 class Esp32Music : public Music {
 private:
@@ -238,6 +245,13 @@ private:
     bool is_paused(void){return is_paused_;};
     int FindValidMp3SyncWord(uint8_t* data, int data_len);
     bool IsValidMp3FrameHeader(uint8_t* header);
+
+    std::vector<PSMediaInfo> media_library_;
+    std::vector<const PSMediaInfo*> media_view_;
+    mutable std::mutex media_library_mutex_;
+    void BuildUnifiedMediaLibrary();
+
+
     PSStoryEntry *ps_story_index_ = nullptr; // PSRAM 分配的数组
     size_t ps_story_count_ = 0;
     size_t ps_story_capacity_ = 0;
@@ -450,8 +464,11 @@ public:
     virtual const PSStoryEntry* GetStoryLibrary(size_t &out_count) const override;
     size_t FindStoryIndexFuzzy(const std::string& story_name) const override;
     virtual void UpdateStoryRecordList(const std::string& category, const std::string& story, const std::string& chapter)override;
-
-};
+    
+    void RebuildUnifiedMediaLibrary() { BuildUnifiedMediaLibrary(); }
+    const std::vector<PSMediaInfo>& GetUnifiedMediaLibrary() const { return media_library_; }
+    const std::vector<const PSMediaInfo*>& GetUnifiedMediaView() const { return media_view_; }
+    std::vector<const PSMediaInfo*> FuzzySearchMedia(const std::string& query, size_t limit = 10) const;};
 
 
 // 全局辅助函数：从文件名或输入中解析出 SongMeta

@@ -124,6 +124,9 @@ public:
     virtual size_t FindStoryIndexFuzzy(const std::string& story_name) const = 0;
     virtual void UpdateStoryRecordList(const std::string& category, const std::string& story, const std::string& chapter) = 0;
     virtual void SetCurrentStoryIndex(int index) =0;
+    virtual void RebuildUnifiedMediaLibrary()=0;
+    // virtual const std::vector<PSMediaInfo>& GetUnifiedMediaLibrary() const =0;
+    // virtual const std::vector<const PSMediaInfo*>& GetUnifiedMediaView() const =0;
 };
 
 #endif // MUSIC_H 

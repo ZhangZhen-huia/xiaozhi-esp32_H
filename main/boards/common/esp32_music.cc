@@ -3978,3 +3978,94 @@ void Esp32Music::SetCurrentStoryIndex(int index)
     current_storyplay_idx_ = index;
     ESP_LOGI(TAG,"Current Story Index:%d",current_storyplay_idx_);
 }
+
+
+void Esp32Music::BuildUnifiedMediaLibrary() {
+    std::vector<PSMediaInfo> merged;
+    std::vector<const PSMediaInfo*> view;
+
+    {
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            const auto& item = ps_music_library_[i];
+            if (!item.song_name) continue;
+            std::string song = item.song_name;
+            std::string artist = item.artist ? item.artist : "";
+            std::string display = artist.empty() ? song : artist + "-" + song;
+
+            PSMediaInfo info;
+            info.type = PSMediaType::kMusic;
+            info.display_name = display;
+            info.norm_name = NormalizeForSearch(display);
+            merged.emplace_back(std::move(info));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        for (size_t i = 0; i < ps_story_count_; ++i) {
+            const auto& story = ps_story_index_[i];
+            if (!story.story_name) continue;
+            std::string story_name = story.story_name;
+            std::string category = story.category ? story.category : "";
+            std::string display = category.empty() ? story_name : category + "-" + story_name;
+
+            PSMediaInfo info;
+            info.type = PSMediaType::kStory;
+            info.display_name = display;
+            info.norm_name = NormalizeForSearch(display);
+            merged.emplace_back(std::move(info));
+        }
+    }
+
+    {
+        std::lock_guard<std::mutex> guard(media_library_mutex_);
+        media_library_.swap(merged);
+        view.reserve(media_library_.size());
+        for (const auto& item : media_library_) {
+            view.push_back(&item);
+        }
+        std::sort(view.begin(), view.end(),
+                  [](const PSMediaInfo* a, const PSMediaInfo* b) { return a->norm_name < b->norm_name; });
+        media_view_.swap(view);
+    }
+
+    ESP_LOGI(TAG, "Unified media library built, total=%zu", media_library_.size());
+}
+
+std::vector<const PSMediaInfo*> Esp32Music::FuzzySearchMedia(const std::string& query, size_t limit) const {
+    std::vector<const PSMediaInfo*> results;
+    if (query.empty() || limit == 0) return results;
+
+    std::string norm_query = NormalizeForSearch(query);
+    if (norm_query.empty()) return results;
+
+    std::lock_guard<std::mutex> guard(media_library_mutex_);
+    if (media_view_.empty()) return results;
+
+    auto push_unique = [&](const PSMediaInfo* item) {
+        if (results.size() >= limit) return;
+        if (std::find(results.begin(), results.end(), item) == results.end()) {
+            results.push_back(item);
+        }
+    };
+
+    // 1) 优先匹配子串
+    for (const auto* item : media_view_) {
+        if (item->norm_name.find(norm_query) != std::string::npos) {
+            push_unique(item);
+            if (results.size() >= limit) return results;
+        }
+    }
+
+    // 2) 次要匹配：子序列
+    for (const auto* item : media_view_) {
+        if (results.size() >= limit) break;
+        if (item->norm_name.find(norm_query) != std::string::npos) continue;
+        if (IsSubsequence(norm_query.c_str(), item->norm_name.c_str())) {
+            push_unique(item);
+        }
+    }
+
+    return results;
+}

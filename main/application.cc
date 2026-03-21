@@ -777,8 +777,10 @@ void Application::Start() {
 
     auto music = board.GetMusic();
     if(music) {
+
         music->ScanAndLoadMusic();
         music->ScanAndLoadStory();
+        music->RebuildUnifiedMediaLibrary();
     }
     esp_reset_reason_t reason = esp_reset_reason();
 
