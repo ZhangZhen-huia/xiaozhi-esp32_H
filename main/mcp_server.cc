@@ -204,7 +204,7 @@ void McpServer::AddCommonTools() {
             });
 
     if (music) {
-            AddTool("music.set_play_duration",
+            AddTool("set_duration",
             "设置一个全局倒计时（秒）。若设置为 0 则取消定时器，与当前播放状态无关。",
             PropertyList({
                 Property("seconds", kPropertyTypeInteger, 0, 0, 86400)
@@ -235,7 +235,7 @@ void McpServer::AddCommonTools() {
                 return std::string("{\"success\": false, \"message\": \"设置全局计时失败\"}");
             });
 
-        AddTool("music.extend_play",
+        AddTool("extend_duation",
             "延长当前全局计时（秒）。若当前没有计时器则自动从现在开始计时。",
             PropertyList({
                 Property("extra", kPropertyTypeInteger, 0, 0, 86400)
@@ -502,7 +502,9 @@ void McpServer::AddCommonTools() {
                     std::string target = NormalizeForSearch(target_raw);
                     bool force_music = (target == "music" || target == "音乐");
                     bool force_story = (target == "story" || target == "故事");
-
+                    ESP_LOGE(TAG, "general.play called with name='%s', artist='%s', target='%s', mode='%s', GoOn=%s, duration=%d, style='%s', Chapter_Index=%d",
+                             name.c_str(), artist.c_str(), target_raw.c_str(), mode_str.c_str(), goon ? "true" : "false", duration, style.c_str(), chapter_idx);
+                   
                     // 如果未明确指定目标，根据特有参数或模糊搜索进行推断
                     if (!force_music && !force_story) {
                         if (!style.empty()) {
@@ -549,6 +551,7 @@ void McpServer::AddCommonTools() {
                     std::string now_playing;
 
                     if (force_story) {
+                        ESP_LOGE(TAG,"===================故事=======================");
                         // ==================== STORY 分支 ====================
                         std::string cat = artist;
                         std::string story_name = name;
@@ -608,6 +611,7 @@ void McpServer::AddCommonTools() {
                         // ==================== MUSIC 分支 ====================
                         std::string song_name = name;
                         std::string singer = artist;
+                        ESP_LOGE(TAG,"===================音乐=======================");
 
                         if (!style.empty()) {
                             size_t lib_count = 0;
@@ -1542,191 +1546,191 @@ void McpServer::AddCommonTools() {
                         return "{\"success\": false, \"message\": \"查询失败\"}";
                     });
                 
-            // story: 播放指定类别/故事/章节
-            AddTool("story.play",
-                "用于播放故事。先用story.search找到到完整的故事路径，调用完之后根据当前工具返回值来调用下一个工具，出现actually.3就调用工具actually.3，出现actually.4就调用工具actually.4。\n"
-                "参数: \n"
-                "`Category`:故事的类别,可选\n"
-                " `Story`:故事名称,可选\n"
-                " `Chapter_Index`:故事章节,(可选，默认0)\n"
-                " `GoOn`: 继续播放上次的故事标志位，默认为`false`。\n"
-                " `mode`: 播放模式，有`随机`、`循环`和`顺序`三种，默认为`顺序`。\n"
-                "返回:\n"
-                "  播放状态信息，播报要播放的内容，并指示调用下一个工具actually.3或者actually.4。",
-                PropertyList({
-                    Property("Category", kPropertyTypeString, ""),
-                    Property("Story", kPropertyTypeString, ""),
-                    Property("Chapter_Index", kPropertyTypeInteger, 1, 1, 1000),
-                    Property("GoOn", kPropertyTypeBoolean,false),
-                    Property("mode", kPropertyTypeString,"顺序播放"),
-                    Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
-                }),
-                [music,&board,app](const PropertyList& properties) -> ReturnValue {
-                    #if !my
-                    #if battery_check
-                    if(board.GetBatteryLevel() <= 10)
-                    {
-                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
-                    }
-                    #endif
-                    #endif
-                    auto cat = properties["Category"].value<std::string>();
-                    auto name = properties["Story"].value<std::string>();
-                    int chapter_idx = properties["Chapter_Index"].value<int>();
-                    auto goon = properties["GoOn"].value<bool>();
-                    auto mode = properties["mode"].value<std::string>();
-                    int duration = properties["duration"].value<int>();
-                    if (duration > 0) app->Set_PlayDuration(duration);
-                    ESP_LOGI(TAG, "story.play called with Category: %s, Story: %s, Chapter_Index: %d, GoOn: %d, mode: %s, duration: %d",
-                             cat.empty()?"":cat.c_str(), name.empty()?"":name.c_str(), chapter_idx, goon, mode.c_str(), duration);
-                    // 解析播放模式（支持中文与常见英文）
-                    mode = NormalizeForSearch(mode);
-                    if(mode == "随机播放" || mode == "随机" || mode == "shuffle" || mode == "random") {
-                        music->SetRandomMode(true);
-                        ESP_LOGI(TAG, "Set Random Play Mode for Story");
-                    }
-                    else if (mode == "循环播放" || mode== "循环" || mode == "loop") {
-                        music->SetLoopMode(true);
-                        ESP_LOGI(TAG, "Set Loop Play Mode for Story");
-                    }
-                    else {//默认顺序播放
-                        music->SetOrderMode(true);
-                        ESP_LOGI(TAG, "Set Order Play Mode for Story");
-                    }
+            // // story: 播放指定类别/故事/章节
+            // AddTool("story.play",
+            //     "用于播放故事。先用story.search找到到完整的故事路径，调用完之后根据当前工具返回值来调用下一个工具，出现actually.3就调用工具actually.3，出现actually.4就调用工具actually.4。\n"
+            //     "参数: \n"
+            //     "`Category`:故事的类别,可选\n"
+            //     " `Story`:故事名称,可选\n"
+            //     " `Chapter_Index`:故事章节,(可选，默认0)\n"
+            //     " `GoOn`: 继续播放上次的故事标志位，默认为`false`。\n"
+            //     " `mode`: 播放模式，有`随机`、`循环`和`顺序`三种，默认为`顺序`。\n"
+            //     "返回:\n"
+            //     "  播放状态信息，播报要播放的内容，并指示调用下一个工具actually.3或者actually.4。",
+            //     PropertyList({
+            //         Property("Category", kPropertyTypeString, ""),
+            //         Property("Story", kPropertyTypeString, ""),
+            //         Property("Chapter_Index", kPropertyTypeInteger, 1, 1, 1000),
+            //         Property("GoOn", kPropertyTypeBoolean,false),
+            //         Property("mode", kPropertyTypeString,"顺序播放"),
+            //         Property("duration", kPropertyTypeInteger, 0, 0, 86400), // 播放时长（秒），0 表示无限制
+            //     }),
+            //     [music,&board,app](const PropertyList& properties) -> ReturnValue {
+            //         #if !my
+            //         #if battery_check
+            //         if(board.GetBatteryLevel() <= 10)
+            //         {
+            //             return "{\"success\": false, \"message\": \"当前电量过低，无法播放，请为设备充电后重试。\"}";
+            //         }
+            //         #endif
+            //         #endif
+            //         auto cat = properties["Category"].value<std::string>();
+            //         auto name = properties["Story"].value<std::string>();
+            //         int chapter_idx = properties["Chapter_Index"].value<int>();
+            //         auto goon = properties["GoOn"].value<bool>();
+            //         auto mode = properties["mode"].value<std::string>();
+            //         int duration = properties["duration"].value<int>();
+            //         if (duration > 0) app->Set_PlayDuration(duration);
+            //         ESP_LOGI(TAG, "story.play called with Category: %s, Story: %s, Chapter_Index: %d, GoOn: %d, mode: %s, duration: %d",
+            //                  cat.empty()?"":cat.c_str(), name.empty()?"":name.c_str(), chapter_idx, goon, mode.c_str(), duration);
+            //         // 解析播放模式（支持中文与常见英文）
+            //         mode = NormalizeForSearch(mode);
+            //         if(mode == "随机播放" || mode == "随机" || mode == "shuffle" || mode == "random") {
+            //             music->SetRandomMode(true);
+            //             ESP_LOGI(TAG, "Set Random Play Mode for Story");
+            //         }
+            //         else if (mode == "循环播放" || mode== "循环" || mode == "loop") {
+            //             music->SetLoopMode(true);
+            //             ESP_LOGI(TAG, "Set Loop Play Mode for Story");
+            //         }
+            //         else {//默认顺序播放
+            //             music->SetOrderMode(true);
+            //             ESP_LOGI(TAG, "Set Order Play Mode for Story");
+            //         }
 
-                    std::string now_playing; // 要返回给调用方的播放提示
-                    if((cat.empty() && name.empty() && chapter_idx==0)) {
-                        ESP_LOGI(TAG, "Continuing last story playback");
-                        if(music->is_paused())
-                        {
-                            if(music->GetMusicOrStory_() == STORY)
-                            {
-                                music->ResumePlayback();
-                                return true;
-                            }
-                            else if(music->GetMusicOrStory_() == MUSIC)
-                            {
-                                music->StopStreaming(); // 停止当前播放
-                            }
+            //         std::string now_playing; // 要返回给调用方的播放提示
+            //         if((cat.empty() && name.empty() && chapter_idx==0)) {
+            //             ESP_LOGI(TAG, "Continuing last story playback");
+            //             if(music->is_paused())
+            //             {
+            //                 if(music->GetMusicOrStory_() == STORY)
+            //                 {
+            //                     music->ResumePlayback();
+            //                     return true;
+            //                 }
+            //                 else if(music->GetMusicOrStory_() == MUSIC)
+            //                 {
+            //                     music->StopStreaming(); // 停止当前播放
+            //                 }
 
-                        }
-                        // 播放上次的故事
-                        if (music->IfSavedStoryPosition()) {
-                            now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
-                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
-                        } else {
-                            return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
-                        }
-                    }
-                    else if(cat.empty() && !name.empty() )
-                    {
-                        std::string found_cat;
-                        auto index = music->FindStoryIndexFuzzy(name);  
+            //             }
+            //             // 播放上次的故事
+            //             if (music->IfSavedStoryPosition()) {
+            //                 now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
+            //                 return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
+            //             } else {
+            //                 return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
+            //             }
+            //         }
+            //         else if(cat.empty() && !name.empty() )
+            //         {
+            //             std::string found_cat;
+            //             auto index = music->FindStoryIndexFuzzy(name);  
                         
-                        size_t count = 0;
-                        auto storys = music->GetStoryLibrary(count);
-                        std::string final_name;
-                        if(index != -1)
-                        {
-                            found_cat = storys[index].category;
-                            final_name = storys[index].story_name;
-                        }
-                        else
-                        {
-                            return "{\"success\": false, \"message\": \"未找到该故事\"}";
-                        }
-                        music->SetCurrentStoryIndex(index);
-                        music->SetCurrentCategoryName(found_cat);
-                        music->SetCurrentStoryName(final_name);
-                        // if(chapter_idx == 0)
-                        // {
-                        //     chapter_idx = 1; // 默认从第一章开始播放
-                        // }
-                        music->SetCurrentChapterIndex(chapter_idx-1);
-                        now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
-                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
-                    }
-                    else if(!cat.empty() && name.empty())
-                    {
-                        //这样就是在这个类别里面循环播放
-                        music->SetCurrentCategoryName(cat);
-                        // 选择该类别下的第一个故事
-                        auto stories = music->GetStoriesInCategory(cat);
-                        if(stories.empty())
-                        {
-                            return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
-                        }
-                        auto count = stories.size();
-                        size_t idx = esp_random() % count;
-                        name = stories[idx];
+            //             size_t count = 0;
+            //             auto storys = music->GetStoryLibrary(count);
+            //             std::string final_name;
+            //             if(index != -1)
+            //             {
+            //                 found_cat = storys[index].category;
+            //                 final_name = storys[index].story_name;
+            //             }
+            //             else
+            //             {
+            //                 return "{\"success\": false, \"message\": \"未找到该故事\"}";
+            //             }
+            //             music->SetCurrentStoryIndex(index);
+            //             music->SetCurrentCategoryName(found_cat);
+            //             music->SetCurrentStoryName(final_name);
+            //             // if(chapter_idx == 0)
+            //             // {
+            //             //     chapter_idx = 1; // 默认从第一章开始播放
+            //             // }
+            //             music->SetCurrentChapterIndex(chapter_idx-1);
+            //             now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
+            //             return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+            //         }
+            //         else if(!cat.empty() && name.empty())
+            //         {
+            //             //这样就是在这个类别里面循环播放
+            //             music->SetCurrentCategoryName(cat);
+            //             // 选择该类别下的第一个故事
+            //             auto stories = music->GetStoriesInCategory(cat);
+            //             if(stories.empty())
+            //             {
+            //                 return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
+            //             }
+            //             auto count = stories.size();
+            //             size_t idx = esp_random() % count;
+            //             name = stories[idx];
 
-                        auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
-                        if(index == -1)
-                        {
-                            return "{\"success\": false, \"message\": \"未找到该故事\"}";
-                        }
-                        auto storys = music->GetStoryLibrary(count);
-                        auto final_name = storys[index].story_name;
-                        music->SetCurrentStoryName(final_name);
-                        chapter_idx = 1; // 从第一章开始播放
-                        music->SetCurrentStoryIndex(index);
-                        music->SetCurrentChapterIndex(chapter_idx-1);
-                        now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
-                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
-                    }
-                    else if(!cat.empty() && !name.empty())
-                    {
-                       auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
-                        if(index == -1)
-                        {
-                            return "{\"success\": false, \"message\": \"未找到该故事\"}";
-                        }
-                        size_t count = 0;
-                        auto storys = music->GetStoryLibrary(count);
-                        auto final_name = storys[index].story_name;
-                        music->SetCurrentStoryIndex(index);
-                        music->SetCurrentStoryName(final_name);
-                        music->SetCurrentCategoryName(cat);
-                        // if(chapter_idx <=0 )
-                        //     chapter_idx = 1;
+            //             auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
+            //             if(index == -1)
+            //             {
+            //                 return "{\"success\": false, \"message\": \"未找到该故事\"}";
+            //             }
+            //             auto storys = music->GetStoryLibrary(count);
+            //             auto final_name = storys[index].story_name;
+            //             music->SetCurrentStoryName(final_name);
+            //             chapter_idx = 1; // 从第一章开始播放
+            //             music->SetCurrentStoryIndex(index);
+            //             music->SetCurrentChapterIndex(chapter_idx-1);
+            //             now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章";
+            //             return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+            //         }
+            //         else if(!cat.empty() && !name.empty())
+            //         {
+            //            auto index = music->FindStoryIndexInCategory(cat, name); // 预加载章节列表
+            //             if(index == -1)
+            //             {
+            //                 return "{\"success\": false, \"message\": \"未找到该故事\"}";
+            //             }
+            //             size_t count = 0;
+            //             auto storys = music->GetStoryLibrary(count);
+            //             auto final_name = storys[index].story_name;
+            //             music->SetCurrentStoryIndex(index);
+            //             music->SetCurrentStoryName(final_name);
+            //             music->SetCurrentCategoryName(cat);
+            //             // if(chapter_idx <=0 )
+            //             //     chapter_idx = 1;
 
                         
-                        auto chapters = music->GetCurrentChapterName();
-                        size_t pos = chapters.find_last_of("/\\");
-                        if(pos != std::string::npos) 
-                            chapters = chapters.substr(pos + 1);
-                        pos = chapters.find_last_of('.');
-                        if(pos != std::string::npos)
-                            chapters = chapters.substr(0, pos);
+            //             auto chapters = music->GetCurrentChapterName();
+            //             size_t pos = chapters.find_last_of("/\\");
+            //             if(pos != std::string::npos) 
+            //                 chapters = chapters.substr(pos + 1);
+            //             pos = chapters.find_last_of('.');
+            //             if(pos != std::string::npos)
+            //                 chapters = chapters.substr(0, pos);
 
-                        // if(chapter_idx == 0)
-                        // {
-                        //     chapter_idx = 1; // 默认从第一章开始播放
-                        // }
-                        ESP_LOGE(TAG, "chapter_idx=%d",chapter_idx);
-                        music->SetCurrentChapterIndex(chapter_idx-1);
-                        now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章" + chapters;
-                        return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+            //             // if(chapter_idx == 0)
+            //             // {
+            //             //     chapter_idx = 1; // 默认从第一章开始播放
+            //             // }
+            //             ESP_LOGE(TAG, "chapter_idx=%d",chapter_idx);
+            //             music->SetCurrentChapterIndex(chapter_idx-1);
+            //             now_playing = cat + " 故事：" + final_name + " 第" + std::to_string(chapter_idx) + "章" + chapters;
+            //             return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
 
-                    }
-                    else if( goon == true)
-                    {
-                        ESP_LOGI(TAG, "Continuing last story playback");
-                        if(music->is_paused())
-                        {
-                            music->ResumePlayback();
-                            return true;
-                        }
-                        // 播放上次的故事
-                        if (music->IfSavedStoryPosition()) {
-                            now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
-                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
-                        } else {
-                            return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
-                        }
-                    }
-                    return "{\"success\": false, \"message\": \"播放故事失败\"}";
-                });
+            //         }
+            //         else if( goon == true)
+            //         {
+            //             ESP_LOGI(TAG, "Continuing last story playback");
+            //             if(music->is_paused())
+            //             {
+            //                 music->ResumePlayback();
+            //                 return true;
+            //             }
+            //             // 播放上次的故事
+            //             if (music->IfSavedStoryPosition()) {
+            //                 now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
+            //                 return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
+            //             } else {
+            //                 return "{\"success\": false, \"message\": \"没有保存的播放记录\"}";
+            //             }
+            //         }
+            //         return "{\"success\": false, \"message\": \"播放故事失败\"}";
+            //     });
             
         AddTool("actually.4",
                 "调用完 story.play后，如果函数返回内容里出现{\"call_tool\":\"actually.4\"}，请立即再调用 actually.4，参数留空。",

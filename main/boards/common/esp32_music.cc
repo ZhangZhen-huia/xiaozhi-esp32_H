@@ -4050,7 +4050,22 @@ std::vector<const PSMediaInfo*> Esp32Music::FuzzySearchMedia(const std::string& 
         }
     };
 
-    // 1) 优先匹配子串
+    // 1) 最优先匹配：独立的音乐名称或故事名称（连字符后面的部分）包含查询词
+    for (const auto* item : media_view_) {
+        std::string title = item->display_name;
+        size_t dash = title.find('-');
+        if (dash != std::string::npos) {
+            title = title.substr(dash + 1); // 提取连字符后的名字部分
+        }
+        std::string norm_title = NormalizeForSearch(title);
+        
+        if (norm_title.find(norm_query) != std::string::npos) {
+            push_unique(item);
+            if (results.size() >= limit) return results;
+        }
+    }
+
+    // 2) 其次匹配：整体名称子串匹配（可能包含艺术家/分类的信息）
     for (const auto* item : media_view_) {
         if (item->norm_name.find(norm_query) != std::string::npos) {
             push_unique(item);
@@ -4058,7 +4073,7 @@ std::vector<const PSMediaInfo*> Esp32Music::FuzzySearchMedia(const std::string& 
         }
     }
 
-    // 2) 次要匹配：子序列
+    // 3) 最后匹配：不连续的子序列匹配
     for (const auto* item : media_view_) {
         if (results.size() >= limit) break;
         if (item->norm_name.find(norm_query) != std::string::npos) continue;

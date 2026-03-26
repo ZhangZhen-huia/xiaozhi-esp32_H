@@ -118,6 +118,7 @@ private:
     Button boot_button_Boot_IO0;
     int battery_ = 0;
     bool longpress_flag_ = false;
+    uint8_t click_count = 0;
     sdmmc_card_t *sdcard_ = nullptr; // 增：保存已挂载的 sd 卡指针
     #if my
     Pca9557* pca9557_;
@@ -233,59 +234,70 @@ private:
                 GetBacklight()->SetBrightness(levels[idx], true, true);
 
             } else if (device_function == Function_AIAssistant) {
-
-                app.Resetsleep_music_ticks_();
-                int64_t now_ms = esp_timer_get_time() / 1000;
-                int64_t prev_ms = last_click_ms.load(std::memory_order_relaxed);
-
-
-
-                // 如果上一次单击存在且在阈值内 -> 视为双击：恢复原始状态并执行双击动作
-                if (prev_ms != 0 && (now_ms - prev_ms) < double_click_threshold_ms) {
-                    // 停掉定时器
-                    if (click_timer) esp_timer_stop(click_timer);
-
-                    int prev_state = pending_prev_state.load(std::memory_order_relaxed);
-                    // 若记录了原始状态，则再次切换（Toggle）回去
-                    if (prev_state != -1) {
-                        // 调度回主线程执行恢复，避免在中断/其他上下文直接调用
-                        app.Schedule([&app]() {
-                            ESP_LOGI(TAG, "Boot按键 双击：恢复到上一次状态（由双击触发）");
-                            app.ToggleChatState(); // 第二次 Toggle 恢复到原始状态
-                        });
-                    } else {
-                        ESP_LOGW(TAG, "Boot按键 双击检测到但没有记录原始状态，跳过恢复");
-                    }
-
-                    // 执行原有的双击行为（如音乐切换）
-                    auto music = Board::GetMusic();
-                    if (music && music->ReturnMode()) {
-                        music->SetEventNextPlay();
-                        ESP_LOGI(TAG, "Boot按键 双击触发: 下一首/下一个章节");
-                    } else {
-                        ESP_LOGI(TAG, "Boot按键 双击触发: 非音乐模式，无其他操作");
-                    }
-
-                    // 清理标记
-                    last_click_ms.store(0, std::memory_order_relaxed);
-                    pending_prev_state.store(-1, std::memory_order_relaxed);
-                    return;
-                }
-
-                // 否则这是第一次单击：记录当前状态，立即切换，并启动定时器等待可能的第二次单击
-                int cur_state = app.GetDeviceState();
-                pending_prev_state.store(cur_state, std::memory_order_relaxed);
-
-                // 立即切换状态（第一次单击即时生效）
-                app.Schedule([&app]() {
-                    ESP_LOGI(TAG, "Boot按键 单击：立即切换聊天状态，当前=%d", app.GetDeviceState());
-                    app.ToggleChatState();
-                });
                 
-                // 记录时间并启动定时器：在阈值期内若未发生第二次单击则不再恢复
-                last_click_ms.store(now_ms, std::memory_order_relaxed);
-                if (click_timer) {
-                    esp_timer_start_once(click_timer, double_click_threshold_ms * 1000); // 单位微秒
+                if(!triple_press_window_expired.load(std::memory_order_acquire)) {
+                    click_count++;
+                    ESP_LOGW(TAG, "Boot按键 单击：%d", click_count);
+                    if(click_count >= 3) {
+                        click_count = 0;
+                        ResetWifiConfiguration();
+                    }
+                }
+                else
+                {
+                    app.Resetsleep_music_ticks_();
+                    int64_t now_ms = esp_timer_get_time() / 1000;
+                    int64_t prev_ms = last_click_ms.load(std::memory_order_relaxed);
+
+
+
+                    // 如果上一次单击存在且在阈值内 -> 视为双击：恢复原始状态并执行双击动作
+                    if (prev_ms != 0 && (now_ms - prev_ms) < double_click_threshold_ms) {
+                        // 停掉定时器
+                        if (click_timer) esp_timer_stop(click_timer);
+
+                        int prev_state = pending_prev_state.load(std::memory_order_relaxed);
+                        // 若记录了原始状态，则再次切换（Toggle）回去
+                        if (prev_state != -1) {
+                            // 调度回主线程执行恢复，避免在中断/其他上下文直接调用
+                            app.Schedule([&app]() {
+                                ESP_LOGI(TAG, "Boot按键 双击：恢复到上一次状态（由双击触发）");
+                                app.ToggleChatState(); // 第二次 Toggle 恢复到原始状态
+                            });
+                        } else {
+                            ESP_LOGW(TAG, "Boot按键 双击检测到但没有记录原始状态，跳过恢复");
+                        }
+
+                        // 执行原有的双击行为（如音乐切换）
+                        auto music = Board::GetMusic();
+                        if (music && music->ReturnMode()) {
+                            music->SetEventNextPlay();
+                            ESP_LOGI(TAG, "Boot按键 双击触发: 下一首/下一个章节");
+                        } else {
+                            ESP_LOGI(TAG, "Boot按键 双击触发: 非音乐模式，无其他操作");
+                        }
+
+                        // 清理标记
+                        last_click_ms.store(0, std::memory_order_relaxed);
+                        pending_prev_state.store(-1, std::memory_order_relaxed);
+                        return;
+                    }
+
+                    // 否则这是第一次单击：记录当前状态，立即切换，并启动定时器等待可能的第二次单击
+                    int cur_state = app.GetDeviceState();
+                    pending_prev_state.store(cur_state, std::memory_order_relaxed);
+
+                    // 立即切换状态（第一次单击即时生效）
+                    app.Schedule([&app]() {
+                        ESP_LOGI(TAG, "Boot按键 单击：立即切换聊天状态，当前=%d", app.GetDeviceState());
+                        app.ToggleChatState();
+                    });
+                    
+                    // 记录时间并启动定时器：在阈值期内若未发生第二次单击则不再恢复
+                    last_click_ms.store(now_ms, std::memory_order_relaxed);
+                    if (click_timer) {
+                        esp_timer_start_once(click_timer, double_click_threshold_ms * 1000); // 单位微秒
+                    }
                 }
             }
         });
@@ -321,20 +333,31 @@ private:
 
         // 保留 OnDoubleClick 回调（如果仍需），但避免与上面双击路径重复触发
         boot_button_Boot_IO0.OnDoubleClick([this]() {
-            auto& app = Application::GetInstance();
-            app.Resetsleep_music_ticks_();
-            // int64_t now_ms = esp_timer_get_time() / 1000;
-            int64_t handled_ms = last_click_ms.load(std::memory_order_relaxed);
-            // 如果双击已由上面的单击路径处理（在同一时间窗口内），则忽略此回调
-            if (handled_ms == 0) {
-                // 如果这里触发，说明硬件/库直接检测到双击（非我们用两次单击合成）
-                auto music = Board::GetMusic();
-                if (music && music->ReturnMode()) {
-                    music->SetEventNextPlay();
-                    ESP_LOGI(TAG, "Boot按键 双击回调触发: 下一首/下一个章节");
+
+            if(!triple_press_window_expired.load(std::memory_order_acquire)) {
+                click_count+=2;
+                if(click_count >= 3) {
+                    click_count = 0;
+                    ResetWifiConfiguration();
                 }
-            } else {
-                ESP_LOGI(TAG, "Boot按键 双击回调被忽略（已由单击路径处理或等待中）");
+            }
+            else
+            {
+                auto& app = Application::GetInstance();
+                app.Resetsleep_music_ticks_();
+                // int64_t now_ms = esp_timer_get_time() / 1000;
+                int64_t handled_ms = last_click_ms.load(std::memory_order_relaxed);
+                // 如果双击已由上面的单击路径处理（在同一时间窗口内），则忽略此回调
+                if (handled_ms == 0) {
+                    // 如果这里触发，说明硬件/库直接检测到双击（非我们用两次单击合成）
+                    auto music = Board::GetMusic();
+                    if (music && music->ReturnMode()) {
+                        music->SetEventNextPlay();
+                        ESP_LOGI(TAG, "Boot按键 双击回调触发: 下一首/下一个章节");
+                    }
+                } else {
+                    ESP_LOGI(TAG, "Boot按键 双击回调被忽略（已由单击路径处理或等待中）");
+                }
             }
         });
     }
