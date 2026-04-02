@@ -65,16 +65,16 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
         if (strstr(models_->model_name[i], ESP_WN_PREFIX) != NULL) {
             // 获取唤醒词
             char* words = esp_srmodel_get_wake_words(models_, models_->model_name[i]);
-            auto &app = Application::GetInstance();
-            std::string device_role_str = "你好小智";
-            if(app.device_Role == Role_Xiaozhi){
-                device_role_str = "你好小智";
-            } else if(app.device_Role == Role_XiaoMing){
-                device_role_str = "小明同学";
-            }
+            // auto &app = Application::GetInstance();
+            // std::string device_role_str = "你好小智";
+            // if(app.device_Role == Role_Xiaozhi){
+            //     device_role_str = "你好小智";
+            // } else if(app.device_Role == Role_XiaoMing){
+            //     device_role_str = "小明同学";
+            // }
             
-            if (strstr(words, device_role_str.c_str()) != NULL) {
-                // 如果包含 "你好小智"，则添加到新模型列表中
+            // if (strstr(words, device_role_str.c_str()) != NULL) {
+            //     // 如果包含 "你好小智"，则添加到新模型列表中
                 filtered_models.model_name = (char**)realloc(filtered_models.model_name, (filtered_models.num + 1) * sizeof(char*));
                 filtered_models.model_info = (char**)realloc(filtered_models.model_info, (filtered_models.num + 1) * sizeof(char*));
                 filtered_models.model_data = (srmodel_data_t**)realloc(filtered_models.model_data, (filtered_models.num + 1) * sizeof(srmodel_data_t*));
@@ -94,9 +94,9 @@ bool AfeWakeWord::Initialize(AudioCodec* codec, srmodel_list_t* models_list) {
                     ESP_LOGI(TAG, "Wake word: %s", word.c_str());
                     wake_words_.push_back(word);
                 }
-            } else {
-                ESP_LOGW(TAG, "Skipping model without '%s': %s", device_role_str.c_str(), models_->model_name[i]);
-            }
+            // } else {
+            //     ESP_LOGW(TAG, "Skipping model without '%s': %s", device_role_str.c_str(), models_->model_name[i]);
+            // }
         }
     }
 

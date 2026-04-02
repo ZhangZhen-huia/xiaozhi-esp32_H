@@ -2,7 +2,7 @@
     "target": "esp32s3",
     "builds": [
         {
-            "name": "lichuang-dev",
+            "name": "zegbot",
             "sdkconfig_append": [
                 "CONFIG_USE_DEVICE_AEC=y"
             ]

@@ -28,7 +28,7 @@
 #include <driver/i2c_master.h>
 #include <driver/i2s_tdm.h>
 #include <driver/ledc.h>
-
+#include <esp_http_client.h>
 #define TAG "Application"
 
 extern bool NotResumePlayback;
@@ -268,72 +268,85 @@ void Application::ShowBatteryLevel(int percent) {
     snprintf(buf, sizeof(buf), "当前电量：%d%%", percent);
     Alert("电量", buf, "battery", std::string_view());
 
-    // 单数字音效映射（0-9）
-    struct digit_sound {
-        char digit;
-        const std::string_view& sound;
-    };
-    static const std::array<digit_sound, 10> digit_sounds{{
-        digit_sound{'0', Lang::Sounds::OGG_0},
-        digit_sound{'1', Lang::Sounds::OGG_1},
-        digit_sound{'2', Lang::Sounds::OGG_2},
-        digit_sound{'3', Lang::Sounds::OGG_3},
-        digit_sound{'4', Lang::Sounds::OGG_4},
-        digit_sound{'5', Lang::Sounds::OGG_5},
-        digit_sound{'6', Lang::Sounds::OGG_6},
-        digit_sound{'7', Lang::Sounds::OGG_7},
-        digit_sound{'8', Lang::Sounds::OGG_8},
-        digit_sound{'9', Lang::Sounds::OGG_9}
-    }};
+    // // 单数字音效映射（0-9）
+    // struct digit_sound {
+    //     char digit;
+    //     const std::string_view& sound;
+    // };
+    // static const std::array<digit_sound, 10> digit_sounds{{
+    //     digit_sound{'0', Lang::Sounds::OGG_0},
+    //     digit_sound{'1', Lang::Sounds::OGG_1},
+    //     digit_sound{'2', Lang::Sounds::OGG_2},
+    //     digit_sound{'3', Lang::Sounds::OGG_3},
+    //     digit_sound{'4', Lang::Sounds::OGG_4},
+    //     digit_sound{'5', Lang::Sounds::OGG_5},
+    //     digit_sound{'6', Lang::Sounds::OGG_6},
+    //     digit_sound{'7', Lang::Sounds::OGG_7},
+    //     digit_sound{'8', Lang::Sounds::OGG_8},
+    //     digit_sound{'9', Lang::Sounds::OGG_9}
+    // }};
 
-    auto PlayDigit = [&](char d) {
-        auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
-            [d](const digit_sound& ds) { return ds.digit == d; });
-        if (it != digit_sounds.end()) {
-            audio_service_.PlaySound(it->sound);
-            vTaskDelay(pdMS_TO_TICKS(120));
-        }
-    };
+    // auto PlayDigit = [&](char d) {
+    //     auto it = std::find_if(digit_sounds.begin(), digit_sounds.end(),
+    //         [d](const digit_sound& ds) { return ds.digit == d; });
+    //     if (it != digit_sounds.end()) {
+    //         audio_service_.PlaySound(it->sound);
+    //         vTaskDelay(pdMS_TO_TICKS(120));
+    //     }
+    // };
 
-    // 先播放“当前电量”提示音（如果存在）
-    audio_service_.PlaySound(Lang::Sounds::OGG_BATTERYLEVEL);
-    vTaskDelay(pdMS_TO_TICKS(200));
+    // // 先播放“当前电量”提示音（如果存在）
+    // audio_service_.PlaySound(Lang::Sounds::OGG_BATTERYLEVEL);
+    // vTaskDelay(pdMS_TO_TICKS(200));
 
     // 对于 20..100 范围，优先使用整十位音频（你已支持 20..100）
-    if (percent >= 20 && percent <= 100) {
+    if (percent >= 0 && percent <= 100) {
         int tens = (percent / 10) * 10; // 20,30,...,100
         int ones = percent % 10;
 
         // 播放十位语音（如果存在对应素材）
-        switch (tens) {
-            case 20: audio_service_.PlaySound(Lang::Sounds::OGG_20); break;
-            case 30: audio_service_.PlaySound(Lang::Sounds::OGG_30); break;
-            case 40: audio_service_.PlaySound(Lang::Sounds::OGG_40); break;
-            case 50: audio_service_.PlaySound(Lang::Sounds::OGG_50); break;
-            case 60: audio_service_.PlaySound(Lang::Sounds::OGG_60); break;
-            case 70: audio_service_.PlaySound(Lang::Sounds::OGG_70); break;
-            case 80: audio_service_.PlaySound(Lang::Sounds::OGG_80); break;
-            case 90: audio_service_.PlaySound(Lang::Sounds::OGG_90); break;
-            case 100: audio_service_.PlaySound(Lang::Sounds::OGG_100); break;
-            default: break;
+        if(tens <=20)
+        {
+            audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY20);
         }
+        else if(tens>20 && tens <=40)
+        {
+            audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY20);
+        }
+        else if(tens>40 && tens <=60)
+        {
+            audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY40);
+        }
+        else if(tens>60 && tens <=80)
+        {
+            audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY60);
+        }
+        else if(tens>80 && tens <=90)
+        {
+            audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY80);
+        }
+        else if(tens>90 && tens <=100)
+        {
+            audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY100);
+        }
+
         vTaskDelay(pdMS_TO_TICKS(140));
 
-        // 100 属于整百，不再播个位
-        if (tens == 100) return;
+        // // 100 属于整百，不再播个位
+        // if (tens == 100) return;
 
-        // 播放个位（非 0 时）
-        if (ones != 0) {
-            PlayDigit(char('0' + ones));
-        }
-        return;
+        // // 播放个位（非 0 时）
+        // if (ones != 0) {
+        //     PlayDigit(char('0' + ones));
+        // }
+        // return;
     }
 
-    // 回退：逐位播放（用于 0..19 或者没有十位素材的情况）
-    std::string s = std::to_string(percent);
-    for (const auto& ch : s) {
-        PlayDigit(ch);
-    }
+    // // 回退：逐位播放（用于 0..19 或者没有十位素材的情况）
+    // std::string s = std::to_string(percent);
+    // for (const auto& ch : s) {
+    //     PlayDigit(ch);
+    // }
 }
 
 void Application::ShowActivationCode(const std::string& code, const std::string& message) {
@@ -512,6 +525,7 @@ bool IsWifiConfigMode() {
     Settings settings("wifi", true);
     return settings.GetInt("force_ap") == 1 || ssid_list.empty();
 }
+
 std::atomic<bool> triple_press_window_expired{false};
 void Application::Start() {
     
@@ -813,9 +827,11 @@ void Application::Start() {
 
     last_device_Role = device_Role;
     // SetAecMode(kAecOff);
-    ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
-    std::string msg = "向用户问好";
-    SendMessage(msg);
+    // ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
+    // std::string msg = "向用户问好";
+    // SendMessage(msg);
+
+    PlaySound(Lang::Sounds::OGG_JOLLY);
     
     vTaskDelay(pdMS_TO_TICKS(10000));
     
@@ -824,6 +840,15 @@ void Application::Start() {
         vTaskDelete(NULL);
     }, "rfid_task", 2048 * 4, this, 2, &rfid_task_handle_);
 
+    xTaskCreate([](void* arg) { 
+        ((Application*)arg)->http_get_task();
+        vTaskDelete(NULL);
+    }, "http_get", 8192, this, 5, NULL);
+
+    xTaskCreate([](void* arg) { 
+        ((Application*)arg)->post_switch_agent_task();
+        vTaskDelete(NULL);
+    }, "http_post", 8192, this, 5, NULL);
 }
 
 // Add a async task to MainLoop
@@ -907,6 +932,232 @@ void Application::EnterDeepSleep() {
 }
 
 
+#define API_URL        "http://wanwei.cyberfile.top/external/music"
+#define TOKEN          "7sK2fR8xQbL5zG9tYj2cVnSdFgHkPqA4"
+#include <esp_crt_bundle.h> // ++ 添加这一行 ++
+void Application:: http_get_task()
+{
+
+    esp_http_client_config_t config = {
+    .url = API_URL,
+    .port = 0,                          // 0 表示自动从 scheme 选择 (80/443)
+    .method = HTTP_METHOD_GET,
+    .timeout_ms = 10000,
+    .skip_cert_common_name_check = true, // 跳过证书 CN 校验
+    .crt_bundle_attach = esp_crt_bundle_attach, // ++ 修改这里：使用内建证书包 ++
+    };
+
+esp_http_client_handle_t client = esp_http_client_init(&config);
+if (client) {
+    // 打开连接
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err == ESP_OK) {
+        // 获取响应头
+        int content_length = esp_http_client_fetch_headers(client);
+        int status = esp_http_client_get_status_code(client);
+        ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status, content_length);
+
+        // 读取正文
+        char *buffer = (char*)malloc(512);
+        int total = 0;
+        int read_len;
+        while ((read_len = esp_http_client_read(client, buffer + total, 511 - total)) > 0) {
+            total += read_len;
+            // 扩容...
+        }
+        if (read_len < 0) ESP_LOGE(TAG, "Read error");
+        if (total > 0) {
+            buffer[total] = 0;
+            ESP_LOGI(TAG, "Response: %s", buffer);
+        } else {
+            ESP_LOGE(TAG, "No body");
+        }
+        free(buffer);
+    } else {
+        ESP_LOGE(TAG, "Open failed");
+    }
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+
+}
+}
+
+
+
+#include "esp_http_client.h"
+#include "cJSON.h"
+SemaphoreHandle_t switch_agent_sem = xSemaphoreCreateBinary();
+SemaphoreHandle_t switch_agent_result = xSemaphoreCreateBinary();
+
+void Application::post_switch_agent_task()
+{
+    while (true) {
+        // 1. 无限等待信号量，直到其他地方执行 xSemaphoreGive(switch_agent_sem)
+        if (xSemaphoreTake(switch_agent_sem, portMAX_DELAY) == pdTRUE) {
+            
+            bool success = false;
+            int attempt = 0;
+            const int MAX_RETRIES = 3; // 失败后最大重试次数
+
+            // 失败重试循环
+            while (!success && attempt < MAX_RETRIES) {
+                ESP_LOGI(TAG, "========== POST /external/agents/switch (Attempt %d/%d) ==========", attempt + 1, MAX_RETRIES);
+
+                // 1. 构造 JSON
+                cJSON *root = cJSON_CreateObject();
+                cJSON_AddStringToObject(root, "mac", SystemInfo::GetMacAddress().c_str());
+                if(Role_Id == 1)
+                    cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                else if(Role_Id == 0)
+                    cJSON_AddStringToObject(root, "agentName", "复古港风文艺少女");
+                char *post_data = cJSON_PrintUnformatted(root);
+                cJSON_Delete(root);
+                
+                if (!post_data) {
+                    ESP_LOGE(TAG, "Failed to create JSON");
+                    attempt++;
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    continue; 
+                }
+
+                ESP_LOGI(TAG, "Request body: %s", post_data);
+
+                // 2. 配置
+                esp_http_client_config_t config = {
+                    .url = "http://wanwei.cyberfile.top/external/agents/switch",
+                    .method = HTTP_METHOD_POST,
+                    .timeout_ms = 15000,
+                };
+
+                esp_http_client_handle_t client = esp_http_client_init(&config);
+                if (!client) {
+                    ESP_LOGE(TAG, "HTTP client init failed");
+                    free(post_data);
+                    attempt++;
+                    vTaskDelay(pdMS_TO_TICKS(2000));
+                    continue; 
+                }
+
+                // 3. 设置请求头和 POST 数据
+                esp_http_client_set_header(client, "Content-Type", "application/json");
+                esp_http_client_set_header(client, "Authorization", TOKEN);
+                esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+                // 4. 手动流控制
+                esp_err_t err = esp_http_client_open(client, strlen(post_data));
+                if (err != ESP_OK) {
+                    ESP_LOGE(TAG, "Open failed: %s", esp_err_to_name(err));
+                } else {
+                    // 写入请求体
+                    int written = esp_http_client_write(client, post_data, strlen(post_data));
+                    ESP_LOGI(TAG, "Written %d bytes", written);
+
+                    // 获取响应头
+                    int content_length = esp_http_client_fetch_headers(client);
+                    int status_code = esp_http_client_get_status_code(client);
+                    
+                    ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status_code, content_length);
+
+                    // 根据业务逻辑，如果是 200 算成功
+                    if (status_code == 200) {
+                        success = true;
+                    }
+
+                    // 5. 读取响应
+                    char *response = NULL;
+                    size_t total_len = 0;
+                    char chunk[256];
+                    int read_len;
+                    int retry_count = 0;
+
+                    while ((read_len = esp_http_client_read(client, chunk, sizeof(chunk) - 1)) != 0) {
+                        if (read_len < 0) {
+                            ESP_LOGE(TAG, "Read error: %d", read_len);
+                            success = false; // 读取出错，强制标记为失败
+                            break;
+                        }
+
+                        chunk[read_len] = '\0';
+                        ESP_LOGD(TAG, "Read chunk: %d bytes: %s", read_len, chunk);
+
+                        char *new_buf = (char *)realloc(response, total_len + read_len + 1);
+                        if (!new_buf) {
+                            ESP_LOGE(TAG, "Realloc failed");
+                            success = false;
+                            break;
+                        }
+                        
+                        response = new_buf;
+                        memcpy(response + total_len, chunk, read_len);
+                        total_len += read_len;
+                        response[total_len] = '\0'; 
+                        
+                        retry_count++;
+                        if (retry_count > 100) {  
+                            ESP_LOGW(TAG, "Too many chunks, breaking");
+                            break;
+                        }
+                    }
+
+                    ESP_LOGI(TAG, "Total read: %zu bytes", total_len);
+
+                    if (response != NULL && total_len > 0) {
+                        if (esp_ptr_executable(response) || 
+                            (total_len > 0 && total_len < 10000 && response[total_len] == '\0')) {
+                            
+                            cJSON *json = cJSON_Parse(response);
+                            if (json) {
+                                cJSON *code_obj = cJSON_GetObjectItem(json, "code");
+                                 if (cJSON_IsNumber(code_obj)) {
+                                    int code = code_obj->valueint;
+                                    ESP_LOGW(TAG, "Response code: %d", code);
+                                    // 置标志位：code 是否为 200
+                                    Switch_State = (code == 200);
+                                }
+                                char *formatted = cJSON_Print(json);
+                                if (formatted) {
+                                    ESP_LOGI(TAG, "Parsed JSON:\n%s", formatted);
+                                    free(formatted);
+                                }
+                                cJSON_Delete(json);
+                            } else {
+                                ESP_LOGW(TAG, "Failed to parse JSON");
+                            }
+                        } else {
+                            ESP_LOGE(TAG, "Invalid response buffer");
+                        }
+                        free(response);
+                    } else {
+                        ESP_LOGW(TAG, "Empty response body");
+                    }
+                }
+
+                // 6. 清理资源
+                esp_http_client_close(client);
+                esp_http_client_cleanup(client);
+                free(post_data);
+
+                // 7. 处理重试逻辑
+                if (!success) {
+                    attempt++;
+                    ESP_LOGW(TAG, "Request failed, delaying 3s before retry...");
+                    vTaskDelay(pdMS_TO_TICKS(3000));
+                }
+            } // end of retry loop
+
+            if (success) {
+                ESP_LOGI(TAG, "Task completed successfully. Waiting for next semaphore...");
+            } else {
+                ESP_LOGE(TAG, "Task permanently failed after %d attempts. Waiting for next semaphore...", MAX_RETRIES);
+                Switch_State = false;
+            }
+            if (switch_agent_result != NULL) {
+                xSemaphoreGive(switch_agent_result);
+                ESP_LOGI(TAG, "Semaphore given! Judge Success or not.");
+            }
+        }
+    }
+}
 
 std::string UID;
 std::string LastUID;
@@ -922,6 +1173,30 @@ void Application::RFID_TASK()
 
         uint8_t atqa[2];
         if (PcdRequest(0x52, atqa) != MI_OK) {
+            // 未检测到卡片
+            if (!UID.empty()) {
+                // 之前有卡片在线
+                UID.clear();
+                LastUID.clear();
+                
+                auto music = board.GetMusic();
+                // 停止音乐或者对话
+                if (music && music->IsPlaying()) {
+                    music->StopStreaming();
+                }
+                if (device_state_ == kDeviceStateSpeaking || device_state_ == kDeviceStateListening) {
+                    AbortSpeaking(kAbortReasonNone);
+                    StopListening();
+                }
+                
+                // 停止提示音并提示文字
+                // 切换回去或者提示
+                ESP_LOGW(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
+                Role_Id = 255; // 标记为空状态
+                
+                // 设置并发送取消标识如果需要
+            }
+
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
@@ -934,7 +1209,8 @@ void Application::RFID_TASK()
         }
         ESP_LOGI(TAG, "UID: %02X %02X %02X %02X %02X %02X %02X",
                  uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
-        UID = std::to_string(uid[0]) + std::to_string(uid[1]) + std::to_string(uid[2]) + std::to_string(uid[3]) + std::to_string(uid[4]) + std::to_string(uid[5]) + std::to_string(uid[6]);
+        std::string currentUID = std::to_string(uid[0]) + std::to_string(uid[1]) + std::to_string(uid[2]) + std::to_string(uid[3]) + std::to_string(uid[4]) + std::to_string(uid[5]) + std::to_string(uid[6]);
+        UID = currentUID;
         uint8_t user_memory[256];
         uint16_t data_len;
         // 使用稳定读取函数，每段最多重试 3 次
@@ -956,14 +1232,27 @@ void Application::RFID_TASK()
                     if(type == "000") {
                         ESP_LOGW(TAG,"卡片");
                         if(role == "000") {
-                            ESP_LOGW(TAG,"小智");
-                            std::string msg = "切换到默认智能体";
-                            SendMessage(msg);
+                            Role_Id = 0;
+                            ESP_LOGW(TAG,"111111111111111111111111111");
+                            // std::string msg = "切换到默认智能体";
+                            // SendMessage(msg);
+                            // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
+                            if (switch_agent_sem != NULL) {
+                                xSemaphoreGive(switch_agent_sem);
+                                ESP_LOGI(TAG, "Semaphore given! Triggering HTTP POST task...");
+                            }
 
                         } else if(role == "001") {
-                            ESP_LOGW(TAG,"播放器");
-                            std::string msg = "切换到播放器智能体";
-                            SendMessage(msg);
+                            ESP_LOGW(TAG,"22222222222222222222222222");
+                            Role_Id = 1;
+                            // ESP_LOGW(TAG,"播放器");
+                            // std::string msg = "切换到播放器智能体";
+                            // SendMessage(msg);
+                            // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
+                            if (switch_agent_sem != NULL) {
+                                xSemaphoreGive(switch_agent_sem);
+                                ESP_LOGI(TAG, "Semaphore given! Triggering HTTP POST task...");
+                            }
                         }
                         // 根据需要执行对应操作，例如切换到播放器模式
                     } 
@@ -977,7 +1266,12 @@ void Application::RFID_TASK()
                 }
 
             }
-        LastUID = UID;
+        if (xSemaphoreTake(switch_agent_result, portMAX_DELAY) == pdTRUE) {
+            if(Switch_State)
+                LastUID = UID;
+            else
+                LastUID = LastUID;
+        }
         PcdHalt();
         vTaskDelay(pdMS_TO_TICKS(3000));
     

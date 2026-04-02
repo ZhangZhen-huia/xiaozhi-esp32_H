@@ -45,7 +45,7 @@ WifiBoard::WifiBoard() {
     .callback = [](void* arg) {
         auto &app = Application::GetInstance();
         auto &wifi_station = WifiStation::GetInstance();
-        app.PlaySound(Lang::Sounds::OGG_CONNECTING);
+        app.PlaySound(Lang::Sounds::OGG_WIFICONNECTING);
 
         if( wifi_station.ContinueScan == true )
             {
@@ -369,7 +369,7 @@ const char* WifiBoard::GetNetworkStateIcon() {
     if (rssi >= -60) {
         return FONT_AWESOME_WIFI;
     } else if (rssi >= -70) {
-        app.PlaySound(Lang::Sounds::OGG_WEAKWIFISIGNAL);
+        // app.PlaySound(Lang::Sounds::OGG_WEAKWIFISIGNAL);
         return FONT_AWESOME_WIFI_FAIR;
     } else {
         return FONT_AWESOME_WIFI_WEAK;

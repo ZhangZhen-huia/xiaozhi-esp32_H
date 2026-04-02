@@ -56,8 +56,8 @@ set(BUILTIN_ICON_FONT font_awesome_14_1)
 
 # Add board files according to BOARD_TYPE
 # Set default assets if the board uses partition table V2
-if(CONFIG_BOARD_TYPE_LICHUANG_DEV)
-    set(BOARD_TYPE "lichuang-dev")
+if(CONFIG_BOARD_TYPE_ZEGBOT)
+    set(BOARD_TYPE "zegbot")
     set(BUILTIN_TEXT_FONT font_puhui_basic_20_4)
     set(BUILTIN_ICON_FONT font_awesome_20_4)
     set(DEFAULT_EMOJI_COLLECTION twemoji_64)

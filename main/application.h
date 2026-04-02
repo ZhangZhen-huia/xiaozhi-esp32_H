@@ -26,8 +26,8 @@
 #define battery_check 0
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
-#define IDLE_DEEP_SLEEP_SECONDS (1 * 30)
-#define IDLE_DEEP_SLEEP_MUSIC_SECONDS (5 * 60)
+#define IDLE_DEEP_SLEEP_SECONDS (3 * 60)
+#define IDLE_DEEP_SLEEP_MUSIC_SECONDS (10 * 60)
 #endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -117,6 +117,8 @@ public:
     bool ExtendPlayDurationSeconds(int extra_seconds);
     void Set_PlayDuration(int duration){g_requested_play_duration_sec.store(duration);};
     void StopPlayDurationTimer();
+    void http_get_task();
+    void post_switch_agent_task();
 private:
     Application();
     ~Application();
@@ -149,7 +151,8 @@ private:
 
     bool ble_wifi_config_enabled_ = true;
     
-
+    uint8_t Role_Id;
+    std::atomic<bool> Switch_State{false};
 
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);

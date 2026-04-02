@@ -28,7 +28,7 @@
 #include "assets/lang_config.h"
 
 
-#define TAG "LichuangDevBoard"
+#define TAG "Zegbot"
 extern std::atomic<bool> triple_press_window_expired;
 
 
@@ -112,7 +112,7 @@ public:
 
 };
 
-class LichuangDevBoard : public WifiBoard {
+class ZEGBOT : public WifiBoard {
 private:
     i2c_master_bus_handle_t i2c_bus_;
     Button boot_button_Boot_IO0;
@@ -434,7 +434,7 @@ private:
 
         bat_monitor_set_event_cb(battery_handle,
             [](bat_monitor_event_t event, float voltage, int percentage, void *user_data) {
-                auto board = static_cast<LichuangDevBoard*>(user_data);
+                auto board = static_cast<ZEGBOT*>(user_data);
                 auto music = board->GetMusic();
                 auto &app = Application::GetInstance();
                 static uint8_t tick = 0;
@@ -476,7 +476,7 @@ private:
                                             if(music->IsActualPaused()) 
                                                 {
                                                     app.AbortSpeaking(AbortReason::kAbortReasonNone);
-                                                    app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                                    app.PlaySound(Lang::Sounds::OGG_LOW_BATTERY);
                                                 }
                                             else 
                                                 ESP_LOGI(TAG, "音乐未暂停，跳过低电量提示音");   
@@ -486,13 +486,13 @@ private:
                                         else 
                                         {
                                             app.AbortSpeaking(AbortReason::kAbortReasonNone);
-                                            app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                            app.PlaySound(Lang::Sounds::OGG_LOW_BATTERY);
                                         }
                                     }
                                     else 
                                     {   
                                         app.AbortSpeaking(AbortReason::kAbortReasonNone);
-                                        app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                        app.PlaySound(Lang::Sounds::OGG_LOW_BATTERY);
                                     }
                                 }
                             }
@@ -511,7 +511,7 @@ private:
 
 public:
 
-    LichuangDevBoard():
+    ZEGBOT():
     #if !my
         boot_button_Boot_IO0(BOOT_BUTTON_GPIO),
         led_(GPIO_NUM_6) // 直接在成员初始化中绑定 IO6
@@ -558,7 +558,7 @@ public:
     }
     virtual void Deinitialize() override {
         // 在此处添加任何必要的反初始化代码
-        ESP_LOGI(TAG, "LichuangDevBoard 反初始化");
+        ESP_LOGI(TAG, "Zegbot 反初始化");
         if (i2c_bus_) {
             i2c_del_master_bus(i2c_bus_);
             i2c_bus_ = nullptr;
@@ -648,4 +648,4 @@ public:
     }
 };
 
-DECLARE_BOARD(LichuangDevBoard);
+DECLARE_BOARD(ZEGBOT);
