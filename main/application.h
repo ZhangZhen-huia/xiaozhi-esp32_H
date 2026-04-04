@@ -152,6 +152,7 @@ private:
     bool ble_wifi_config_enabled_ = true;
     
     uint8_t Role_Id;
+    uint8_t Last_Role_Id;
     std::atomic<bool> Switch_State{false};
 
     void OnWakeWordDetected();

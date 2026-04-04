@@ -838,7 +838,7 @@ void Application::Start() {
     xTaskCreate([](void* arg) { 
         ((Application*)arg)->RFID_TASK();
         vTaskDelete(NULL);
-    }, "rfid_task", 2048 * 4, this, 2, &rfid_task_handle_);
+    }, "rfid_task", 2048 * 4, this, 5, &rfid_task_handle_);
 
     xTaskCreate([](void* arg) { 
         ((Application*)arg)->http_get_task();
@@ -848,7 +848,7 @@ void Application::Start() {
     xTaskCreate([](void* arg) { 
         ((Application*)arg)->post_switch_agent_task();
         vTaskDelete(NULL);
-    }, "http_post", 8192, this, 5, NULL);
+    }, "http_post", 2048, this, 5, NULL);
 }
 
 // Add a async task to MainLoop
@@ -994,7 +994,7 @@ void Application::post_switch_agent_task()
     while (true) {
         // 1. 无限等待信号量，直到其他地方执行 xSemaphoreGive(switch_agent_sem)
         if (xSemaphoreTake(switch_agent_sem, portMAX_DELAY) == pdTRUE) {
-            
+            uint8_t skip  = 0;
             bool success = false;
             int attempt = 0;
             const int MAX_RETRIES = 3; // 失败后最大重试次数
@@ -1006,142 +1006,173 @@ void Application::post_switch_agent_task()
                 // 1. 构造 JSON
                 cJSON *root = cJSON_CreateObject();
                 cJSON_AddStringToObject(root, "mac", SystemInfo::GetMacAddress().c_str());
-                if(Role_Id == 1)
-                    cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
-                else if(Role_Id == 0)
-                    cJSON_AddStringToObject(root, "agentName", "复古港风文艺少女");
-                char *post_data = cJSON_PrintUnformatted(root);
-                cJSON_Delete(root);
-                
-                if (!post_data) {
-                    ESP_LOGE(TAG, "Failed to create JSON");
-                    attempt++;
-                    vTaskDelay(pdMS_TO_TICKS(2000));
-                    continue; 
+                if(!Switch_State)
+                {
+                    if(Role_Id == 1)
+                        cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                    else if(Role_Id == 0)
+                        cJSON_AddStringToObject(root, "agentName", "复古港风文艺少女");
+                    else if(Role_Id == 2)
+                        cJSON_AddStringToObject(root, "agentName", "C");
                 }
-
-                ESP_LOGI(TAG, "Request body: %s", post_data);
-
-                // 2. 配置
-                esp_http_client_config_t config = {
-                    .url = "http://wanwei.cyberfile.top/external/agents/switch",
-                    .method = HTTP_METHOD_POST,
-                    .timeout_ms = 15000,
-                };
-
-                esp_http_client_handle_t client = esp_http_client_init(&config);
-                if (!client) {
-                    ESP_LOGE(TAG, "HTTP client init failed");
-                    free(post_data);
-                    attempt++;
-                    vTaskDelay(pdMS_TO_TICKS(2000));
-                    continue; 
-                }
-
-                // 3. 设置请求头和 POST 数据
-                esp_http_client_set_header(client, "Content-Type", "application/json");
-                esp_http_client_set_header(client, "Authorization", TOKEN);
-                esp_http_client_set_post_field(client, post_data, strlen(post_data));
-
-                // 4. 手动流控制
-                esp_err_t err = esp_http_client_open(client, strlen(post_data));
-                if (err != ESP_OK) {
-                    ESP_LOGE(TAG, "Open failed: %s", esp_err_to_name(err));
-                } else {
-                    // 写入请求体
-                    int written = esp_http_client_write(client, post_data, strlen(post_data));
-                    ESP_LOGI(TAG, "Written %d bytes", written);
-
-                    // 获取响应头
-                    int content_length = esp_http_client_fetch_headers(client);
-                    int status_code = esp_http_client_get_status_code(client);
-                    
-                    ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status_code, content_length);
-
-                    // 根据业务逻辑，如果是 200 算成功
-                    if (status_code == 200) {
+                else
+                {
+                    if(Role_Id != Last_Role_Id)
+                    {
+                        if(Role_Id == 1)
+                            cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                        else if(Role_Id == 0)
+                            cJSON_AddStringToObject(root, "agentName", "复古港风文艺少女");
+                        else if(Role_Id == 2)
+                            cJSON_AddStringToObject(root, "agentName", "C");
+                    }
+                    else
+                    {
+                        skip = 1;
                         success = true;
                     }
-
-                    // 5. 读取响应
-                    char *response = NULL;
-                    size_t total_len = 0;
-                    char chunk[256];
-                    int read_len;
-                    int retry_count = 0;
-
-                    while ((read_len = esp_http_client_read(client, chunk, sizeof(chunk) - 1)) != 0) {
-                        if (read_len < 0) {
-                            ESP_LOGE(TAG, "Read error: %d", read_len);
-                            success = false; // 读取出错，强制标记为失败
-                            break;
-                        }
-
-                        chunk[read_len] = '\0';
-                        ESP_LOGD(TAG, "Read chunk: %d bytes: %s", read_len, chunk);
-
-                        char *new_buf = (char *)realloc(response, total_len + read_len + 1);
-                        if (!new_buf) {
-                            ESP_LOGE(TAG, "Realloc failed");
-                            success = false;
-                            break;
-                        }
                         
-                        response = new_buf;
-                        memcpy(response + total_len, chunk, read_len);
-                        total_len += read_len;
-                        response[total_len] = '\0'; 
-                        
-                        retry_count++;
-                        if (retry_count > 100) {  
-                            ESP_LOGW(TAG, "Too many chunks, breaking");
-                            break;
-                        }
-                    }
-
-                    ESP_LOGI(TAG, "Total read: %zu bytes", total_len);
-
-                    if (response != NULL && total_len > 0) {
-                        if (esp_ptr_executable(response) || 
-                            (total_len > 0 && total_len < 10000 && response[total_len] == '\0')) {
-                            
-                            cJSON *json = cJSON_Parse(response);
-                            if (json) {
-                                cJSON *code_obj = cJSON_GetObjectItem(json, "code");
-                                 if (cJSON_IsNumber(code_obj)) {
-                                    int code = code_obj->valueint;
-                                    ESP_LOGW(TAG, "Response code: %d", code);
-                                    // 置标志位：code 是否为 200
-                                    Switch_State = (code == 200);
-                                }
-                                char *formatted = cJSON_Print(json);
-                                if (formatted) {
-                                    ESP_LOGI(TAG, "Parsed JSON:\n%s", formatted);
-                                    free(formatted);
-                                }
-                                cJSON_Delete(json);
-                            } else {
-                                ESP_LOGW(TAG, "Failed to parse JSON");
-                            }
-                        } else {
-                            ESP_LOGE(TAG, "Invalid response buffer");
-                        }
-                        free(response);
-                    } else {
-                        ESP_LOGW(TAG, "Empty response body");
-                    }
                 }
+                if(skip)
+                {
+                    cJSON_Delete(root);
+                    Last_Role_Id = Role_Id;
+                }
+                else 
+                {
+                    char *post_data = cJSON_PrintUnformatted(root);
+                    cJSON_Delete(root);
+                    Last_Role_Id = Role_Id;
+                    if (!post_data) {
+                        ESP_LOGE(TAG, "Failed to create JSON");
+                        attempt++;
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                        continue; 
+                    }
+                
+                    ESP_LOGI(TAG, "Request body: %s", post_data);
 
-                // 6. 清理资源
-                esp_http_client_close(client);
-                esp_http_client_cleanup(client);
-                free(post_data);
+                    // 2. 配置
+                    esp_http_client_config_t config = {
+                        .url = "http://wanwei.cyberfile.top/external/agents/switch",
+                        .method = HTTP_METHOD_POST,
+                        .timeout_ms = 15000,
+                    };
 
-                // 7. 处理重试逻辑
-                if (!success) {
-                    attempt++;
-                    ESP_LOGW(TAG, "Request failed, delaying 3s before retry...");
-                    vTaskDelay(pdMS_TO_TICKS(3000));
+                    esp_http_client_handle_t client = esp_http_client_init(&config);
+                    if (!client) {
+                        ESP_LOGE(TAG, "HTTP client init failed");
+                        free(post_data);
+                        attempt++;
+                        vTaskDelay(pdMS_TO_TICKS(2000));
+                        continue; 
+                    }
+
+                    // 3. 设置请求头和 POST 数据
+                    esp_http_client_set_header(client, "Content-Type", "application/json");
+                    esp_http_client_set_header(client, "Authorization", TOKEN);
+                    esp_http_client_set_post_field(client, post_data, strlen(post_data));
+
+                    // 4. 手动流控制
+                    esp_err_t err = esp_http_client_open(client, strlen(post_data));
+                    if (err != ESP_OK) {
+                        ESP_LOGE(TAG, "Open failed: %s", esp_err_to_name(err));
+                    } else {
+                        // 写入请求体
+                        int written = esp_http_client_write(client, post_data, strlen(post_data));
+                        ESP_LOGI(TAG, "Written %d bytes", written);
+
+                        // 获取响应头
+                        int content_length = esp_http_client_fetch_headers(client);
+                        int status_code = esp_http_client_get_status_code(client);
+                        
+                        ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status_code, content_length);
+
+                        // 根据业务逻辑，如果是 200 算成功
+                        if (status_code == 200) {
+                            success = true;
+                        }
+
+                        // 5. 读取响应
+                        char *response = NULL;
+                        size_t total_len = 0;
+                        char chunk[256];
+                        int read_len;
+                        int retry_count = 0;
+
+                        while ((read_len = esp_http_client_read(client, chunk, sizeof(chunk) - 1)) != 0) {
+                            if (read_len < 0) {
+                                ESP_LOGE(TAG, "Read error: %d", read_len);
+                                success = false; // 读取出错，强制标记为失败
+                                break;
+                            }
+
+                            chunk[read_len] = '\0';
+                            ESP_LOGD(TAG, "Read chunk: %d bytes: %s", read_len, chunk);
+
+                            char *new_buf = (char *)realloc(response, total_len + read_len + 1);
+                            if (!new_buf) {
+                                ESP_LOGE(TAG, "Realloc failed");
+                                success = false;
+                                break;
+                            }
+                            
+                            response = new_buf;
+                            memcpy(response + total_len, chunk, read_len);
+                            total_len += read_len;
+                            response[total_len] = '\0'; 
+                            
+                            retry_count++;
+                            if (retry_count > 100) {  
+                                ESP_LOGW(TAG, "Too many chunks, breaking");
+                                break;
+                            }
+                        }
+
+                        ESP_LOGI(TAG, "Total read: %zu bytes", total_len);
+
+                        if (response != NULL && total_len > 0) {
+                            if (esp_ptr_executable(response) || 
+                                (total_len > 0 && total_len < 10000 && response[total_len] == '\0')) {
+                                
+                                cJSON *json = cJSON_Parse(response);
+                                if (json) {
+                                    cJSON *code_obj = cJSON_GetObjectItem(json, "code");
+                                    if (cJSON_IsNumber(code_obj)) {
+                                        int code = code_obj->valueint;
+                                        ESP_LOGW(TAG, "Response code: %d", code);
+                                        // 置标志位：code 是否为 200
+                                        Switch_State = (code == 200);
+                                    }
+                                    char *formatted = cJSON_Print(json);
+                                    if (formatted) {
+                                        ESP_LOGI(TAG, "Parsed JSON:\n%s", formatted);
+                                        free(formatted);
+                                    }
+                                    cJSON_Delete(json);
+                                } else {
+                                    ESP_LOGW(TAG, "Failed to parse JSON");
+                                }
+                            } else {
+                                ESP_LOGE(TAG, "Invalid response buffer");
+                            }
+                            free(response);
+                        } else {
+                            ESP_LOGW(TAG, "Empty response body");
+                        }
+                    }
+
+                    // 6. 清理资源
+                    esp_http_client_close(client);
+                    esp_http_client_cleanup(client);
+                    free(post_data);
+
+                    // 7. 处理重试逻辑
+                    if (!success) {
+                        attempt++;
+                        ESP_LOGW(TAG, "Request failed, delaying 3s before retry...");
+                        vTaskDelay(pdMS_TO_TICKS(3000));
+                    }
                 }
             } // end of retry loop
 
@@ -1151,10 +1182,10 @@ void Application::post_switch_agent_task()
                 ESP_LOGE(TAG, "Task permanently failed after %d attempts. Waiting for next semaphore...", MAX_RETRIES);
                 Switch_State = false;
             }
-            if (switch_agent_result != NULL) {
-                xSemaphoreGive(switch_agent_result);
-                ESP_LOGI(TAG, "Semaphore given! Judge Success or not.");
-            }
+            // if (switch_agent_result != NULL) {
+            //     xSemaphoreGive(switch_agent_result);
+            //     ESP_LOGI(TAG, "Semaphore given! Judge Success or not.");
+            // }
         }
     }
 }
@@ -1167,39 +1198,39 @@ void Application::RFID_TASK()
 
     auto &board = Board::GetInstance();
     auto led = board.GetLed();
+    int no_card_count = 0;
+    static  uint8_t stopWake = 0;
     while(1)
     {
         #if !my
-
         uint8_t atqa[2];
         if (PcdRequest(0x52, atqa) != MI_OK) {
-            // 未检测到卡片
-            if (!UID.empty()) {
-                // 之前有卡片在线
+            ESP_LOGD(TAG,"PcdRequest Fail");
+            no_card_count++;
+            if (no_card_count >= 4) { // 2 * 500ms = 1s
+                // 标志位置位：连续2s都没有寻到卡
                 UID.clear();
                 LastUID.clear();
+                Role_Id = 255;
                 
                 auto music = board.GetMusic();
-                // 停止音乐或者对话
                 if (music && music->IsPlaying()) {
                     music->StopStreaming();
                 }
-                if (device_state_ == kDeviceStateSpeaking || device_state_ == kDeviceStateListening) {
-                    AbortSpeaking(kAbortReasonNone);
-                    StopListening();
-                }
-                
-                // 停止提示音并提示文字
-                // 切换回去或者提示
+                SetDeviceState(kDeviceStateIdle);
+                audio_service_.EnableWakeWordDetection(false);
+                stopWake = 1;
                 ESP_LOGW(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
-                Role_Id = 255; // 标记为空状态
-                
-                // 设置并发送取消标识如果需要
-            }
+                // 这里可以播放相应的提示音
 
+                // 重置计数，这样如果一直检测不到卡，每隔2秒就会重新提示执行一次
+                no_card_count = 0;
+            }
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
+
+        no_card_count = 0;
 
         uint8_t uid[7];
         if (PcdNTAG21xAnticollSelect(uid) != MI_OK) {
@@ -1207,12 +1238,16 @@ void Application::RFID_TASK()
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
-        ESP_LOGI(TAG, "UID: %02X %02X %02X %02X %02X %02X %02X",
+        ESP_LOGE(TAG, "UID: %02X %02X %02X %02X %02X %02X %02X",
                  uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
-        std::string currentUID = std::to_string(uid[0]) + std::to_string(uid[1]) + std::to_string(uid[2]) + std::to_string(uid[3]) + std::to_string(uid[4]) + std::to_string(uid[5]) + std::to_string(uid[6]);
-        UID = currentUID;
+        UID = std::to_string(uid[0]) + std::to_string(uid[1]) + std::to_string(uid[2]) + std::to_string(uid[3]) + std::to_string(uid[4]) + std::to_string(uid[5]) + std::to_string(uid[6]);
         uint8_t user_memory[256];
         uint16_t data_len;
+        if(stopWake)
+        {
+            audio_service_.EnableWakeWordDetection(true);
+            stopWake = 0;
+        }
         // 使用稳定读取函数，每段最多重试 3 次
         if (NTAG21x_ReadStableUserMemory(user_memory, &data_len, 3) == MI_OK) {
 
@@ -1244,7 +1279,7 @@ void Application::RFID_TASK()
 
                         } else if(role == "001") {
                             ESP_LOGW(TAG,"22222222222222222222222222");
-                            Role_Id = 1;
+                            Role_Id = 2;
                             // ESP_LOGW(TAG,"播放器");
                             // std::string msg = "切换到播放器智能体";
                             // SendMessage(msg);
@@ -1266,14 +1301,14 @@ void Application::RFID_TASK()
                 }
 
             }
-        if (xSemaphoreTake(switch_agent_result, portMAX_DELAY) == pdTRUE) {
+        // if (xSemaphoreTake(switch_agent_result, portMAX_DELAY) == pdTRUE) {
             if(Switch_State)
                 LastUID = UID;
             else
                 LastUID = LastUID;
-        }
+        // }
         PcdHalt();
-        vTaskDelay(pdMS_TO_TICKS(3000));
+        vTaskDelay(pdMS_TO_TICKS(5000));
     
     
                         

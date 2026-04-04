@@ -88,7 +88,7 @@ void WifiBoard::EnterWifiConfigMode() {
     uint8_t mac[6];
     static char blufi_device_name[20];
     esp_read_mac(mac, ESP_MAC_WIFI_STA);
-    snprintf(blufi_device_name, sizeof(blufi_device_name), "CYBER_%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
+    snprintf(blufi_device_name, sizeof(blufi_device_name), "Zegbot_%02x%02x%02x%02x%02x%02x", mac[0], mac[1], mac[2], mac[3], mac[4], mac[5]);
     ESP_LOGI(TAG, "BLUFI device name: %s", blufi_device_name);
     // 用于控制配网流程的状态变量
     static bool wifi_config_completed = false;
