@@ -110,6 +110,7 @@ public:
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
     void UpdateOutputTimestamp();
+void WriteAudioData(std::vector<int16_t>& pcm);
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;

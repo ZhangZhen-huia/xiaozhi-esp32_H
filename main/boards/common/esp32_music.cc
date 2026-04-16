@@ -291,18 +291,18 @@ bool Esp32Music::StopStreaming() {
     ESP_LOGI(TAG, "Stopping music streaming - current state: downloading=%d, playing=%d", 
             is_downloading_.load(), is_playing_.load());
 
-    // 先让音频编解码器输出静音
-    auto codec = Board::GetInstance().GetAudioCodec();
-    if (codec) {
-        // 停止输出
-        codec->EnableOutput(false);
+    // // 先让音频编解码器输出静音
+    // auto codec = Board::GetInstance().GetAudioCodec();
+    // if (codec) {
+    //     // 停止输出
+    //     codec->EnableOutput(false);
         
-        // 重置采样率
-        ResetSampleRate();
+    //     // 重置采样率
+    //     ResetSampleRate();
 
-        // 重新启用输出（但此时没有数据，所以是静音）
-        codec->EnableOutput(true);
-    }
+    //     // 重新启用输出（但此时没有数据，所以是静音）
+    //     codec->EnableOutput(true);
+    // }
     // 检查是否有流式播放正在进行
     if (!is_playing_ && !is_downloading_) {
         ESP_LOGW(TAG, "No streaming in progress");
@@ -389,8 +389,6 @@ bool Esp32Music::StopStreaming() {
     }
         // 清空缓冲区
     ClearAudioBuffer();
-    // 销毁 chunk 池（释放预分配内存）
-    // DestroyChunkPool();
 
     ESP_LOGI(TAG, "Music streaming stop signal sent");
     return true;
@@ -480,6 +478,7 @@ void Esp32Music::PlayAudioStream() {
     ManualNextPlay_ = false;
     display_flag = 0;
     auto codec = Board::GetInstance().GetAudioCodec();
+    // codec->output_enabled();
     if (!codec || !codec->output_enabled()) {
         if(!codec){
             ESP_LOGE(TAG, "Audio codec instance is null");
@@ -489,7 +488,7 @@ void Esp32Music::PlayAudioStream() {
             ESP_LOGI(TAG, "Current codec output enabled state: %d", codec->output_enabled());
         }
         is_playing_ = false;
-        return;
+        // return;
     }
     
     if (!mp3_decoder_initialized_) {
@@ -1589,8 +1588,8 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     }
 
     
-    // 停止之前的播放
-    StopStreaming();
+    // // 停止之前的播放
+    // StopStreaming();
     
     ESP_LOGW(TAG, "Start Play");
     return StartSDCardStreaming(file_path);

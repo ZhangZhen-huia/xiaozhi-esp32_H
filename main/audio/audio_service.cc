@@ -641,8 +641,15 @@ void AudioService::CheckAndUpdateAudioPowerState() {
     if (input_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->input_enabled()) {
         codec_->EnableInput(false);
     }
+    
+    // Prevent powering down output if not idle 
     if (output_elapsed > AUDIO_POWER_TIMEOUT_MS && codec_->output_enabled()) {
-        codec_->EnableOutput(false);
+        if (IsIdle()) {
+            codec_->EnableOutput(false);
+        } else {
+            // Update last output time to prevent repeated immediate checks
+            last_output_time_ = now;
+        }
     }
     if (!codec_->input_enabled() && !codec_->output_enabled()) {
         esp_timer_stop(audio_power_timer_);

@@ -122,7 +122,7 @@ bool StartBleWifiConfig() {
     esp_timer_create_args_t clock_ConnecttingSound_timer_args = {
         .callback = [](void* arg) {
             auto &app = Application::GetInstance();
-            app.PlaySound(Lang::Sounds::OGG_WIFICONNECTING);
+            // app.PlaySound(Lang::Sounds::OGG_WIFICONNECTING);
         },
         .name = "ConnecttingSound_timer",
         .skip_unhandled_events = true

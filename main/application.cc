@@ -29,6 +29,10 @@
 #include <driver/i2s_tdm.h>
 #include <driver/ledc.h>
 #include <esp_http_client.h>
+#include <esp_crt_bundle.h> // ++ 添加这一行 ++
+#include "esp_http_client.h"
+#include "cJSON.h"
+
 #define TAG "Application"
 
 extern bool NotResumePlayback;
@@ -510,13 +514,11 @@ void Application::GetSwitchState(){
     auto ledmode = gpio_get_level(LEDMODE_GPIO);
     auto normalmode = gpio_get_level(NORMALMODE_GPIO);
     ESP_LOGI(TAG, "ledmode: %d, normalmode: %d", ledmode, normalmode);
-    // device_function_ = Function_AIAssistant;
     if(ledmode == 0 && normalmode ==1) {
         device_function_ = Function_Light;
     } else if(ledmode ==1 && normalmode ==0) {
         device_function_ = Function_AIAssistant;
     }
-    // device_function_ = Function_Light;
 }
 
 bool IsWifiConfigMode() {
@@ -533,14 +535,21 @@ void Application::Start() {
     //在这一步就已经调用了board的构造函数来进行关于板级硬件的初始化了
     auto& board = Board::GetInstance();
 
-    ESP_LOGI(TAG, "Flag observed true,继续后续流程");
+
 
     //获取设备功能
+    {
+        Settings settings("sleep", true);
+        AI_Mode_sleep_time = settings.GetInt("ai_sleep", 30);
+        Night_light_sleep_time = settings.GetInt("nl_sleep", 30);
+        ESP_LOGE(TAG, "AI_Mode_sleep_time: %d minutes, Night_light_sleep_time: %d minutes", AI_Mode_sleep_time, Night_light_sleep_time);
+    }
     GetSwitchState();
     if(device_function_ == Function_Light) {
         ESP_LOGI(TAG, "Switch state: Light");
         board.GetBacklight()->RestoreBrightness(true);
-        return ;
+        CreateAndStartPlayTimer(static_cast<uint64_t>(Night_light_sleep_time*60) * 1000000ULL);
+        // return ;
     }
     else if(device_function_ == Function_AIAssistant) {
         board.GetBacklight()->RestoreBrightness(false);
@@ -568,8 +577,8 @@ void Application::Start() {
     ESP_ERROR_CHECK(esp_timer_start_once(triple_press_timer, 3 * 1000 * 1000)); // 3 秒
 
 
-    Settings settings("device", true);
-    device_Role = (Role)settings.GetInt("device_role");
+    // Settings settings("device", true);
+    // device_Role = (Role)settings.GetInt("device_role");
 
     /* Setup the display */
     //申请显示器资源
@@ -604,7 +613,10 @@ void Application::Start() {
         vTaskDelete(NULL);
     }, "main_event_loop", 2048 * 4, this, 5, &main_event_loop_task_handle_);
 
-
+    xTaskCreate([](void* arg) { 
+        ((Application*)arg)->RFID_TASK();
+        vTaskDelete(NULL);
+    }, "rfid_task", 2048 * 4, this, 5, &rfid_task_handle_);
 
     /* Start the clock timer to update the status bar */
     //该定时器任务会在定时结束对应的event_group_设置MAIN_EVENT_CLOCK_TICK位
@@ -825,30 +837,46 @@ void Application::Start() {
     vTaskDelay(pdMS_TO_TICKS(3000));
     #endif
 
-    last_device_Role = device_Role;
+    // last_device_Role = device_Role;
     // SetAecMode(kAecOff);
     // ESP_LOGI(TAG, "Loaded device role from NVS: %d", device_Role);
     // std::string msg = "向用户问好";
     // SendMessage(msg);
 
-    PlaySound(Lang::Sounds::OGG_JOLLY);
+    if(device_function_ == Function_AIAssistant) 
+        PlaySound(Lang::Sounds::OGG_JOLLY);
+    else
+        PlaySound(Lang::Sounds::OGG_SUCCESS);
     
-    vTaskDelay(pdMS_TO_TICKS(10000));
-    
-    xTaskCreate([](void* arg) { 
-        ((Application*)arg)->RFID_TASK();
-        vTaskDelete(NULL);
-    }, "rfid_task", 2048 * 4, this, 5, &rfid_task_handle_);
+
 
     xTaskCreate([](void* arg) { 
-        ((Application*)arg)->http_get_task();
+        ((Application*)arg)->music_http_get_task();
         vTaskDelete(NULL);
     }, "http_get", 8192, this, 5, NULL);
 
     xTaskCreate([](void* arg) { 
         ((Application*)arg)->post_switch_agent_task();
         vTaskDelete(NULL);
-    }, "http_post", 2048, this, 5, NULL);
+    }, "http_post", 2048*4, this, 5, NULL);
+
+    xTaskCreate([](void* arg) { 
+        ((Application*)arg)->time_http_get_task();
+        vTaskDelete(NULL);
+    }, "http_get", 2048*2, this, 5, NULL);
+
+    vTaskDelay(pdMS_TO_TICKS(5000));
+    if (device_function_ == Function_Light && have_rfid_) {
+        //这里需要替换音频为切换到灯光模式的提示音
+        PlaySound(Lang::Sounds::OGG_UPGRADE);
+        vTaskDelay(pdMS_TO_TICKS(3000));
+        auto music = board.GetMusic();
+        if (music) {
+            ESP_LOGE(TAG, "Resuming music playback after light mode switch");
+            music->SetMode(true);
+            music->ResumeSavedPlayback();
+        }
+    }
 }
 
 // Add a async task to MainLoop
@@ -881,31 +909,34 @@ void Application::EnterDeepSleep() {
     bat_monitor_destroy(battery_handle);
 
     
-    // 停止音频服务并关闭 codec 输出
-    ESP_LOGI(TAG, "停止音频服务并关闭音频输出");
 
 
-    audio_service_.Stop();
-    protocol_->Deinit(); // 销毁协议实例以释放资源
-    auto codec = board.GetAudioCodec();
-    codec->Shutdown(); // 关闭 codec 输出
-    board.Deinitialize();//关闭外设
+    if(GetDeviceFunction() == Function_AIAssistant)
+    {    
+        // 停止音频服务并关闭 codec 输出
+        ESP_LOGI(TAG, "停止音频服务并关闭音频输出");
+        audio_service_.Stop();
+        protocol_->Deinit(); // 销毁协议实例以释放资源
+        auto codec = board.GetAudioCodec();
+        codec->Shutdown(); // 关闭 codec 输出
+        board.Deinitialize();//关闭外设
 
-    board.StopWifiTimer();
-    // 停止定时器以降低唤醒前的活动
-    ESP_LOGI(TAG, "停止定时器");
-    if (clock_timer_handle_ != nullptr) {
-        esp_timer_stop(clock_timer_handle_);
+        board.StopWifiTimer();
+        // 停止定时器以降低唤醒前的活动
+        ESP_LOGI(TAG, "停止定时器");
+        if (clock_timer_handle_ != nullptr) {
+            esp_timer_stop(clock_timer_handle_);
+        }
+        if (clock_Offlinetimer_handle_ != nullptr) {
+            esp_timer_stop(clock_Offlinetimer_handle_);
+        }
+
+        ESP_LOGI(TAG, "关闭WiFi");
+        esp_wifi_disconnect();
+        esp_wifi_stop();
+        esp_wifi_deinit();
+        esp_event_loop_delete_default();
     }
-    if (clock_Offlinetimer_handle_ != nullptr) {
-        esp_timer_stop(clock_Offlinetimer_handle_);
-    }
-
-    ESP_LOGI(TAG, "关闭WiFi");
-    esp_wifi_disconnect();
-    esp_wifi_stop();
-    esp_wifi_deinit();
-    esp_event_loop_delete_default();
 
 
     ESP_LOGI(TAG, "关闭LED");
@@ -932,14 +963,15 @@ void Application::EnterDeepSleep() {
 }
 
 
-#define API_URL        "http://wanwei.cyberfile.top/external/music"
-#define TOKEN          "7sK2fR8xQbL5zG9tYj2cVnSdFgHkPqA4"
-#include <esp_crt_bundle.h> // ++ 添加这一行 ++
-void Application:: http_get_task()
+
+SemaphoreHandle_t switch_agent_sem = xSemaphoreCreateBinary();
+SemaphoreHandle_t switch_agent_result = xSemaphoreCreateBinary();
+
+void Application:: music_http_get_task()
 {
 
     esp_http_client_config_t config = {
-    .url = API_URL,
+    .url = MUSIC_API_URL,
     .port = 0,                          // 0 表示自动从 scheme 选择 (80/443)
     .method = HTTP_METHOD_GET,
     .timeout_ms = 10000,
@@ -947,47 +979,145 @@ void Application:: http_get_task()
     .crt_bundle_attach = esp_crt_bundle_attach, // ++ 修改这里：使用内建证书包 ++
     };
 
-esp_http_client_handle_t client = esp_http_client_init(&config);
-if (client) {
-    // 打开连接
-    esp_err_t err = esp_http_client_open(client, 0);
-    if (err == ESP_OK) {
-        // 获取响应头
-        int content_length = esp_http_client_fetch_headers(client);
-        int status = esp_http_client_get_status_code(client);
-        ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status, content_length);
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (client) {
+        // 打开连接
+        esp_err_t err = esp_http_client_open(client, 0);
+        if (err == ESP_OK) {
+            // 获取响应头
+            int content_length = esp_http_client_fetch_headers(client);
+            int status = esp_http_client_get_status_code(client);
+            ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status, content_length);
 
-        // 读取正文
-        char *buffer = (char*)malloc(512);
-        int total = 0;
-        int read_len;
-        while ((read_len = esp_http_client_read(client, buffer + total, 511 - total)) > 0) {
-            total += read_len;
-            // 扩容...
-        }
-        if (read_len < 0) ESP_LOGE(TAG, "Read error");
-        if (total > 0) {
-            buffer[total] = 0;
-            ESP_LOGI(TAG, "Response: %s", buffer);
+            // 读取正文
+            char *buffer = (char*)malloc(512);
+            int total = 0;
+            int read_len;
+            while ((read_len = esp_http_client_read(client, buffer + total, 511 - total)) > 0) {
+                total += read_len;
+                // 扩容...
+            }
+            if (read_len < 0) ESP_LOGE(TAG, "Read error");
+            if (total > 0) {
+                buffer[total] = 0;
+                ESP_LOGI(TAG, "Response: %s", buffer);
+            } else {
+                ESP_LOGE(TAG, "No body");
+            }
+            free(buffer);
         } else {
-            ESP_LOGE(TAG, "No body");
+            ESP_LOGE(TAG, "Open failed");
         }
-        free(buffer);
-    } else {
-        ESP_LOGE(TAG, "Open failed");
+        esp_http_client_close(client);
+        esp_http_client_cleanup(client);
+
     }
-    esp_http_client_close(client);
+    vTaskDelete(NULL);
+}
+
+
+
+void Application::time_http_get_task()
+{
+    char url[256];
+    snprintf(url, sizeof(url), "%s%s", TIME_API_URL_BASE, SystemInfo::GetMacAddress().c_str());
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .port = 0,                          // 0 表示自动从 scheme 选择 (80/443)
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 10000,
+        .skip_cert_common_name_check = true, // 跳过证书 CN 校验
+        .crt_bundle_attach = esp_crt_bundle_attach, // ++ 修改这里：使用内建证书包 ++
+    };
+
+    // 1. 在循环外部初始化 HTTP 客户端，避免重复 malloc/free 造成内存碎片
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "[time_get] HTTP client init failed");
+        vTaskDelete(NULL);
+        return;
+    }
+
+    // 2. 也是在循环外分配 buffer（只要 512 字节，安全起见用 malloc 放堆里避免爆栈）
+    char *buffer = (char*)malloc(512);
+    if (!buffer) {
+        ESP_LOGE(TAG, "[time_get] Malloc failed for buffer");
+        esp_http_client_cleanup(client);
+        vTaskDelete(NULL);
+        return;
+    }
+
+    while (true) {
+        // 每次重新设置必要的 Token（部分情况下底层清理 header，重新设置比较保险）
+        esp_http_client_set_header(client, "Authorization", TOKEN);
+        
+        // 执行建立连接
+        esp_err_t err = esp_http_client_open(client, 0);
+        if (err == ESP_OK) {
+            // 获取响应头
+            int content_length = esp_http_client_fetch_headers(client);
+            int status = esp_http_client_get_status_code(client);
+            ESP_LOGI(TAG, "[time_get] Status: %d, Content-Length: %d", status, content_length);
+
+            int total = 0;
+            int read_len;
+            // 循环读取直到取完或装满 buffer
+            while ((read_len = esp_http_client_read(client, buffer + total, 511 - total)) > 0) {
+                total += read_len;
+                if (total >= 511) break; 
+            }
+            
+            if (read_len < 0) ESP_LOGE(TAG, "[time_get] Read error");
+            
+            if (total > 0) {
+                buffer[total] = 0; // 字符串结尾
+                ESP_LOGI(TAG, "[time_get] Response: %s", buffer);
+
+                // 解析 JSON
+                cJSON *root = cJSON_Parse(buffer);
+                if (root) {
+                    cJSON *data = cJSON_GetObjectItem(root, "data");
+                    if (data) {
+                        cJSON *ai_mode = cJSON_GetObjectItem(data, "AI_Mode_sleep_time");
+                        if (ai_mode && ai_mode->valuestring) {
+                            AI_Mode_sleep_time = atoi(ai_mode->valuestring);
+                        }
+                        cJSON *night_light = cJSON_GetObjectItem(data, "Night_light_sleep_time");
+                        if (night_light && night_light->valuestring) {
+                            Night_light_sleep_time = atoi(night_light->valuestring);
+                        }
+                        ESP_LOGI(TAG, "Parsed sleep times - AI: %d, Night Light: %d", 
+                                 AI_Mode_sleep_time, Night_light_sleep_time);
+
+                        Settings settings("sleep", true);
+                        settings.SetInt("ai_sleep", AI_Mode_sleep_time);
+                        settings.SetInt("nl_sleep", Night_light_sleep_time);
+                        settings.Commit();
+                    }
+                    cJSON_Delete(root);
+                } else {
+                    ESP_LOGE(TAG, "[time_get] Failed to parse JSON");
+                }
+            } else {
+                ESP_LOGE(TAG, "[time_get] No body");
+            }
+        } else {
+            ESP_LOGE(TAG, "[time_get] Open failed: %s", esp_err_to_name(err));
+        }
+        
+        // 3. 每次请求完成仅 close 释放本次连接的 socket 和状态，保留客户端配置内存对象
+        esp_http_client_close(client);
+        
+        // 定时等待
+        vTaskDelay(pdMS_TO_TICKS(60000*2)); // 2分钟
+    }
+
+    // （如果有退出循环的机制，才需要释放以下资源）
+    free(buffer);
     esp_http_client_cleanup(client);
-
-}
 }
 
-
-
-#include "esp_http_client.h"
-#include "cJSON.h"
-SemaphoreHandle_t switch_agent_sem = xSemaphoreCreateBinary();
-SemaphoreHandle_t switch_agent_result = xSemaphoreCreateBinary();
 
 void Application::post_switch_agent_task()
 {
@@ -1001,7 +1131,7 @@ void Application::post_switch_agent_task()
 
             // 失败重试循环
             while (!success && attempt < MAX_RETRIES) {
-                ESP_LOGI(TAG, "========== POST /external/agents/switch (Attempt %d/%d) ==========", attempt + 1, MAX_RETRIES);
+                ESP_LOGD(TAG, "========== POST /external/agents/switch (Attempt %d/%d) ==========", attempt + 1, MAX_RETRIES);
 
                 // 1. 构造 JSON
                 cJSON *root = cJSON_CreateObject();
@@ -1009,22 +1139,40 @@ void Application::post_switch_agent_task()
                 if(!Switch_State)
                 {
                     if(Role_Id == 1)
-                        cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                        {
+                            cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                            device_function_ = Function_AIAssistant;
+                        }
                     else if(Role_Id == 0)
-                        cJSON_AddStringToObject(root, "agentName", "复古港风文艺少女");
+                        {
+                            cJSON_AddStringToObject(root, "agentName", "播放助手");
+                            device_function_ = Function_MusicStory;
+                        }
                     else if(Role_Id == 2)
+                    {
                         cJSON_AddStringToObject(root, "agentName", "C");
+                        device_function_ = Function_Light;
+                    }
                 }
                 else
                 {
                     if(Role_Id != Last_Role_Id)
                     {
                         if(Role_Id == 1)
+                        {
                             cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                            device_function_ = Function_AIAssistant;
+                        }
                         else if(Role_Id == 0)
-                            cJSON_AddStringToObject(root, "agentName", "复古港风文艺少女");
+                        {
+                            cJSON_AddStringToObject(root, "agentName", "播放助手");
+                            device_function_ = Function_MusicStory;
+                        }
                         else if(Role_Id == 2)
+                        {
                             cJSON_AddStringToObject(root, "agentName", "C");
+                            device_function_ = Function_Light;
+                        }
                     }
                     else
                     {
@@ -1080,13 +1228,13 @@ void Application::post_switch_agent_task()
                     } else {
                         // 写入请求体
                         int written = esp_http_client_write(client, post_data, strlen(post_data));
-                        ESP_LOGI(TAG, "Written %d bytes", written);
+                        ESP_LOGD(TAG, "Written %d bytes", written);
 
                         // 获取响应头
                         int content_length = esp_http_client_fetch_headers(client);
                         int status_code = esp_http_client_get_status_code(client);
                         
-                        ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status_code, content_length);
+                        ESP_LOGD(TAG, "Status: %d, Content-Length: %d", status_code, content_length);
 
                         // 根据业务逻辑，如果是 200 算成功
                         if (status_code == 200) {
@@ -1129,7 +1277,7 @@ void Application::post_switch_agent_task()
                             }
                         }
 
-                        ESP_LOGI(TAG, "Total read: %zu bytes", total_len);
+                        ESP_LOGD(TAG, "Total read: %zu bytes", total_len);
 
                         if (response != NULL && total_len > 0) {
                             if (esp_ptr_executable(response) || 
@@ -1199,9 +1347,14 @@ void Application::RFID_TASK()
     auto &board = Board::GetInstance();
     auto led = board.GetLed();
     int no_card_count = 0;
-    static  uint8_t stopWake = 0;
+    static  bool toggle = 0;
+    static  bool stopWake = 0;
+    static bool play_music = false;
+    auto music = board.GetMusic();
+    bool has_net = false;
     while(1)
     {
+        has_net = WifiStation::GetInstance().IsConnected();
         #if !my
         uint8_t atqa[2];
         if (PcdRequest(0x52, atqa) != MI_OK) {
@@ -1213,16 +1366,18 @@ void Application::RFID_TASK()
                 LastUID.clear();
                 Role_Id = 255;
                 
-                auto music = board.GetMusic();
+                
                 if (music && music->IsPlaying()) {
-                    music->StopStreaming();
+                    play_music = false;
+                    music->PausePlayback();
                 }
                 SetDeviceState(kDeviceStateIdle);
                 audio_service_.EnableWakeWordDetection(false);
                 stopWake = 1;
-                ESP_LOGW(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
+                toggle = 1;
+                ESP_LOGD(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
                 // 这里可以播放相应的提示音
-
+                have_rfid_ = false;
                 // 重置计数，这样如果一直检测不到卡，每隔2秒就会重新提示执行一次
                 no_card_count = 0;
             }
@@ -1238,18 +1393,58 @@ void Application::RFID_TASK()
             vTaskDelay(pdMS_TO_TICKS(500));
             continue;
         }
-        ESP_LOGE(TAG, "UID: %02X %02X %02X %02X %02X %02X %02X",
+        ESP_LOGD(TAG, "UID: %02X %02X %02X %02X %02X %02X %02X",
                  uid[0], uid[1], uid[2], uid[3], uid[4], uid[5], uid[6]);
         UID = std::to_string(uid[0]) + std::to_string(uid[1]) + std::to_string(uid[2]) + std::to_string(uid[3]) + std::to_string(uid[4]) + std::to_string(uid[5]) + std::to_string(uid[6]);
         uint8_t user_memory[256];
         uint16_t data_len;
-        if(stopWake)
-        {
-            audio_service_.EnableWakeWordDetection(true);
-            stopWake = 0;
-        }
+        
         // 使用稳定读取函数，每段最多重试 3 次
         if (NTAG21x_ReadStableUserMemory(user_memory, &data_len, 3) == MI_OK) {
+            have_rfid_ = true;
+            if(stopWake)
+            {
+                // 等待之前的提示音等音频播放完毕
+                while (!audio_service_.IsIdle()) {
+                    vTaskDelay(pdMS_TO_TICKS(100));
+                }
+                audio_service_.EnableWakeWordDetection(true);
+                stopWake = 0;
+            }
+            if(device_function_ == Function_MusicStory)
+            {
+                ESP_LOGD(TAG, "检测到公仔，当前模式为播放助手。");
+                if( has_net && music->ReturnMode())
+                {
+                    ESP_LOGD(TAG, "检测到公仔，恢复播放。");
+                    if (music && music->is_paused() && !play_music) {
+                        music->ResumePlayback();
+                        play_music = true;
+                    }
+                }
+                else
+                {
+                    if(has_net && toggle)
+                    {
+                        ESP_LOGD(TAG, "检测到公仔，恢复唤醒。");
+                        toggle = 0;
+                        vTaskDelay(pdMS_TO_TICKS(1000));
+                        ToggleChatState();
+                    }
+
+                }
+            }
+            else  
+            {
+                if(has_net && stopWake )
+                {
+                    ESP_LOGD(TAG, "检测到公仔，恢复唤醒。");
+                    audio_service_.EnableWakeWordDetection(true);
+                    stopWake = 0;
+                    vTaskDelay(pdMS_TO_TICKS(1000));
+                    ToggleChatState();
+                }
+            }
 
                 if(UID == LastUID) {
                     vTaskDelay(pdMS_TO_TICKS(500));
@@ -1265,20 +1460,18 @@ void Application::RFID_TASK()
                         std::string timbre  = fields.timbre;
                         std::string reserve = fields.reserve;
                     if(type == "000") {
-                        ESP_LOGW(TAG,"卡片");
+                        ESP_LOGD(TAG,"卡片");
                         if(role == "000") {
                             Role_Id = 0;
-                            ESP_LOGW(TAG,"111111111111111111111111111");
                             // std::string msg = "切换到默认智能体";
                             // SendMessage(msg);
                             // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
                             if (switch_agent_sem != NULL) {
                                 xSemaphoreGive(switch_agent_sem);
-                                ESP_LOGI(TAG, "Semaphore given! Triggering HTTP POST task...");
+                                ESP_LOGD(TAG, "Semaphore given! Triggering HTTP POST task...");
                             }
 
                         } else if(role == "001") {
-                            ESP_LOGW(TAG,"22222222222222222222222222");
                             Role_Id = 2;
                             // ESP_LOGW(TAG,"播放器");
                             // std::string msg = "切换到播放器智能体";
@@ -1286,17 +1479,18 @@ void Application::RFID_TASK()
                             // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
                             if (switch_agent_sem != NULL) {
                                 xSemaphoreGive(switch_agent_sem);
-                                ESP_LOGI(TAG, "Semaphore given! Triggering HTTP POST task...");
+                                ESP_LOGD(TAG, "Semaphore given! Triggering HTTP POST task...");
                             }
                         }
                         // 根据需要执行对应操作，例如切换到播放器模式
                     } 
                     else if(type == "001") {
-                        ESP_LOGW(TAG,"公仔");
+                        ESP_LOGD(TAG,"公仔");
                         // 根据需要执行对应操作，例如切换到小智模式
                     } 
  
                 } else {
+                    have_rfid_ = false;
                     ESP_LOGE("MAIN", "数据解析失败");
                 }
 
@@ -1490,7 +1684,7 @@ void Application::MainEventLoop() {
             if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == false)) {
                 if(g_duration_flag.load())
                 {
-                    ESP_LOGE(TAG, "已经有定时了，待定时结束在进入深度睡眠");
+                    ESP_LOGD(TAG, "已经有定时了，待定时结束在进入深度睡眠");
                     //有时间限制的播放模式下，不进入深度睡眠
                     sleep_ticks_ = 0;
                     continue;
@@ -1498,8 +1692,8 @@ void Application::MainEventLoop() {
 
                 ESP_LOGD(TAG, "空闲计时: %d 秒", sleep_ticks_);
                 sleep_ticks_++;
-                if (CanEnterSleepMode() && sleep_ticks_ >= IDLE_DEEP_SLEEP_SECONDS) {
-                    ESP_LOGI(TAG, "Device idle for %d seconds and can sleep -> entering deep sleep", IDLE_DEEP_SLEEP_SECONDS);
+                if (CanEnterSleepMode() && sleep_ticks_ >= AI_Mode_sleep_time * 60) {
+                    ESP_LOGI(TAG, "Device idle for %d seconds and can sleep -> entering deep sleep", AI_Mode_sleep_time * 60);
                     // 防止重复调度：清零计时
                     sleep_ticks_ = 0;
                     // 在主线程上下文调度进入深度睡眠
@@ -1513,7 +1707,7 @@ void Application::MainEventLoop() {
             else if (device_state_ == kDeviceStateIdle && (music->ReturnMode() == true)) {
                 if(g_duration_flag.load())
                 {
-                    ESP_LOGE(TAG, "已经有定时了，待定时结束在进入深度睡眠");
+                    ESP_LOGD(TAG, "已经有定时了，待定时结束在进入深度睡眠");
                     //有时间限制的播放模式下，不进入深度睡眠
                     sleep_music_ticks_ = 0;
                     continue;
@@ -1861,13 +2055,26 @@ void Application::SetAecMode(AecMode mode) {
 }
 
 void Application::PlaySound(const std::string_view& sound) {
-    audio_service_.PlaySound(sound);
+    Schedule([this, sound = std::string(sound)]() {
+        // 等待直到音频服务空闲，避免与低功耗切换或者其他音频播放冲突
+        // while (!audio_service_.IsIdle()) {
+        //     ESP_LOGE(TAG, "Audio service is busy, waiting to play sound: %s", sound.c_str());
+        //     vTaskDelay(pdMS_TO_TICKS(50));
+        // }
+        audio_service_.PlaySound(sound);
+    });
 }
 
 // 新增：接收外部音频数据（如音乐播放）
 void Application::AddAudioData(AudioStreamPacket&& packet) {
     auto codec = Board::GetInstance().GetAudioCodec();
-    if (device_state_ == kDeviceStateIdle && codec->output_enabled()) {
+    
+    // 确保音频输出已启用
+    if (!codec->output_enabled()) {
+        codec->EnableOutput(true);
+    }
+    
+    if (device_state_ == kDeviceStateIdle) {
     //     // packet.payload包含的是原始PCM数据（int16_t）
         if (packet.payload.size() >= 2) {
             size_t num_samples = packet.payload.size() / sizeof(int16_t);
@@ -1989,10 +2196,12 @@ static void PlayDurationTimerCallback(void* arg) {
         instance->g_requested_play_duration_sec.store(0);
         instance->g_duration_flag.store(false);
     }
-
-    Application::GetInstance().Schedule([=]() {
+    if(app.GetDeviceFunction() == Function_AIAssistant)
+    {    
+        Application::GetInstance().Schedule([=]() {
         auto &board = Board::GetInstance();
         ESP_LOGE(TAG,"关机！！！！！！！！！！！！！！！！！！！！！！！");
+    
         auto m = board.GetMusic();
         auto &app = Application::GetInstance();
         if (m) {
@@ -2003,8 +2212,13 @@ static void PlayDurationTimerCallback(void* arg) {
             m->SetMode(false);
             app.EnterDeepSleep();
         }
-    });
-    
+
+        });
+    }
+    else
+    {
+        app.EnterDeepSleep();
+    }    
     ESP_LOGW(TAG, "Play duration timer callback finished: cleared timer state");
 }
 

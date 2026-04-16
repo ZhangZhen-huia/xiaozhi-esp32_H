@@ -182,26 +182,26 @@ void McpServer::AddCommonTools() {
             });
     }
     
-    AddTool("SayHello",
-            "向用户问好时调用这个工具，告诉用户你现在的名字或者模式",
-            PropertyList(),
-            [](const PropertyList& properties) -> ReturnValue {
-                auto &app = Application::GetInstance();
-                std::string msg;
-                if(app.device_Role == Role_Xiaozhi)
-                {
-                    msg = "角色提示：你现在的名字叫做小智，然后向用户介绍自己，并询问有什么需要帮助的";
-                }
-                else if(app.device_Role == Role_XiaoMing)
-                {
-                    msg = "角色提示：你现在的名字叫做小明，然后向用户介绍自己，并询问有什么需要帮助的";
-                }
-                else if(app.device_Role == Player)
-                {
-                    msg = "角色提示：你现在的模式是播放小助手，然后向用户介绍自己，并询问有什么需要帮助的";
-                }
-                return msg;
-            });
+    // AddTool("SayHello",
+    //         "向用户问好时调用这个工具，告诉用户你现在的名字或者模式",
+    //         PropertyList(),
+    //         [](const PropertyList& properties) -> ReturnValue {
+    //             auto &app = Application::GetInstance();
+    //             std::string msg;
+    //             if(app.device_Role == Role_Xiaozhi)
+    //             {
+    //                 msg = "角色提示：你现在的名字叫做小智，然后向用户介绍自己，并询问有什么需要帮助的";
+    //             }
+    //             else if(app.device_Role == Role_XiaoMing)
+    //             {
+    //                 msg = "角色提示：你现在的名字叫做小明，然后向用户介绍自己，并询问有什么需要帮助的";
+    //             }
+    //             else if(app.device_Role == Player)
+    //             {
+    //                 msg = "角色提示：你现在的模式是播放小助手，然后向用户介绍自己，并询问有什么需要帮助的";
+    //             }
+    //             return msg;
+    //         });
 
     if (music) {
             AddTool("set_duration",
@@ -470,7 +470,7 @@ void McpServer::AddCommonTools() {
                     Property("name", kPropertyTypeString, ""),
                     Property("artist", kPropertyTypeString, ""),
                     Property("target", kPropertyTypeString, ""),
-                    Property("mode", kPropertyTypeString, "顺序播放"),
+                    Property("mode", kPropertyTypeString, ""),
                     Property("GoOn", kPropertyTypeBoolean, false),
                     Property("duration", kPropertyTypeInteger, 0, 0, 86400),
                     Property("style", kPropertyTypeString, ""),
@@ -490,6 +490,15 @@ void McpServer::AddCommonTools() {
                     auto artist = properties["artist"].value<std::string>();
                     auto target_raw = properties["target"].value<std::string>();
                     auto mode_str = properties["mode"].value<std::string>();
+                    if (mode_str.empty())
+                    {
+                            if(app->GetDeviceFunction() != Function_Light) {
+                                mode_str = "顺序";
+                            } else {
+                                mode_str = "循环";
+                            }
+                    }
+                    
                     auto goon = properties["GoOn"].value<bool>();
                     int duration = properties["duration"].value<int>();
                     auto style = properties["style"].value<std::string>();

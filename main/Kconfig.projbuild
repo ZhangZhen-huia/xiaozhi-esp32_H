@@ -186,7 +186,7 @@ choice BOARD_TYPE
         bool "立创·实战派 ESP32-S3"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_ZEGBOT
-        bool "zegbot"
+        bool "Zegbot"
         depends on IDF_TARGET_ESP32S3
     config BOARD_TYPE_LICHUANG_C3_DEV
         bool "立创·实战派 ESP32-C3"

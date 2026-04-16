@@ -21,6 +21,13 @@
 #define SW_LEDMODE       1
 #define SW_NORMALMODE    0
 
+#define MusicStoryMode 1
+#define AiAssistantMode 0
+#define LightMode 2
+
+#define MUSIC_API_URL        "http://wanwei.cyberfile.top/external/music"
+#define TOKEN                 "7sK2fR8xQbL5zG9tYj2cVnSdFgHkPqA4"
+#define TIME_API_URL_BASE  "http://wanwei.cyberfile.top/external/devices/sleep-times?mac="
 
 #define my 0
 #define battery_check 0
@@ -54,6 +61,7 @@ enum Role{
 enum DeviceFunction {
     Function_AIAssistant = 0,
     Function_Light = 1,
+    Function_MusicStory = 2,
 };
 
 class Application {
@@ -105,7 +113,8 @@ public:
     std::mutex g_play_timer_mutex;
     std::atomic<int64_t> g_play_timer_expire_us{0};
     std::atomic<bool> g_duration_flag = false;
-    
+    uint8_t Current_role = 0;
+    bool have_rfid_ = false;
     bool wake_word_detected_ = false;
     
     void GetSwitchState();
@@ -117,7 +126,12 @@ public:
     bool ExtendPlayDurationSeconds(int extra_seconds);
     void Set_PlayDuration(int duration){g_requested_play_duration_sec.store(duration);};
     void StopPlayDurationTimer();
-    void http_get_task();
+
+    int AI_Mode_sleep_time = 30 * 60;
+    int Night_light_sleep_time = 30 * 60;
+    
+    void music_http_get_task();
+    void time_http_get_task();
     void post_switch_agent_task();
 private:
     Application();

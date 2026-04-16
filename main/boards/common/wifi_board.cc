@@ -33,7 +33,7 @@ WifiBoard::WifiBoard() {
     esp_timer_create_args_t clock_timer_args = {
     .callback = [](void* arg) {
         auto &app = Application::GetInstance();
-        app.PlaySound(Lang::Sounds::OGG_WIFICONFIG);
+        // app.PlaySound(Lang::Sounds::OGG_WIFICONFIG);
     },
     .dispatch_method = ESP_TIMER_TASK,
     .name = "wifi_config_alert_timer",
@@ -45,7 +45,7 @@ WifiBoard::WifiBoard() {
     .callback = [](void* arg) {
         auto &app = Application::GetInstance();
         auto &wifi_station = WifiStation::GetInstance();
-        app.PlaySound(Lang::Sounds::OGG_WIFICONNECTING);
+        // app.PlaySound(Lang::Sounds::OGG_WIFICONNECTING);
 
         if( wifi_station.ContinueScan == true )
             {
@@ -73,7 +73,7 @@ void WifiBoard::EnterWifiConfigMode() {
     ESP_LOGI(TAG, "Entering WiFi config mode via BLUFI");
     application.SetDeviceState(kDeviceStateWifiConfiguring);
     
-    application.Alert(Lang::Strings::WIFI_CONFIG_MODE, "请使用赛博星球小程序配网", "", Lang::Sounds::OGG_WIFICONFIG);
+    // application.Alert(Lang::Strings::WIFI_CONFIG_MODE, "请使用赛博星球小程序配网", "", Lang::Sounds::OGG_WIFICONFIG);
     
     vTaskDelay(pdMS_TO_TICKS(2000));
     bool is_got_ip = false;
