@@ -1373,6 +1373,10 @@ void Application::RFID_TASK()
                 }
                 SetDeviceState(kDeviceStateIdle);
                 audio_service_.EnableWakeWordDetection(false);
+
+                // 拿下公仔之后5s内让es7210进入低功耗 (这里设置为 2000 ms)
+                audio_service_.SetAudioPowerTimeout(2000);
+                vTaskDelay(pdMS_TO_TICKS(2000));
                 stopWake = 1;
                 toggle = 1;
                 ESP_LOGD(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
@@ -1386,6 +1390,9 @@ void Application::RFID_TASK()
         }
 
         no_card_count = 0;
+        
+        // 如果公仔放回去了，恢复 15s 的低功耗进入时间
+        audio_service_.SetAudioPowerTimeout(15000);
 
         uint8_t uid[7];
         if (PcdNTAG21xAnticollSelect(uid) != MI_OK) {
@@ -1862,9 +1869,9 @@ void Application::SetDeviceState(DeviceState state) {
             audio_service_.ResetDecoder();
             break;
         case kDeviceStateWifiConfiguring:
-                wifi_station.Stop(); // 停止当前WiFi连接
-                board.EnterWifiConfigMode();
-                break;
+            wifi_station.Stop(); // 停止当前WiFi连接
+            board.EnterWifiConfigMode();
+            break;
         default:
             // Do nothing
             break;
@@ -2056,11 +2063,6 @@ void Application::SetAecMode(AecMode mode) {
 
 void Application::PlaySound(const std::string_view& sound) {
     Schedule([this, sound = std::string(sound)]() {
-        // 等待直到音频服务空闲，避免与低功耗切换或者其他音频播放冲突
-        // while (!audio_service_.IsIdle()) {
-        //     ESP_LOGE(TAG, "Audio service is busy, waiting to play sound: %s", sound.c_str());
-        //     vTaskDelay(pdMS_TO_TICKS(50));
-        // }
         audio_service_.PlaySound(sound);
     });
 }
@@ -2255,7 +2257,6 @@ void Application::StartPlayDurationTimerIfRequested() {
     esp_timer_start_once(*th, us);
     ESP_LOGI(TAG, "Started play duration timer: %d seconds (expire at %llu us)", dur, (unsigned long long)(now_us + us));
 }
-
 
 
 // 创建并启动一次性播放定时器（内部使用，调用时已持有互斥/线程安全）

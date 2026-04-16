@@ -43,7 +43,6 @@
 #define AUDIO_TESTING_MAX_DURATION_MS 10000
 #define MAX_TIMESTAMPS_IN_QUEUE 3
 
-#define AUDIO_POWER_TIMEOUT_MS 15000
 #define AUDIO_POWER_CHECK_INTERVAL_MS 1000
 
 
@@ -110,7 +109,11 @@ public:
     void ResetDecoder();
     void SetModelsList(srmodel_list_t* models_list);
     void UpdateOutputTimestamp();
-void WriteAudioData(std::vector<int16_t>& pcm);
+    void WriteAudioData(std::vector<int16_t>& pcm);
+    
+    // Set the duration for how long ES7210 stays on before entering low power
+    void SetAudioPowerTimeout(uint32_t timeout_ms) { audio_power_timeout_ms_ = timeout_ms; }
+
 private:
     AudioCodec* codec_ = nullptr;
     AudioServiceCallbacks callbacks_;
@@ -146,6 +149,7 @@ private:
     bool voice_detected_ = false;
     bool service_stopped_ = true;
     bool audio_input_need_warmup_ = false;
+    uint32_t audio_power_timeout_ms_ = 15000;
 
     esp_timer_handle_t audio_power_timer_ = nullptr;
     std::chrono::steady_clock::time_point last_input_time_;
