@@ -110,6 +110,8 @@ private:
     size_t chunk_pool_slot_count_ = 0;
     std::mutex chunk_pool_mutex_;
 
+    std::vector<std::string> excluded_songs_;
+
     // chunk pool 管理
     bool InitChunkPool(size_t count, size_t slot_size);
     void DestroyChunkPool();
@@ -333,6 +335,7 @@ public:
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
     virtual bool ReturnMode(void)override{return  mode;}
     virtual void SetMode(bool a)override{mode = a;}
+    virtual void SetExcludedSongs(const std::vector<std::string>& songs) override;
     virtual void SetStopSignal(bool a)override{stop_playback_ = a;}
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;

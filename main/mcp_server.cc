@@ -358,103 +358,6 @@ void McpServer::AddCommonTools() {
             // 返回 payload，包含 ai_instruction 让模型调用 actually.1 来开始播放，并读出第一首
             return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "已创建并将为你播放：", now_playing);
         });
-        AddTool("General.Play",
-                "当用户没有具体表明是要播放音乐还是故事的时候调用，用于判断用户说的内容是音乐还是故事，并且根据用户说的内容来播放相应的音乐或者故事\n"
-                "参数:\n"
-                "  `name`: 要播放的名称,非必须,默认为空字符串。\n"
-                "  `artist`: 艺术家\n",
-                PropertyList({
-                    Property("name", kPropertyTypeString,""),
-                    Property("artist", kPropertyTypeString,"")
-                }),
-                [music,&board,app](const PropertyList& properties) -> ReturnValue {
-                    #if !my
-                    #if battery_check
-                    if(board.GetBatteryLevel() <= 10)
-                    {
-                        return "{\"success\": false, \"message\": \"当前电量过低，无法播放音乐，请为设备充电后重试。\"}";
-                    }
-                    #endif
-                    #endif
-                    if (!music) {
-                        return "{\"success\": false, \"message\": \"设备未初始化音频模块\"}";
-                    }
-
-                    auto name = properties["name"].value<std::string>();
-                    auto artist = properties["artist"].value<std::string>();
-                    std::string query;
-                    if (!artist.empty() && !name.empty()) query = artist + "-" + name;
-                    else if (!name.empty()) query = name;
-                    else query = artist;
-
-                    auto music_impl = static_cast<Esp32Music*>(music);
-                    std::vector<const PSMediaInfo*> hits;
-                    if (!query.empty()) {
-                        hits = music_impl->FuzzySearchMedia(query, 6);
-                    } else {
-                        const auto& view = music_impl->GetUnifiedMediaView();
-                        size_t take = std::min<size_t>(6, view.size());
-                        for (size_t i = 0; i < take; ++i) hits.push_back(view[i]);
-                    }
-
-                    if (hits.empty()) {
-                        return "{\"success\": false, \"message\": \"未找到匹配的音乐或故事\"}";
-                    }
-
-                    auto trim = [](std::string s) {
-                        auto is_space = [](int ch){ return std::isspace(ch); };
-                        s.erase(s.begin(), std::find_if(s.begin(), s.end(), [&](unsigned char ch){ return !is_space(ch); }));
-                        s.erase(std::find_if(s.rbegin(), s.rend(), [&](unsigned char ch){ return !is_space(ch); }).base(), s.end());
-                        return s;
-                    };
-                    auto split_pair = [&](const std::string& disp) {
-                        auto pos = disp.find('-');
-                        if (pos == std::string::npos) return std::make_pair(std::string(), trim(disp));
-                        return std::make_pair(trim(disp.substr(0, pos)), trim(disp.substr(pos + 1)));
-                    };
-
-                    const PSMediaInfo* best = hits.front();
-                    cJSON* root = cJSON_CreateObject();
-                    cJSON_AddBoolToObject(root, "success", true);
-                    cJSON_AddStringToObject(root, "message", "我找到了这些可能的内容");
-                    cJSON* candidates = cJSON_CreateArray();
-                    for (const auto* item : hits) {
-                        cJSON_AddItemToArray(candidates, cJSON_CreateString(item->display_name.c_str()));
-                    }
-                    cJSON_AddItemToObject(root, "candidates", candidates);
-
-                    std::string speak;
-                    cJSON* ai = cJSON_CreateObject();
-                    if (best->type == PSMediaType::kMusic) {
-                        auto pair = split_pair(best->display_name);
-                        cJSON_AddStringToObject(ai, "call_tool", "music.play");
-                        cJSON* args = cJSON_CreateObject();
-                        if (!pair.first.empty())
-                            cJSON_AddStringToObject(args, "singer", pair.first.c_str());
-                        if (!pair.second.empty())
-                            cJSON_AddStringToObject(args, "songname", pair.second.c_str());
-                        cJSON_AddItemToObject(ai, "arguments", args);
-                        speak = "找到歌曲 " + best->display_name + "，需要我播放吗？";
-                    } else {
-                        auto pair = split_pair(best->display_name);
-                        cJSON_AddStringToObject(ai, "call_tool", "story.play");
-                        cJSON* args = cJSON_CreateObject();
-                        if (!pair.first.empty())
-                            cJSON_AddStringToObject(args, "Category", pair.first.c_str());
-                        if (!pair.second.empty())
-                            cJSON_AddStringToObject(args, "Story", pair.second.c_str());
-                        cJSON_AddItemToObject(ai, "arguments", args);
-                        speak = "找到故事 " + best->display_name + "，需要我播放吗？";
-                    }
-                    cJSON_AddStringToObject(ai, "speak", speak.c_str());
-                    cJSON_AddItemToObject(root, "ai_instruction", ai);
-
-                    char* out = cJSON_PrintUnformatted(root);
-                    std::string ret = out ? out : "{}";
-                    if (out) cJSON_free(out);
-                    cJSON_Delete(root);
-                    return ret;
-                });
         AddTool("general.play",
                 "用于播放本地的音乐或故事。当无具体类型时，将通过智能推断并播放。返回后续需要调用的 actually 工具。\n"
                 "参数:\n"
@@ -560,6 +463,9 @@ void McpServer::AddCommonTools() {
                     std::string now_playing;
 
                     if (force_story) {
+                        if(app->GetDeviceFunction() == Function_Light) {
+                            return "{\"success\": false, \"message\": \"当前模式无法播放故事\"}";
+                        }
                         ESP_LOGE(TAG,"===================故事=======================");
                         // ==================== STORY 分支 ====================
                         std::string cat = artist;

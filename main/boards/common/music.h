@@ -62,6 +62,7 @@ public:
 
     virtual bool ReturnMode(void) =0;
     virtual void SetMode(bool a) =0;
+    virtual void SetExcludedSongs(const std::vector<std::string>& songs) = 0;
     virtual bool ScanMusicLibrary(const std::string& music_folder) = 0;
     virtual size_t GetMusicCount() const = 0;
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const =0;

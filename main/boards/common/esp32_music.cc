@@ -1212,6 +1212,13 @@ void Esp32Music::NextPlayTask(void* arg) {
                         NextPlayIndexRandom(current_playlist_name_);
 
                     }
+                    else if(MusicPlayback_mode_ == PLAYBACK_MODE_LOOP)
+                    {
+                        if(ManualNextPlay_)
+                            NextPlayIndexOrder(current_playlist_name_);
+                        else
+                            ESP_LOGI(TAG, "Loop mode active, replaying current track");
+                    }
                     StopStreaming();
                     EnableRecord(true, MUSIC);
                    while(PlayPlaylist(current_playlist_name_) == false && app.GetDeviceState() == kDeviceStateIdle)
@@ -2035,6 +2042,21 @@ void Esp32Music::ScanDirectoryRecursive(const std::string& path) {
         } else if (entry->d_type == DT_REG) {
             if (IsMusicFile(full_path)) {
                 MusicFileInfo music_info = ExtractMusicInfo(full_path);
+                
+                // 检查是否在排除列表中
+                bool excluded = false;
+                for (const auto& excluded_song : excluded_songs_) {
+                    if (music_info.song_name == excluded_song) {
+                        excluded = true;
+                        break;
+                    }
+                }
+                
+                if (excluded) {
+                    ESP_LOGI(TAG, "Skipping excluded music: %s", music_info.song_name.c_str());
+                    continue;
+                }
+
                 {
                     std::lock_guard<std::mutex> lock(music_library_mutex_);
                     if (!ps_add_music_info_locked(music_info)) {
@@ -4083,3 +4105,4 @@ std::vector<const PSMediaInfo*> Esp32Music::FuzzySearchMedia(const std::string& 
 
     return results;
 }
+void Esp32Music::SetExcludedSongs(const std::vector<std::string>& songs) { excluded_songs_ = songs; }

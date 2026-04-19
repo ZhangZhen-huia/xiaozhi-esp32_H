@@ -25,9 +25,11 @@
 #define AiAssistantMode 0
 #define LightMode 2
 
-#define MUSIC_API_URL        "http://wanwei.cyberfile.top/external/music"
-#define TOKEN                 "7sK2fR8xQbL5zG9tYj2cVnSdFgHkPqA4"
-#define TIME_API_URL_BASE  "http://wanwei.cyberfile.top/external/devices/sleep-times?mac="
+#define MUSIC_API_URL           "http://wanwei.cyberfile.top/external/music"
+#define TOKEN                   "7sK2fR8xQbL5zG9tYj2cVnSdFgHkPqA4"
+#define TIME_API_URL_BASE       "http://wanwei.cyberfile.top/external/devices/sleep-times?mac="
+#define GET_SPEAKER_URL         "http://wanwei.cyberfile.top/external/devices/speaker?mac="
+
 
 #define my 0
 #define battery_check 0
@@ -57,6 +59,7 @@ enum Role{
     Role_Xiaozhi,
     Role_XiaoMing,
 };
+
 
 enum DeviceFunction {
     Function_AIAssistant = 0,
@@ -116,6 +119,8 @@ public:
     uint8_t Current_role = 0;
     bool have_rfid_ = false;
     bool wake_word_detected_ = false;
+    std::string UID;
+    std::string LastUID;
     
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
@@ -133,6 +138,9 @@ public:
     void music_http_get_task();
     void time_http_get_task();
     void post_switch_agent_task();
+    void speaker_http_get_task();
+
+    bool has_speaker_profile_ = false;
 private:
     Application();
     ~Application();

@@ -34,7 +34,8 @@
 #include "cJSON.h"
 
 #define TAG "Application"
-
+// 全局唤醒计时（ms），0 表示未计时
+static std::atomic<int64_t> s_wake_start_ms{0};
 extern bool NotResumePlayback;
 static const char* const STATE_STRINGS[] = {
     "unknown",
@@ -50,6 +51,8 @@ static const char* const STATE_STRINGS[] = {
     "fatal_error",
     "invalid_state"
 };
+
+
 
 Application::Application() {
     
@@ -100,8 +103,7 @@ Application::~Application() {
     vEventGroupDelete(event_group_);
 }
 
-// 全局唤醒计时（ms），0 表示未计时
-static std::atomic<int64_t> s_wake_start_ms{0};
+
 
 static inline void StartWakeTimerInternal() {
     int64_t now = esp_timer_get_time() / 1000;
@@ -803,10 +805,10 @@ void Application::Start() {
 
     auto music = board.GetMusic();
     if(music) {
-
-        music->ScanAndLoadMusic();
+        // 先跳过主动去扫描，让 music_http_get_task 拉取完排除名单后再统一进行构建
+        // music->ScanAndLoadMusic();
         music->ScanAndLoadStory();
-        music->RebuildUnifiedMediaLibrary();
+        // music->RebuildUnifiedMediaLibrary();
     }
     esp_reset_reason_t reason = esp_reset_reason();
 
@@ -865,6 +867,11 @@ void Application::Start() {
         vTaskDelete(NULL);
     }, "http_get", 2048*2, this, 5, NULL);
 
+    xTaskCreate([](void* arg) { 
+        ((Application*)arg)->speaker_http_get_task();
+        vTaskDelete(NULL);
+    }, "speaker_get", 2048 * 2, this, 5, NULL);
+
     vTaskDelay(pdMS_TO_TICKS(5000));
     if (device_function_ == Function_Light && have_rfid_) {
         //这里需要替换音频为切换到灯光模式的提示音
@@ -872,8 +879,9 @@ void Application::Start() {
         vTaskDelay(pdMS_TO_TICKS(3000));
         auto music = board.GetMusic();
         if (music) {
-            ESP_LOGE(TAG, "Resuming music playback after light mode switch");
+            ESP_LOGD(TAG, "Resuming music playback after light mode switch");
             music->SetMode(true);
+            music->SetLoopMode(true);
             music->ResumeSavedPlayback();
         }
     }
@@ -892,6 +900,7 @@ void Application::EnterDeepSleep() {
     ESP_LOGI(TAG, "=============准备进入深度睡眠===============");
     auto& board = Board::GetInstance();
     auto music = board.GetMusic();
+    music->SetStopSignal(true); // 设置停止信号，通知音乐播放任务停止
     music->StopStreaming();
     
 
@@ -990,23 +999,61 @@ void Application:: music_http_get_task()
             ESP_LOGI(TAG, "Status: %d, Content-Length: %d", status, content_length);
 
             // 读取正文
-            char *buffer = (char*)malloc(512);
+            char *buffer = (char*)heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
+            if (!buffer) buffer = (char*)malloc(1024);
             int total = 0;
             int read_len;
-            while ((read_len = esp_http_client_read(client, buffer + total, 511 - total)) > 0) {
+            while ((read_len = esp_http_client_read(client, buffer + total, 1023 - total)) > 0) {
                 total += read_len;
-                // 扩容...
             }
             if (read_len < 0) ESP_LOGE(TAG, "Read error");
             if (total > 0) {
                 buffer[total] = 0;
-                ESP_LOGI(TAG, "Response: %s", buffer);
+                ESP_LOGD(TAG, "Response: %s", buffer);
+
+                cJSON *root = cJSON_Parse(buffer);
+                if (root) {
+                    cJSON *data = cJSON_GetObjectItem(root, "data");
+                    if (data && cJSON_IsArray(data)) {
+                        std::vector<std::string> excluded_songs;
+                        int count = cJSON_GetArraySize(data);
+                        for (int i = 0; i < count; ++i) {
+                            cJSON *item = cJSON_GetArrayItem(data, i);
+                            cJSON *musicName = cJSON_GetObjectItem(item, "musicName");
+                            if (musicName && cJSON_IsString(musicName)) {
+                                excluded_songs.push_back(musicName->valuestring);
+                                ESP_LOGI(TAG, "Will exclude music: %s", musicName->valuestring);
+                            }
+                        }
+                        
+                        auto music = Board::GetInstance().GetMusic();
+                        if (music) {
+                            if (!excluded_songs.empty()) {
+                                music->SetExcludedSongs(excluded_songs);
+                            }
+                            // 拿到屏蔽名单以后，统一去扫描构建播放列表以过滤掉这些歌
+                            music->ScanAndLoadMusic();
+                            music->RebuildUnifiedMediaLibrary();
+                        }
+                    }
+                    cJSON_Delete(root);
+                }
             } else {
                 ESP_LOGE(TAG, "No body");
+                auto music = Board::GetInstance().GetMusic();
+                if (music) {
+                    music->ScanAndLoadMusic();
+                    music->RebuildUnifiedMediaLibrary();
+                }
             }
             free(buffer);
         } else {
             ESP_LOGE(TAG, "Open failed");
+            auto music = Board::GetInstance().GetMusic();
+            if (music) {
+                music->ScanAndLoadMusic();
+                music->RebuildUnifiedMediaLibrary();
+            }
         }
         esp_http_client_close(client);
         esp_http_client_cleanup(client);
@@ -1040,7 +1087,8 @@ void Application::time_http_get_task()
     }
 
     // 2. 也是在循环外分配 buffer（只要 512 字节，安全起见用 malloc 放堆里避免爆栈）
-    char *buffer = (char*)malloc(512);
+    char *buffer = (char*)heap_caps_malloc(512, MALLOC_CAP_SPIRAM);
+    if (!buffer) buffer = (char*)malloc(512);
     if (!buffer) {
         ESP_LOGE(TAG, "[time_get] Malloc failed for buffer");
         esp_http_client_cleanup(client);
@@ -1118,6 +1166,81 @@ void Application::time_http_get_task()
     esp_http_client_cleanup(client);
 }
 
+void Application::speaker_http_get_task()
+{
+    char url[256];
+    snprintf(url, sizeof(url), "%s%s", GET_SPEAKER_URL, SystemInfo::GetMacAddress().c_str());
+
+    esp_http_client_config_t config = {
+        .url = url,
+        .method = HTTP_METHOD_GET,
+        .timeout_ms = 10000,
+        .skip_cert_common_name_check = true, // 跳过证书 CN 校验
+        .crt_bundle_attach = esp_crt_bundle_attach, // 使用内建证书包
+    };
+
+    esp_http_client_handle_t client = esp_http_client_init(&config);
+    if (!client) {
+        ESP_LOGE(TAG, "[speaker_get] HTTP client init failed");
+        return;
+    }
+
+    char *buffer = (char*)heap_caps_malloc(1024, MALLOC_CAP_SPIRAM);
+    if (!buffer) buffer = (char*)malloc(1024);
+    if (!buffer) {
+        ESP_LOGE(TAG, "[speaker_get] Malloc failed for buffer");
+        esp_http_client_cleanup(client);
+        return;
+    }
+
+    esp_http_client_set_header(client, "Authorization", TOKEN);
+    
+    esp_err_t err = esp_http_client_open(client, 0);
+    if (err == ESP_OK) {
+        int content_length = esp_http_client_fetch_headers(client);
+        int status = esp_http_client_get_status_code(client);
+        ESP_LOGI(TAG, "[speaker_get] Status: %d, Content-Length: %d", status, content_length);
+
+        int total = 0;
+        int read_len;
+        while ((read_len = esp_http_client_read(client, buffer + total, 1023 - total)) > 0) {
+            total += read_len;
+        }
+        
+        if (read_len < 0) {
+            ESP_LOGE(TAG, "[speaker_get] Read error %d", read_len);
+        }
+        
+        if (total > 0) {
+            buffer[total] = 0;
+            ESP_LOGD(TAG, "[speaker_get] Response: %s", buffer);
+            
+            cJSON *root = cJSON_Parse(buffer);
+            if (root) {
+                // 判断 data 字段是否有效
+                cJSON *data = cJSON_GetObjectItem(root, "data");
+                if (data && !cJSON_IsNull(data)) {
+                    // 如果 data 返回的是空对象 {}，也可进一步判断其大小
+                    // 这里默只要不为空就代表已经配置（或者你有其他校验逻辑可放这）
+                    ESP_LOGI(TAG, "[speaker_get] >>> 检测到声纹已配置 <<<");
+                } else {
+                    ESP_LOGE(TAG, "[speaker_get] >>> 没有检测到声纹配置 <<<");
+                }
+                cJSON_Delete(root);
+            } else {
+                ESP_LOGE(TAG, "[speaker_get] Response Parse failed");
+            }
+        } else {
+            ESP_LOGE(TAG, "[speaker_get] No body");
+        }
+    } else {
+        ESP_LOGE(TAG, "[speaker_get] Open failed: %s", esp_err_to_name(err));
+    }
+    
+    esp_http_client_close(client);
+    esp_http_client_cleanup(client);
+    free(buffer);
+}
 
 void Application::post_switch_agent_task()
 {
@@ -1138,40 +1261,55 @@ void Application::post_switch_agent_task()
                 cJSON_AddStringToObject(root, "mac", SystemInfo::GetMacAddress().c_str());
                 if(!Switch_State)
                 {
-                    if(Role_Id == 1)
+                    if(device_function_ == Function_Light)
+                    {
+                        cJSON_AddStringToObject(root, "agentName", "夜灯助手");
+                    }
+                    else
+                    {
+                        if(Role_Id == 1)
                         {
-                            cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
+                            cJSON_AddStringToObject(root, "agentName", "C");
                             device_function_ = Function_AIAssistant;
                         }
-                    else if(Role_Id == 0)
+                        else if(Role_Id == 2)
                         {
                             cJSON_AddStringToObject(root, "agentName", "播放助手");
                             device_function_ = Function_MusicStory;
                         }
-                    else if(Role_Id == 2)
-                    {
-                        cJSON_AddStringToObject(root, "agentName", "C");
-                        device_function_ = Function_Light;
+                        else if(Role_Id == 0)
+                        {
+                            cJSON_AddStringToObject(root, "agentName", "闲聊助手");
+                            device_function_ = Function_AIAssistant;
+                        }
+
                     }
                 }
                 else
                 {
                     if(Role_Id != Last_Role_Id)
                     {
-                        if(Role_Id == 1)
+                        if(device_function_ == Function_Light)
                         {
-                            cJSON_AddStringToObject(root, "agentName", "毒舌傲娇吐槽役");
-                            device_function_ = Function_AIAssistant;
+                            cJSON_AddStringToObject(root, "agentName", "夜灯助手");
                         }
-                        else if(Role_Id == 0)
+                        else 
                         {
-                            cJSON_AddStringToObject(root, "agentName", "播放助手");
-                            device_function_ = Function_MusicStory;
-                        }
-                        else if(Role_Id == 2)
-                        {
-                            cJSON_AddStringToObject(root, "agentName", "C");
-                            device_function_ = Function_Light;
+                            if(Role_Id == 1)
+                            {
+                                cJSON_AddStringToObject(root, "agentName", "C");
+                                device_function_ = Function_AIAssistant;
+                            }
+                            else if(Role_Id == 0)
+                            {
+                                cJSON_AddStringToObject(root, "agentName", "播放助手");
+                                device_function_ = Function_MusicStory;
+                            }
+                            else if(Role_Id == 2)
+                            {
+                                cJSON_AddStringToObject(root, "agentName", "闲聊助手");
+                                device_function_ = Function_AIAssistant;
+                            }
                         }
                     }
                     else
@@ -1258,7 +1396,10 @@ void Application::post_switch_agent_task()
                             chunk[read_len] = '\0';
                             ESP_LOGD(TAG, "Read chunk: %d bytes: %s", read_len, chunk);
 
-                            char *new_buf = (char *)realloc(response, total_len + read_len + 1);
+                            char *new_buf = (char *)heap_caps_realloc(response, total_len + read_len + 1, MALLOC_CAP_SPIRAM);
+                            if (!new_buf) {
+                                new_buf = (char *)realloc(response, total_len + read_len + 1);
+                            }
                             if (!new_buf) {
                                 ESP_LOGE(TAG, "Realloc failed");
                                 success = false;
@@ -1338,8 +1479,7 @@ void Application::post_switch_agent_task()
     }
 }
 
-std::string UID;
-std::string LastUID;
+
 
 void Application::RFID_TASK()
 {
@@ -1349,7 +1489,7 @@ void Application::RFID_TASK()
     int no_card_count = 0;
     static  bool toggle = 0;
     static  bool stopWake = 0;
-    static bool play_music = false;
+    static bool play_music = true;
     auto music = board.GetMusic();
     bool has_net = false;
     while(1)
@@ -1418,7 +1558,7 @@ void Application::RFID_TASK()
                 audio_service_.EnableWakeWordDetection(true);
                 stopWake = 0;
             }
-            if(device_function_ == Function_MusicStory)
+            if(device_function_ == Function_MusicStory || device_function_ == Function_Light)
             {
                 ESP_LOGD(TAG, "检测到公仔，当前模式为播放助手。");
                 if( has_net && music->ReturnMode())
@@ -1454,7 +1594,7 @@ void Application::RFID_TASK()
             }
 
                 if(UID == LastUID) {
-                    vTaskDelay(pdMS_TO_TICKS(500));
+                    vTaskDelay(pdMS_TO_TICKS(1000));
                     continue; // 如果和上次读取的卡片ID相同，则跳过后续操作
                 }
                 rfid_fields_t fields;
@@ -1470,8 +1610,6 @@ void Application::RFID_TASK()
                         ESP_LOGD(TAG,"卡片");
                         if(role == "000") {
                             Role_Id = 0;
-                            // std::string msg = "切换到默认智能体";
-                            // SendMessage(msg);
                             // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
                             if (switch_agent_sem != NULL) {
                                 xSemaphoreGive(switch_agent_sem);
@@ -1480,9 +1618,6 @@ void Application::RFID_TASK()
 
                         } else if(role == "001") {
                             Role_Id = 2;
-                            // ESP_LOGW(TAG,"播放器");
-                            // std::string msg = "切换到播放器智能体";
-                            // SendMessage(msg);
                             // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
                             if (switch_agent_sem != NULL) {
                                 xSemaphoreGive(switch_agent_sem);
