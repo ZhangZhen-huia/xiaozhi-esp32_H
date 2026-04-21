@@ -139,7 +139,7 @@ public:
     void time_http_get_task();
     void post_switch_agent_task();
     void speaker_http_get_task();
-
+    uint8_t All_Finish;
     bool has_speaker_profile_ = false;
 private:
     Application();

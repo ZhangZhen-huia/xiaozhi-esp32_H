@@ -513,13 +513,14 @@ void Esp32Music::PlayAudioStream() {
             lock.lock();
         }
     }
-    ESP_LOGI(TAG, "小智开源音乐固件qq交流群:826072986");
     ESP_LOGI(TAG, "Starting playback with buffer size: %d", buffer_size_);
     
     size_t total_played = 0;
     uint8_t* mp3_input_buffer = nullptr;
     int bytes_left = 0;
     uint8_t* read_ptr = nullptr;
+    AudioChunk pending_chunk = {nullptr, 0};
+    uint8_t* pending_original_data = nullptr;
     
     // 分配MP3输入缓冲区
     mp3_input_buffer = (uint8_t*)heap_caps_malloc(8192, MALLOC_CAP_SPIRAM);
@@ -530,6 +531,7 @@ void Esp32Music::PlayAudioStream() {
     }
     auto& app = Application::GetInstance();
     app.GetAndClearWakeElapsedMs(); // 清除唤醒时间，避免影响后续逻辑
+    
     // 标记是否已经处理过ID3标签
     bool id3_processed = false;
     static DeviceState current_state = app.GetDeviceState();
@@ -538,7 +540,7 @@ void Esp32Music::PlayAudioStream() {
     using namespace std::chrono;
     steady_clock::time_point listening_start = steady_clock::time_point::min();
     int consecutive_decode_failures = 0;
-    const int kMaxConsecutiveDecodeFailures = 3;
+    const int kMaxConsecutiveDecodeFailures = 20;
     int resume_fail_count = 0;
     
     
@@ -714,11 +716,18 @@ void Esp32Music::PlayAudioStream() {
         
         
         // 如果需要更多MP3数据，从缓冲区读取
-        if (bytes_left < 4096) {  // 保持至少4KB数据用于解码
-            AudioChunk chunk;
+        if (bytes_left < 8192) {  // 尽量填满缓冲区
+            AudioChunk chunk = {nullptr, 0};
+            bool has_new_chunk = false;
             
-            // 从缓冲区获取音频数据
-            {
+            if (pending_chunk.data && pending_chunk.size > 0) {
+                chunk = pending_chunk;
+                has_new_chunk = true;
+                pending_chunk.data = nullptr;
+                pending_chunk.size = 0;
+            } else {
+                // 从缓冲区获取音频数据
+                {
                     std::unique_lock<std::mutex> lock(buffer_mutex_);
                     if (audio_buffer_.empty()) {
                         if (!is_downloading_) {
@@ -743,6 +752,8 @@ void Esp32Music::PlayAudioStream() {
                     chunk = audio_buffer_.front();
                     audio_buffer_.pop();
                     buffer_size_ -= chunk.size;
+                    pending_original_data = chunk.data;
+                    has_new_chunk = true;
                     // 通知下载线程缓冲区有空间
                     if (g_buffer_sema) {
                         xSemaphoreGive(g_buffer_sema);
@@ -751,9 +762,10 @@ void Esp32Music::PlayAudioStream() {
                         ESP_LOGW(TAG, "Notified one waiting download thread after popping chunk");
                     }
                 }
+            }
             
             // 将新数据添加到MP3输入缓冲区
-            if (chunk.data && chunk.size > 0) {
+            if (has_new_chunk && chunk.data && chunk.size > 0) {
                 // 移动剩余数据到缓冲区开头
                 if (bytes_left > 0 && read_ptr != mp3_input_buffer) {
                     memmove(mp3_input_buffer, read_ptr, bytes_left);
@@ -761,12 +773,17 @@ void Esp32Music::PlayAudioStream() {
                 
                 // 检查缓冲区空间
                 size_t space_available = 8192 - bytes_left;
+                if (chunk.size > space_available) {
+                    ESP_LOGD(TAG, "Chunk larger than available space: chunk.size=%u, space=%u", chunk.size, space_available);
+                }
                 size_t copy_size = std::min(chunk.size, space_available);
                 
                 // 复制新数据
-                memcpy(mp3_input_buffer + bytes_left, chunk.data, copy_size);
-                bytes_left += copy_size;
-                read_ptr = mp3_input_buffer;
+                if (copy_size > 0) {
+                    memcpy(mp3_input_buffer + bytes_left, chunk.data, copy_size);
+                    bytes_left += copy_size;
+                    read_ptr = mp3_input_buffer;
+                }
                 
                 // 检查并跳过ID3标签（仅在开始时处理一次）
                 if (!id3_processed && bytes_left >= 10) {
@@ -779,9 +796,17 @@ void Esp32Music::PlayAudioStream() {
                     id3_processed = true;
                 }
                 
-                // 释放chunk内存
-                // heap_caps_free(chunk.data);
-                ReturnChunkToPool(chunk.data);
+                // 处理剩余数据
+                if (copy_size < chunk.size) {
+                    pending_chunk.data = chunk.data + copy_size;
+                    pending_chunk.size = chunk.size - copy_size;
+                } else {
+                    // 当前 chunk 全部复制完，释放原始内存块
+                    if (pending_original_data) {
+                        ReturnChunkToPool(pending_original_data);
+                        pending_original_data = nullptr;
+                    }
+                }
             }
         }
         
@@ -791,11 +816,10 @@ void Esp32Music::PlayAudioStream() {
             ESP_LOGW(TAG, "No valid MP3 sync word found in %d bytes", bytes_left);
             // 在断点恢复模式下，更积极地跳过数据
             resume_fail_count++;
-            if (resume_fail_count > 3) {
+            if (resume_fail_count > 5) {
                 ESP_LOGW(TAG, "连续寻找同步字失败达到阈值，准备重启当前文件从头开始播放");
-                
-                if(skip++ >=2)
-                {
+
+                if (skip++ >= 3) {
                     SetStopSignal(false);
                     skip=0;
                     ESP_LOGE(TAG, "多次失败跳过当前音频");
@@ -1053,7 +1077,7 @@ void Esp32Music::PlayAudioStream() {
             consecutive_decode_failures++;
             ESP_LOGW(TAG, "Consecutive decode failures: %d/%d", consecutive_decode_failures, kMaxConsecutiveDecodeFailures);
             if (consecutive_decode_failures >= kMaxConsecutiveDecodeFailures) {
-                if(skip++ >=2)
+                if(skip++ >=1)
                 {
                     SetStopSignal(false);
                     skip=0;
@@ -1160,6 +1184,11 @@ void Esp32Music::PlayAudioStream() {
     // 清理
     if (mp3_input_buffer) {
         heap_caps_free(mp3_input_buffer);
+    }
+    
+    if (pending_original_data) {
+        ReturnChunkToPool(pending_original_data);
+        pending_original_data = nullptr;
     }
     
     // 播放结束时进行基本清理，但不调用StopStreaming避免线程自我等待
@@ -1965,6 +1994,8 @@ void Esp32Music::free_ps_music_library_locked() {
         ps_free_str(e.artist); e.artist = nullptr;
         ps_free_str(e.artist_norm); e.artist_norm = nullptr;
         ps_free_str(e.token_norm); e.token_norm = nullptr;
+        ps_free_str(e.category); e.category = nullptr;
+        ps_free_str(e.index_id); e.index_id = nullptr;
     }
     heap_caps_free(ps_music_library_);
     ps_music_library_ = nullptr;
@@ -2001,6 +2032,8 @@ bool Esp32Music::ps_add_music_info_locked(const MusicFileInfo &info) {
     dst.song_name = ps_strdup(info.song_name);
     dst.artist = ps_strdup(info.artist);
     dst.artist_norm = ps_strdup(info.artist_norm);
+    dst.category = ps_strdup(info.category);
+    dst.index_id = ps_strdup(info.index_id);
 
     // 生成 token-normalized 字符串并存到 PSRAM（避免查询时重复分配）
     std::string token = NormalizeForToken(info.file_name);
@@ -2195,21 +2228,81 @@ MusicFileInfo Esp32Music::ExtractMusicInfo(const std::string& file_path) const {
     MusicFileInfo info;
     info.file_path = file_path;
 
-
+    std::string folder_name;
     size_t last_slash = file_path.find_last_of('/');
     if (last_slash != std::string::npos) {
         info.file_name = file_path.substr(last_slash + 1);
+        size_t prev_slash = file_path.find_last_of('/', last_slash - 1);
+        if (prev_slash != std::string::npos) {
+            folder_name = file_path.substr(prev_slash + 1, last_slash - prev_slash - 1);
+        } else {
+            folder_name = file_path.substr(0, last_slash);
+        }
     } else {
         info.file_name = file_path;
+        folder_name = "";
     }
 
-    // 使用已有的 ParseSongMeta 提取 artist/title 并规范化
-    SongMeta meta = ParseSongMeta(info.file_name);
+    // 提取分类名，去掉类似于 "【01-20】" 的前缀
+    if (!folder_name.empty()) {
+        size_t right_bracket = folder_name.find("】");
+        if (right_bracket != std::string::npos) {
+            info.category = folder_name.substr(right_bracket + 3); // "】" is usually 3 bytes in UTF-8
+        } else {
+            info.category = folder_name;
+        }
+        // 去除可能的首尾空格
+        while(!info.category.empty() && std::isspace((unsigned char)info.category.front())) info.category.erase(0,1);
+        while(!info.category.empty() && std::isspace((unsigned char)info.category.back())) info.category.pop_back();
+    }
 
-    // 填充到 MusicFileInfo 中
-    info.song_name = meta.norm_title;
-    info.artist = meta.artist;
-    info.artist_norm = meta.norm_artist;
+    // 尝试提取 Mindex
+    // 假设文件名比如 "M001 = Head Shoulders Knees and Toes.mp3"
+    std::string base_name = info.file_name;
+    size_t ext_pos = base_name.find_last_of('.');
+    if (ext_pos != std::string::npos) {
+        base_name = base_name.substr(0, ext_pos);
+    }
+    
+    size_t equal_pos = base_name.find('=');
+    if (equal_pos != std::string::npos) {
+        std::string prefix = base_name.substr(0, equal_pos);
+        while(!prefix.empty() && std::isspace((unsigned char)prefix.back())) prefix.pop_back();
+        while(!prefix.empty() && std::isspace((unsigned char)prefix.front())) prefix.erase(0,1);
+        
+        if (!prefix.empty() && (prefix[0] == 'M' || prefix[0] == 'm')) {
+            info.index_id = prefix;
+            // 解析真正的曲名和歌手
+            std::string remainder = base_name.substr(equal_pos + 1);
+            while(!remainder.empty() && std::isspace((unsigned char)remainder.front())) remainder.erase(0,1);
+            SongMeta meta = ParseSongMeta(remainder);
+            info.song_name = meta.norm_title;
+            info.artist = meta.artist;
+            info.artist_norm = meta.norm_artist;
+        } else {
+            SongMeta meta = ParseSongMeta(info.file_name);
+            info.song_name = meta.norm_title;
+            info.artist = meta.artist;
+            info.artist_norm = meta.norm_artist;
+        }
+    } else {
+        SongMeta meta = ParseSongMeta(info.file_name);
+        info.song_name = meta.norm_title;
+        info.artist = meta.artist;
+        info.artist_norm = meta.norm_artist;
+    }
+
+    // 统一处理 index_id 标准化: M001 -> M1
+    if (!info.index_id.empty() && (info.index_id[0] == 'M' || info.index_id[0] == 'm')) {
+        std::string num_part = info.index_id.substr(1);
+        try {
+            int num = std::stoi(num_part);
+            info.index_id = "M" + std::to_string(num);
+        } catch (...) {
+            // 解析数字失败，保持不变
+        }
+    }
+
     // ESP_LOGI(TAG, "Extracted music info - File: %s, Artist: %s, Song: %s", 
     //         info.file_name.c_str(), info.artist.c_str(), info.song_name.c_str());
     // 获取文件大小

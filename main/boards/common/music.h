@@ -13,6 +13,8 @@ struct MusicFileInfo {
     // 新增：歌手信息
     std::string artist;       // 解析到的原始歌手名（可显示）
     std::string artist_norm;  // 规范化后用于匹配（小写、去特殊字符）
+    std::string category;     // 例如 "Classic nursery rhymes"
+    std::string index_id;     // 例如 "M001"
 };
 
 struct PSMusicInfo {
@@ -22,6 +24,8 @@ struct PSMusicInfo {
     char *artist = nullptr;
     char *artist_norm = nullptr;
     char *token_norm = nullptr;
+    char *category = nullptr;
+    char *index_id = nullptr;
     size_t file_size = 0;
 };
 

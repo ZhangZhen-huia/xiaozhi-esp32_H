@@ -285,8 +285,8 @@ private:
 
                 }
             } else {
-                if(is_music_mode || is_light_mode)
-                    if (music) 
+                // if(is_music_mode || is_light_mode)
+                    if (music && app.All_Finish) 
                         music->SetEventNextPlay();//切换音乐
   
             }
@@ -380,11 +380,13 @@ private:
         boot_button_Boot_IO0.OnMultipleClick([this, &app]() {
             ESP_LOGW(TAG, "Boot按键 硬件底层检测：触发 三连击");
             app.Resetsleep_music_ticks_();
-            
-            // 防止软件合成也重复执行
-            last_click_ms_.store(0, std::memory_order_relaxed);
-            if (click_timer_) esp_timer_stop(click_timer_);
-            ResetWifiConfiguration();
+            if(!triple_press_window_expired.load(std::memory_order_acquire)) {
+
+                // 防止软件合成也重复执行
+                last_click_ms_.store(0, std::memory_order_relaxed);
+                if (click_timer_) esp_timer_stop(click_timer_);
+                ResetWifiConfiguration();
+            }
         }, 3);
 
         // 长按处理

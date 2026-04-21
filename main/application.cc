@@ -846,7 +846,8 @@ void Application::Start() {
     // SendMessage(msg);
 
     if(device_function_ == Function_AIAssistant) 
-        PlaySound(Lang::Sounds::OGG_JOLLY);
+        // PlaySound(Lang::Sounds::OGG_JOLLY);
+        PlaySound(Lang::Sounds::OGG_SUCCESS);
     else
         PlaySound(Lang::Sounds::OGG_SUCCESS);
     
@@ -873,11 +874,12 @@ void Application::Start() {
     }, "speaker_get", 2048 * 2, this, 5, NULL);
 
     vTaskDelay(pdMS_TO_TICKS(5000));
+
     if (device_function_ == Function_Light && have_rfid_) {
         //这里需要替换音频为切换到灯光模式的提示音
         PlaySound(Lang::Sounds::OGG_UPGRADE);
         vTaskDelay(pdMS_TO_TICKS(3000));
-        auto music = board.GetMusic();
+        
         if (music) {
             ESP_LOGD(TAG, "Resuming music playback after light mode switch");
             music->SetMode(true);
@@ -885,6 +887,8 @@ void Application::Start() {
             music->ResumeSavedPlayback();
         }
     }
+    All_Finish = true;
+    ESP_LOGI(TAG, "Application started successfully");
 }
 
 // Add a async task to MainLoop
