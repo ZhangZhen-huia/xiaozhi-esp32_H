@@ -32,6 +32,7 @@ struct PSMusicInfo {
 struct PSStoryEntry {
     char *category = nullptr;    // PSRAM 分配的 NUL-终止字符串
     char *story_name = nullptr;  // PSRAM 分配的 NUL-终止字符串
+    char *index_id = nullptr;
     char **chapters = nullptr;   // PSRAM 分配的 char* 数组（每个元素也是 PSRAM 分配的字符串）
     size_t chapter_count = 0;
     std::string norm_category;   // 保留规范化用于快速比较（DRAM，轻量）

@@ -343,7 +343,7 @@ void WifiBoard::StartNetwork() {
     wifi_station.Start();
 
     //超时重新配网
-    if (!wifi_station.WaitForConnected(20 * 1000)) {
+    if (!wifi_station.WaitForConnected(60 * 1000)) {
         // wifi_station.Stop();
         wifi_config_mode_ = true;
         EnterWifiConfigMode();

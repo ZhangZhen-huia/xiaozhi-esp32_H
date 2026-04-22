@@ -79,6 +79,7 @@ struct SongMeta {
 struct StoryEntry {
     std::string category;
     std::string story;
+    std::string index_id;
     std::vector<std::string> chapters; // 章节的完整文件路径（按文件名排序）
     std::string norm_category;
     std::string norm_story;

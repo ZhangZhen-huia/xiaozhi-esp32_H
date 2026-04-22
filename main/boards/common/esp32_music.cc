@@ -2198,6 +2198,8 @@ MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
             info.artist = ps_music_library_[i].artist ? std::string(ps_music_library_[i].artist) : std::string();
             info.artist_norm = ps_music_library_[i].artist_norm ? std::string(ps_music_library_[i].artist_norm) : std::string();
             info.file_size = ps_music_library_[i].file_size;
+            info.category = ps_music_library_[i].category ? std::string(ps_music_library_[i].category) : std::string();
+            info.index_id = ps_music_library_[i].index_id ? std::string(ps_music_library_[i].index_id) : std::string();
             return info;
         }
     }
@@ -2277,19 +2279,13 @@ MusicFileInfo Esp32Music::ExtractMusicInfo(const std::string& file_path) const {
             while(!remainder.empty() && std::isspace((unsigned char)remainder.front())) remainder.erase(0,1);
             SongMeta meta = ParseSongMeta(remainder);
             info.song_name = meta.norm_title;
-            info.artist = meta.artist;
-            info.artist_norm = meta.norm_artist;
         } else {
             SongMeta meta = ParseSongMeta(info.file_name);
             info.song_name = meta.norm_title;
-            info.artist = meta.artist;
-            info.artist_norm = meta.norm_artist;
         }
     } else {
         SongMeta meta = ParseSongMeta(info.file_name);
         info.song_name = meta.norm_title;
-        info.artist = meta.artist;
-        info.artist_norm = meta.norm_artist;
     }
 
     // 统一处理 index_id 标准化: M001 -> M1
@@ -2303,8 +2299,8 @@ MusicFileInfo Esp32Music::ExtractMusicInfo(const std::string& file_path) const {
         }
     }
 
-    // ESP_LOGI(TAG, "Extracted music info - File: %s, Artist: %s, Song: %s", 
-    //         info.file_name.c_str(), info.artist.c_str(), info.song_name.c_str());
+    ESP_LOGI(TAG, "Extracted music info - File: %s, category: %s, Song: %s, Number: %s", 
+            info.file_name.c_str(), info.category.c_str(), info.song_name.c_str(), info.index_id.c_str());
     // 获取文件大小
     info.file_size = get_file_size(file_path);
 
@@ -2367,11 +2363,10 @@ std::string NormalizeForSearch(std::string s) {
     return out;
 }
 
-// 歌手和歌名以及它们的规范化形式
+//提取曲名的规范化信息（用于搜索匹配）
 SongMeta ParseSongMeta(const std::string& filename) {
     SongMeta meta;
     std::string name = filename;
-
 
     size_t pos = name.find_last_of("/\\");
     if (pos != std::string::npos) name = name.substr(pos + 1);
@@ -2379,51 +2374,27 @@ SongMeta ParseSongMeta(const std::string& filename) {
     size_t dot = name.find_last_of('.');
     if (dot != std::string::npos) name = name.substr(0, dot);
 
-    meta.title = name;
-    meta.artist.clear();
-
-    size_t dash = name.find('-');
-    if (dash != std::string::npos) {
-        std::string left = name.substr(0, dash);
-        std::string right = name.substr(dash + 1);
-
-        while (!left.empty() && std::isspace((unsigned char)left.front())) left.erase(left.begin());
-        while (!left.empty() && std::isspace((unsigned char)left.back())) left.pop_back();
-        while (!right.empty() && std::isspace((unsigned char)right.front())) right.erase(right.begin());
-        while (!right.empty() && std::isspace((unsigned char)right.back())) right.pop_back();
-
-        // 若左侧含有字母或非 ASCII 字节（如中文），且右侧非空，则认为是 artist-title
-        bool left_has_alpha_or_nonascii = false;
-        for (unsigned char ch : left) {
-            if (ch >= 0x80) { left_has_alpha_or_nonascii = true; break; } // 非 ASCII，视为有效（中文）
-            if (std::isalpha(ch)) { left_has_alpha_or_nonascii = true; break; }
-        }
-        bool right_nonempty = !right.empty();
-        if (left_has_alpha_or_nonascii && right_nonempty) {
-            meta.artist = left;
-            meta.title = right;
-        } else {
-            // 否则保留整个字符串为 title
-            meta.title = name;
-            meta.artist.clear();
-        }
+    // 名字是=后面的内容
+    size_t eq_pos = name.find('=');
+    if (eq_pos != std::string::npos) {
+        name = name.substr(eq_pos + 1);
+        while (!name.empty() && std::isspace((unsigned char)name.front())) name.erase(name.begin());
     }
+
+    meta.title = name;
 
     // 剔除常见后缀括注（简洁处理：去掉括号或中括号及其中内容）
     auto strip_bracket_suffix = [](std::string &s) {
         size_t p = s.find_first_of("([");
         if (p != std::string::npos) {
             s.erase(p);
-            
             while (!s.empty() && std::isspace((unsigned char)s.back())) s.pop_back();
         }
     };
     strip_bracket_suffix(meta.title);
-    if (!meta.artist.empty()) strip_bracket_suffix(meta.artist);
 
     // 生成规范化字段（用于不区分空格/大小写/特殊字符的匹配）
     meta.norm_title = NormalizeForSearch(meta.title);
-    meta.norm_artist = meta.artist.empty() ? std::string() : NormalizeForSearch(meta.artist);
 
     return meta;
 }
@@ -3206,6 +3177,7 @@ void Esp32Music::free_ps_story_index_locked() {
         if (e.story_name) { ps_free_str(e.story_name); e.story_name = nullptr; }
         // 释放 token_norm（已放在 PSRAM）
         if (e.token_norm) { ps_free_str(e.token_norm); e.token_norm = nullptr; }
+        if (e.index_id) { ps_free_str(e.index_id); e.index_id = nullptr; }
         // norm_* 是 std::string（DRAM），将在 delete[] 时自动析构
     }
     // ps_story_index_ 是用 new[] 分配的，使用 delete[]
@@ -3230,12 +3202,14 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
                 new_arr[i].chapter_count = ps_story_index_[i].chapter_count;
                 new_arr[i].norm_category = std::move(ps_story_index_[i].norm_category);
                 new_arr[i].norm_story = std::move(ps_story_index_[i].norm_story);
+                new_arr[i].index_id = ps_story_index_[i].index_id;
                 // prevent double-free
                 ps_story_index_[i].category = nullptr;
                 ps_story_index_[i].story_name = nullptr;
                 ps_story_index_[i].chapters = nullptr;
                 ps_story_index_[i].chapter_count = 0;
                 ps_story_index_[i].token_norm = nullptr;
+                ps_story_index_[i].index_id = nullptr;
             }
             delete [] ps_story_index_;
         }
@@ -3246,9 +3220,11 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
     PSStoryEntry &dst = ps_story_index_[ps_story_count_];
     dst.category = ps_strdup(e.category);
     dst.story_name = ps_strdup(e.story);
-    if (!dst.category || !dst.story_name) {
+    dst.index_id = ps_strdup(e.index_id);
+    if (!dst.category || !dst.story_name || (!e.index_id.empty() && !dst.index_id)) {
         ps_free_str(dst.category); dst.category = nullptr;
         ps_free_str(dst.story_name); dst.story_name = nullptr;
+        ps_free_str(dst.index_id); dst.index_id = nullptr;
         return false;
     }
 
@@ -3257,6 +3233,7 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
         if (!dst.chapters) {
             ps_free_str(dst.category); dst.category = nullptr;
             ps_free_str(dst.story_name); dst.story_name = nullptr;
+            ps_free_str(dst.index_id); dst.index_id = nullptr;
             return false;
         }
         memset(dst.chapters, 0, e.chapters.size() * sizeof(char*));
@@ -3268,6 +3245,7 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
                 dst.chapters = nullptr;
                 ps_free_str(dst.category); dst.category = nullptr;
                 ps_free_str(dst.story_name); dst.story_name = nullptr;
+                ps_free_str(dst.index_id); dst.index_id = nullptr;
                 return false;
             }
         }
@@ -3311,6 +3289,7 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
         }
         ps_free_str(dst.category); dst.category = nullptr;
         ps_free_str(dst.story_name); dst.story_name = nullptr;
+        ps_free_str(dst.index_id); dst.index_id = nullptr;
         return false;
     }
 
@@ -3364,32 +3343,70 @@ bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
 
             std::string story_path = cat_path + "/" + sname;
             struct stat st_story;
-            if (stat(story_path.c_str(), &st_story) != 0 || !S_ISDIR(st_story.st_mode)) continue;
+            if (stat(story_path.c_str(), &st_story) != 0) continue;
 
-            // 收集章节文件到临时容器
             std::vector<std::string> chapters;
-            DIR* d_ch = opendir(story_path.c_str());
-            if (d_ch) {
-                struct dirent* ent_ch;
-                while ((ent_ch = readdir(d_ch)) != nullptr) {
-                    const char* chname = ent_ch->d_name;
-                    if (strcmp(chname, ".") == 0 || strcmp(chname, "..") == 0) continue;
-                    std::string ch_full = story_path + "/" + chname;
-                    struct stat st_ch;
-                    if (stat(ch_full.c_str(), &st_ch) == 0 && S_ISREG(st_ch.st_mode)) {
-                        if (IsMusicFile(ch_full)) chapters.push_back(ch_full);
+            std::string final_story_name = sname;
+
+            if (S_ISDIR(st_story.st_mode)) {
+                // 收集章节文件到临时容器
+                DIR* d_ch = opendir(story_path.c_str());
+                if (d_ch) {
+                    struct dirent* ent_ch;
+                    while ((ent_ch = readdir(d_ch)) != nullptr) {
+                        const char* chname = ent_ch->d_name;
+                        if (strcmp(chname, ".") == 0 || strcmp(chname, "..") == 0) continue;
+                        std::string ch_full = story_path + "/" + chname;
+                        struct stat st_ch;
+                        if (stat(ch_full.c_str(), &st_ch) == 0 && S_ISREG(st_ch.st_mode)) {
+                            if (IsMusicFile(ch_full)) chapters.push_back(ch_full);
+                        }
+                    }
+                    closedir(d_ch);
+                }
+            } else if (S_ISREG(st_story.st_mode)) {
+                // 单个文件作为没有子章节的故事
+                if (IsMusicFile(story_path)) {
+                    chapters.push_back(story_path);
+                    // 去掉扩展名作为故事名
+                    size_t dot = final_story_name.find_last_of('.');
+                    if (dot != std::string::npos) {
+                        final_story_name = final_story_name.substr(0, dot);
                     }
                 }
-                closedir(d_ch);
             }
 
             if (chapters.empty()) continue;
             std::sort(chapters.begin(), chapters.end());
 
+            std::string index_id;
+            size_t equal_pos = final_story_name.find('=');
+            if (equal_pos != std::string::npos) {
+                std::string prefix = final_story_name.substr(0, equal_pos);
+                while(!prefix.empty() && std::isspace((unsigned char)prefix.back())) prefix.pop_back();
+                while(!prefix.empty() && std::isspace((unsigned char)prefix.front())) prefix.erase(0,1);
+                
+                if (!prefix.empty() && (prefix[0] == 'S' || prefix[0] == 's')) {
+                    index_id = prefix;
+                    std::string remainder = final_story_name.substr(equal_pos + 1);
+                    while(!remainder.empty() && std::isspace((unsigned char)remainder.front())) remainder.erase(0,1);
+                    final_story_name = remainder;
+                }
+            }
+
+            if (!index_id.empty()) {
+                std::string num_part = index_id.substr(1);
+                try {
+                    int num = std::stoi(num_part);
+                    index_id = "s" + std::to_string(num);
+                } catch (...) {}
+            }
+
             // 构造临时 StoryEntry 并追加到 PSRAM（短时间持锁）
             StoryEntry se;
             se.category = cname;
-            se.story = sname;
+            se.story = final_story_name;
+            se.index_id = index_id;
             se.chapters = std::move(chapters);
             se.norm_category = NormalizeForSearch_local(se.category);
             se.norm_story = NormalizeForSearch_local(se.story);
