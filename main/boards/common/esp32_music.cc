@@ -30,6 +30,12 @@
 // 全局 counting semaphore，用于取代 std::condition_variable (避免动态分配多个)
 static SemaphoreHandle_t g_buffer_sema = nullptr;
 static constexpr int kBufferSemaphoreMax = 16;
+// 夜灯模式下要扫描的两个文件夹名
+constexpr const char* FOLDER_SOOTHING_LIGHT = "【41-50】Soothing Light Music";
+constexpr const char* FOLDER_NATURAL_SOUNDS = "【51-60】Natural Sounds";
+// 根目录下要单独添加的音乐文件
+constexpr const char* SPECIAL_MUSIC_FILE = "M000 = Theme Song-Play, Grow, Glow.mp3";
+
 
 static uint8_t* read_buffer = nullptr;
 Esp32Music::Esp32Music() : current_song_name_(),
@@ -1110,11 +1116,12 @@ void Esp32Music::PlayAudioStream() {
                             restart_name = current_song_name_;
                         }
                     }
-                } else if(MusicOrStory_ == STORY){
+                } else if(MusicOrStory_ == STORY) {
                     ESP_LOGI(TAG, "Preparing to restart story from beginning");
                     restart_path = ps_story_index_[current_storyplay_idx_].chapters[current_chapter_index_];
                     restart_name = current_story_name_;
                 }
+
                 // 发出停止信号并通知其他线程
                 is_playing_ = false;
                 is_downloading_ = false;
@@ -1127,7 +1134,7 @@ void Esp32Music::PlayAudioStream() {
                         }
                     } else {
                         buffer_cv_.notify_all();
-                        ESP_LOGW(TAG, "Notified all waiting threads due to decode failure");
+                        ESP_LOGW(TAG, "Notified all waiting threads to stop playback");
                     }
                 }
 
@@ -1156,6 +1163,7 @@ void Esp32Music::PlayAudioStream() {
                     vTaskDelay(pdMS_TO_TICKS(1000));
 
                     //  从头开始播放
+                    ESP_LOGI(TAG, "在主线程调度：从头开始播放 %s", restart_path.c_str());
                     this->PlayFromSD(restart_path, restart_name);
                 });
                 // 退出播放循环，等待线程结束
@@ -1800,7 +1808,6 @@ void Esp32Music::ReadFromSDCard(const std::string& file_path) {
 
     while (is_downloading_ && is_playing_) {
         
-        // 在真正做文件 I/O 前，如果处于暂停则等待（避免 pause 时继续 fread/分配导致缓冲溢满）
         {
             std::unique_lock<std::mutex> lk(buffer_mutex_);
             if (is_paused_) {
@@ -2056,27 +2063,53 @@ bool Esp32Music::ps_add_music_info_locked(const MusicFileInfo &info) {
     return true;
 }
 
-void Esp32Music::ScanDirectoryRecursive(const std::string& path) {
+
+void Esp32Music::ScanDirectoryRecursive(const std::string& path, bool LightModeScan) {
+    static int recursion_depth = 0;
+    recursion_depth++;
+    bool is_top_level = (recursion_depth == 1);
+
     DIR* dir = opendir(path.c_str());
     if (!dir) {
         ESP_LOGE(TAG, "Failed to open directory: %s", path.c_str());
+        recursion_depth--;
         return;
     }
+
     struct dirent* entry;
     int file_count = 0;
     int dir_count = 0;
+
     while ((entry = readdir(dir)) != nullptr) {
-        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0) continue;
+        if (strcmp(entry->d_name, ".") == 0 || strcmp(entry->d_name, "..") == 0)
+            continue;
+
         std::string full_path = path + "/" + entry->d_name;
+
         if (entry->d_type == DT_DIR) {
-            // ESP_LOGD(TAG, "Scanning subdirectory: %s", full_path.c_str());
-            ScanDirectoryRecursive(full_path);
-            dir_count++;
-        } else if (entry->d_type == DT_REG) {
-            if (IsMusicFile(full_path)) {
+            bool should_enter = true;
+            if (LightModeScan && is_top_level) {
+                // 直接比较 C 字符串，不构造 std::string
+                if (strcmp(entry->d_name, FOLDER_SOOTHING_LIGHT) != 0 &&
+                    strcmp(entry->d_name, FOLDER_NATURAL_SOUNDS) != 0) {
+                    should_enter = false;
+                }
+            }
+            if (should_enter) {
+                ScanDirectoryRecursive(full_path, LightModeScan);
+                dir_count++;
+            }
+        }
+        else if (entry->d_type == DT_REG) {
+            bool should_process = true;
+            if (LightModeScan && is_top_level) {
+                if (strcmp(entry->d_name, SPECIAL_MUSIC_FILE) != 0) {
+                    should_process = false;
+                }
+            }
+            if (should_process && IsMusicFile(full_path)) {
                 MusicFileInfo music_info = ExtractMusicInfo(full_path);
-                
-                // 检查是否在排除列表中
+                // 排除列表检查（不变）
                 bool excluded = false;
                 for (const auto& excluded_song : excluded_songs_) {
                     if (music_info.song_name == excluded_song) {
@@ -2084,31 +2117,28 @@ void Esp32Music::ScanDirectoryRecursive(const std::string& path) {
                         break;
                     }
                 }
-                
                 if (excluded) {
                     ESP_LOGI(TAG, "Skipping excluded music: %s", music_info.song_name.c_str());
                     continue;
                 }
-
                 {
                     std::lock_guard<std::mutex> lock(music_library_mutex_);
                     if (!ps_add_music_info_locked(music_info)) {
                         ESP_LOGW(TAG, "Failed to add music info into PSRAM for %s", full_path.c_str());
-                        // 失败时继续扫描，其它条目保留
                     }
                 }
                 file_count++;
-                // if (file_count % 10 == 0) ESP_LOGI(TAG, "Scanned %d music files...", file_count);
-                // ESP_LOGD(TAG, "Found music file: %s (%d bytes)", music_info.file_name.c_str(), (int)music_info.file_size);
             }
         }
     }
+
     closedir(dir);
     ESP_LOGI(TAG, "Scanned directory %s: %d files, %d subdirectories", path.c_str(), file_count, dir_count);
+    recursion_depth--;
 }
 
 
-bool Esp32Music::ScanMusicLibrary(const std::string& music_folder) {
+bool Esp32Music::ScanMusicLibrary(const std::string& music_folder,bool LightModeScan) {
     ESP_LOGI(TAG, "Scanning music library from: %s", music_folder.c_str());
     if (!file_exists(music_folder) || !is_directory(music_folder)) {
         ESP_LOGE(TAG, "Music folder invalid: %s", music_folder.c_str());
@@ -2119,7 +2149,7 @@ bool Esp32Music::ScanMusicLibrary(const std::string& music_folder) {
         free_ps_music_library_locked();
         music_library_scanned_ = false;
     }
-    ScanDirectoryRecursive(music_folder);
+    ScanDirectoryRecursive(music_folder,LightModeScan);
     {
         /* 1. 申请两套视图 */
         size_t n = ps_music_count_;
@@ -2163,17 +2193,16 @@ bool Esp32Music::ScanMusicLibrary(const std::string& music_folder) {
                         ((const MusicView*)b)->artist_norm);
         };
         qsort(music_view_singer_, n, sizeof(MusicView), cmpSinger);
-        
     }
     ESP_LOGI(TAG, "Music library scan completed, found %u music files", (unsigned)ps_music_count_);
     return ps_music_count_ > 0;
 }
 
-void Esp32Music::ScanAndLoadMusic() {
+void Esp32Music::ScanAndLoadMusic(bool LightModeScan) {
     ESP_LOGI(TAG, "Initializing default playlists from SD card music library");
     {
         // 清理并扫描
-        if (!ScanMusicLibrary("/sdcard/音乐")) {
+        if (!ScanMusicLibrary("/sdcard/音乐",LightModeScan)) {
             ESP_LOGW(TAG, "ScanMusicLibrary failed or SD not ready");
         }
     }
@@ -3178,11 +3207,13 @@ void Esp32Music::free_ps_story_index_locked() {
         // 释放 token_norm（已放在 PSRAM）
         if (e.token_norm) { ps_free_str(e.token_norm); e.token_norm = nullptr; }
         if (e.index_id) { ps_free_str(e.index_id); e.index_id = nullptr; }
-        // norm_* 是 std::string（DRAM），将在 delete[] 时自动析构
+        if (e.norm_category) { ps_free_str(e.norm_category); e.norm_category = nullptr; }
+        if (e.norm_story) { ps_free_str(e.norm_story); e.norm_story = nullptr; }
     }
-    // ps_story_index_ 是用 new[] 分配的，使用 delete[]
-    delete [] ps_story_index_;
-    ps_story_index_ = nullptr;
+    if (ps_story_index_) {
+        heap_caps_free(ps_story_index_);
+        ps_story_index_ = nullptr;
+    }
     ps_story_count_ = 0;
     ps_story_capacity_ = 0;
 }
@@ -3192,26 +3223,12 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
     if (need > ps_story_capacity_) {
         size_t new_cap = ps_story_capacity_ ? (ps_story_capacity_ * 3) / 2 : 16;
         if (new_cap < need) new_cap = need;
-        PSStoryEntry *new_arr = new (std::nothrow) PSStoryEntry[new_cap];
+        PSStoryEntry *new_arr = (PSStoryEntry*)heap_caps_malloc(new_cap * sizeof(PSStoryEntry), MALLOC_CAP_SPIRAM | MALLOC_CAP_8BIT);
         if (!new_arr) return false;
+        memset(new_arr, 0, new_cap * sizeof(PSStoryEntry));
         if (ps_story_index_ && ps_story_count_ > 0) {
-            for (size_t i = 0; i < ps_story_count_; ++i) {
-                new_arr[i].category = ps_story_index_[i].category;
-                new_arr[i].story_name = ps_story_index_[i].story_name;
-                new_arr[i].chapters = ps_story_index_[i].chapters;
-                new_arr[i].chapter_count = ps_story_index_[i].chapter_count;
-                new_arr[i].norm_category = std::move(ps_story_index_[i].norm_category);
-                new_arr[i].norm_story = std::move(ps_story_index_[i].norm_story);
-                new_arr[i].index_id = ps_story_index_[i].index_id;
-                // prevent double-free
-                ps_story_index_[i].category = nullptr;
-                ps_story_index_[i].story_name = nullptr;
-                ps_story_index_[i].chapters = nullptr;
-                ps_story_index_[i].chapter_count = 0;
-                ps_story_index_[i].token_norm = nullptr;
-                ps_story_index_[i].index_id = nullptr;
-            }
-            delete [] ps_story_index_;
+            memcpy(new_arr, ps_story_index_, ps_story_count_ * sizeof(PSStoryEntry));
+            heap_caps_free(ps_story_index_);
         }
         ps_story_index_ = new_arr;
         ps_story_capacity_ = new_cap;
@@ -3255,8 +3272,8 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
         dst.chapter_count = 0;
     }
 
-    dst.norm_category = NormalizeForSearch_local(std::string(dst.category ? dst.category : ""));
-    dst.norm_story = NormalizeForSearch_local(std::string(dst.story_name ? dst.story_name : ""));
+    dst.norm_category = ps_strdup(NormalizeForSearch_local(std::string(dst.category ? dst.category : "")));
+    dst.norm_story = ps_strdup(NormalizeForSearch_local(std::string(dst.story_name ? dst.story_name : "")));
     // ESP_LOGI(TAG, "Added story: category='%s' story='%s' chapters=%u",
     //          dst.category ? dst.category : "<nil>",
     //          dst.story_name ? dst.story_name : "<nil>",
@@ -3558,7 +3575,7 @@ std::vector<std::string> Esp32Music::GetChaptersForStory(const std::string& cate
         // 选择最高分，平分时选择故事名更短的（更精确）
         bool replace = false;
         if (score > best_score) replace = true;
-        else if (score == best_score && norm_story.size() < (best_idx == SIZE_MAX ? SIZE_MAX : ps_story_index_[best_idx].norm_story.size()))
+        else if (score == best_score && norm_story.size() < (best_idx == SIZE_MAX ? SIZE_MAX : (ps_story_index_[best_idx].norm_story ? strlen(ps_story_index_[best_idx].norm_story) : 0)))
             replace = true;
 
         if (replace) {
@@ -3651,7 +3668,7 @@ size_t Esp32Music::FindStoryIndexFuzzy(const std::string& story_name) const {
         bool replace = false;
         if (score > best_score) replace = true;
         else if (score == best_score && best_idx != SIZE_MAX) {
-            if (norm_story.size() < ps_story_index_[best_idx].norm_story.size()) replace = true;
+            if (norm_story.size() < (ps_story_index_[best_idx].norm_story ? strlen(ps_story_index_[best_idx].norm_story) : 0)) replace = true;
         } else if (best_idx == SIZE_MAX && score > INT_MIN) replace = true;
 
         if (replace) {
@@ -3753,7 +3770,7 @@ size_t Esp32Music::FindStoryIndexInCategory(const std::string& category, const s
         bool replace = false;
         if (total > best_total) replace = true;
         else if (total == best_total && best_idx != SIZE_MAX) {
-            if (norm_story.size() < ps_story_index_[best_idx].norm_story.size()) replace = true;
+            if (norm_story.size() < (ps_story_index_[best_idx].norm_story ? strlen(ps_story_index_[best_idx].norm_story) : 0)) replace = true;
         }
 
         if (replace) {

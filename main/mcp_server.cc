@@ -289,14 +289,14 @@ void McpServer::AddCommonTools() {
         AddTool("general.play",
                 "用于播放本地的音乐或故事。当无具体类型时，将通过智能推断并播放。返回后续需要调用的 actually 工具。\n"
                 "参数:\n"
-                "  `name`: 歌曲名或故事名（可选）。\n"
+                "  `name`: 歌曲名或故事名（可选）。注意，M或者S开头的并不是名字，而是故事或者音乐的索引\n"
                 "  `target`: 明确播放类型，`music` 或 `story`（可选，未知留空）。\n"
                 "  `mode`: 播放模式，`顺序`、`随机`、`循环`（可选）。\n"
                 "  `GoOn`: 继续播放标志，`true` 继续当前/上次播放（可选）。\n"
                 "  `duration`: 全局定时倒计时（秒），0为无限制。\n"
                 "  `style`: 故事或者的风格/类别,音乐的类别：Classic nursery rhymes、Kids Learning Songs、Soothing Light Music、Natural Sounds\n"
                 "  `Chapter_Index`: 仅限故事：要播放的章节号（默认1）。\n"
-                "  `music_index_id`: 歌曲编号，如M001、M1等（可选）。Music Number\n",
+                "  `index_id`: 歌曲或者故事的编号，如M001、M1、s1等（可选）。\n",
                 PropertyList({
                     Property("name", kPropertyTypeString, ""),
                     Property("target", kPropertyTypeString, ""),
@@ -305,7 +305,7 @@ void McpServer::AddCommonTools() {
                     Property("duration", kPropertyTypeInteger, 0, 0, 86400),
                     Property("style", kPropertyTypeString, ""),
                     Property("Chapter_Index", kPropertyTypeInteger, 1, 1, 1000),
-                    Property("music_index_id", kPropertyTypeString, "")
+                    Property("index_id", kPropertyTypeString, "")
                 }),
                 [music, &board, app](const PropertyList& properties) -> ReturnValue {
                     #if !my
@@ -333,7 +333,8 @@ void McpServer::AddCommonTools() {
                     auto goon = properties["GoOn"].value<bool>();
                     int duration = properties["duration"].value<int>();
                     auto style = properties["style"].value<std::string>();
-                    auto music_index_id = properties["music_index_id"].value<std::string>();
+                    auto index_id = properties["index_id"].value<std::string>();
+                    auto music_index_id = index_id;
                     int chapter_idx = properties["Chapter_Index"].value<int>();
 
                     if (duration > 0) app->Set_PlayDuration(duration);
@@ -344,37 +345,43 @@ void McpServer::AddCommonTools() {
                     bool force_music = (target == "music" || target == "音乐");
                     bool force_story = (target == "story" || target == "故事");
                     ESP_LOGE(TAG, "general.play called with name='%s', Music_index = '%s', style='%s'", name.c_str(), music_index_id.c_str(), style_str.c_str());
-                    force_music = 1;
-                    force_story = 0;
-                    // 如果未明确指定目标，根据特有参数或模糊搜索进行推断
-                    // if (!force_music && !force_story) {
-                    //     if (!style.empty()) {
-                    //         force_music = true;
-                    //     } else if (chapter_idx > 1) {
-                    //         force_story = true;
-                    //     } else if (goon) {
-                    //         auto mos = music->GetMusicOrStory_();
-                    //         if (mos == STORY) force_story = true;
-                    //         else force_music = true;
-                    //     } else if (!name.empty() || !artist.empty()) {
-                    //         std::string query;
-                    //         if (!artist.empty() && !name.empty()) query = artist + "-" + name;
-                    //         else if (!name.empty()) query = name;
-                    //         else query = artist;
 
-                    //         auto hits = music_impl->FuzzySearchMedia(query, 1);
-                    //         if (!hits.empty()) {
-                    //             if (hits.front()->type == PSMediaType::kMusic) force_music = true;
-                    //             else force_story = true;
-                    //             ESP_LOGI(TAG, "general.play fuzz-inferred target: %s (matched: %s)", 
-                    //                      force_music ? "music" : "story", hits.front()->display_name.c_str());
-                    //         } else {
-                    //             force_music = true; // 无法分辨时暂时回退到音乐统一报错
-                    //         }
-                    //     } else {
-                    //         force_music = true;
-                    //     }
-                    // }
+                    // 如果未明确指定目标，根据特有参数或模糊搜索进行推断
+                    if (!force_music && !force_story) {
+                        if (chapter_idx > 1) {
+                            force_story = true;
+                        } else if (goon) {
+                            auto mos = music->GetMusicOrStory_();
+                            if (mos == STORY) force_story = true;
+                            else force_music = true;
+                        } else if (!index_id.empty()) {
+                            if (index_id[0] == 's' || index_id[0] == 'S') force_story = true;
+                            else force_music = true;
+                        } else if (!style.empty() && name.empty() && index_id.empty()) {
+                            // style 有可能是音乐也有可能是故事，我们这里做模糊判断
+                            auto hits = music_impl->FuzzySearchMedia(style, 1);
+                            if (!hits.empty() && hits.front()->type == PSMediaType::kStory) {
+                                force_story = true;
+                            } else {
+                                force_music = true;
+                            }
+                        } else if (!name.empty() || !style.empty()) {
+                            std::string query;
+                            if (!style.empty() && !name.empty()) query = style + "-" + name;
+                            else if (!name.empty()) query = name;
+                            else query = style;
+
+                            auto hits = music_impl->FuzzySearchMedia(query, 1);
+                            if (!hits.empty()) {
+                                if (hits.front()->type == PSMediaType::kMusic) force_music = true;
+                                else force_story = true;
+                            } else {
+                                force_music = true; // 无法分辨时暂时回退到音乐统一报错
+                            }
+                        } else {
+                            force_music = true;
+                        }
+                    }
 
                     // 设置播放模式
                     std::string m = mode_str;
@@ -391,77 +398,141 @@ void McpServer::AddCommonTools() {
 
                     std::string now_playing;
 
-                    // if (force_story) {
-                    //     if(app->GetDeviceFunction() == Function_Light) {
-                    //         return "{\"success\": false, \"message\": \"当前模式无法播放故事\"}";
-                    //     }
-                    //     ESP_LOGE(TAG,"===================故事=======================");
-                    //     // ==================== STORY 分支 ====================
-                    //     std::string cat = artist;
-                    //     std::string story_name = name;
-
-                    //     if ((cat.empty() && story_name.empty() && chapter_idx <= 1) || goon) {
-                    //         ESP_LOGI(TAG, "Continuing last story playback");
-                    //         if (music->is_paused()) {
-                    //             if (music->GetMusicOrStory_() == STORY) { music->ResumePlayback(); return true; }
-                    //             else if (music->GetMusicOrStory_() == MUSIC) music->StopStreaming();
-                    //         }
-                    //         if (music->IfSavedStoryPosition()) {
-                    //             now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
-                    //             return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
-                    //         } else {
-                    //             return "{\"success\": false, \"message\": \"没有保存的故事播放记录\"}";
-                    //         }
-                    //     } else if (cat.empty() && !story_name.empty()) {
-                    //         auto index = music->FindStoryIndexFuzzy(story_name);  
-                    //         if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
-                    //         size_t count = 0;
-                    //         auto storys = music->GetStoryLibrary(count);
-                    //         music->SetCurrentStoryIndex(index);
-                    //         music->SetCurrentCategoryName(storys[index].category);
-                    //         music->SetCurrentStoryName(storys[index].story_name);
-                    //         music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
-                    //         std::string name = storys[index].story_name;
-                    //         now_playing =  name + " 第" + std::to_string(chapter_idx) + "章";
-                    //         return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
-                    //     } else if (!cat.empty() && story_name.empty()) {
-                    //         music->SetCurrentCategoryName(cat);
-                    //         auto stories = music->GetStoriesInCategory(cat);
-                    //         if (stories.empty()) return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
-                    //         story_name = stories[esp_random() % stories.size()];
-                    //         auto index = music->FindStoryIndexInCategory(cat, story_name);
-                    //         if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
-                    //         size_t count = 0;
-                    //         auto storys = music->GetStoryLibrary(count);
-                    //         music->SetCurrentStoryName(storys[index].story_name);
-                    //         music->SetCurrentStoryIndex(index);
-                    //         music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
-                    //         now_playing = cat + " 故事：" + storys[index].story_name + " 第" + std::to_string(chapter_idx) + "章";
-                    //         return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
-                    //     } else {
-                    //         auto index = music->FindStoryIndexInCategory(cat, story_name);
-                    //         if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
-                    //         size_t count = 0;
-                    //         auto storys = music->GetStoryLibrary(count);
-                    //         music->SetCurrentStoryIndex(index);
-                    //         music->SetCurrentStoryName(storys[index].story_name);
-                    //         music->SetCurrentCategoryName(cat);
-                    //         music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
-                    //         now_playing = cat + " 故事：" + storys[index].story_name + " 第" + std::to_string(chapter_idx) + "章";
-                    //         return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
-                    //     }
-
-                    // } else {
-                    {
+                    if (force_story) {
+                        if(app->GetDeviceFunction() == Function_Light) {
+                            return "{\"success\": false, \"message\": \"当前模式无法播放故事\"}";
+                        }
+                        ESP_LOGE(TAG,"===================故事=======================");
+                        // ==================== STORY 分支 ====================
+                        std::string cat = style;
+                        std::string story_name = name;
+                        
+                        if (!index_id.empty()) {
+                            // i. 播放故事索引 "s1"
+                            std::string search_idx = index_id;
+                            if (search_idx[0] == 's' || search_idx[0] == 'S') {
+                                std::string num_part = search_idx.substr(1);
+                                try {
+                                    int num = std::stoi(num_part);
+                                    search_idx = "s" + std::to_string(num);
+                                } catch (...) {}
+                            } else {
+                                try {
+                                    int num = std::stoi(search_idx);
+                                    search_idx = "s" + std::to_string(num);
+                                } catch (...) {}
+                            }
+                            
+                            size_t count = 0;
+                            auto story_lib = music->GetStoryLibrary(count);
+                            int found_idx = -1;
+                            for (size_t i = 0; i < count; ++i) {
+                                if (story_lib[i].index_id && std::string(story_lib[i].index_id) == search_idx) {
+                                    found_idx = i;
+                                    break;
+                                }
+                            }
+                            if (found_idx >= 0) {
+                                music->SetCurrentStoryIndex(found_idx);
+                                music->SetCurrentCategoryName(story_lib[found_idx].category);
+                                music->SetCurrentStoryName(story_lib[found_idx].story_name);
+                                music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
+                                now_playing = std::string(story_lib[found_idx].story_name) + " 第" + std::to_string(chapter_idx) + "章";
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+                            } else {
+                                return "{\"success\": false, \"message\": \"未找到对应编号的故事\"}";
+                            }
+                        } else if (!cat.empty() && story_name.empty()) {
+                            // ii. 用户说播放大类，循环顺序播放该目录下的故事
+                            music->SetCurrentCategoryName(cat);
+                            auto stories = music->GetStoriesInCategory(cat);
+                            if (stories.empty()) return "{\"success\": false, \"message\": \"该类别下没有故事\"}";
+                            // 默认播放该类别第一个，或者随机
+                            story_name = stories[0]; 
+                            auto index = music->FindStoryIndexInCategory(cat, story_name);
+                            if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                            size_t count = 0;
+                            auto storys = music->GetStoryLibrary(count);
+                            music->SetCurrentStoryName(storys[index].story_name);
+                            music->SetCurrentStoryIndex(index);
+                            music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
+                            // 这里可以保持模式为顺序或者循环，外部已经设置
+                            now_playing = cat + " 故事：" + storys[index].story_name + " 第" + std::to_string(chapter_idx) + "章";
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你连续播放", now_playing);
+                        } else if ((cat.empty() && story_name.empty() && chapter_idx <= 1) || goon) {
+                            ESP_LOGI(TAG, "Continuing last story playback");
+                            if (music->is_paused()) {
+                                if (music->GetMusicOrStory_() == STORY) { music->ResumePlayback(); return true; }
+                                else if (music->GetMusicOrStory_() == MUSIC) music->StopStreaming();
+                            }
+                            if (music->IfSavedStoryPosition()) {
+                                now_playing = music->GetCurrentCategoryName() + "故事:" + music->GetCurrentStoryName() + " 第" + std::to_string(music->GetCurrentChapterIndex() + 1) + "章";
+                                return BuildNowPlayingPayload("{\"call_tool\":\"actually.4\"}", "读出来：将为你播放", now_playing);
+                            } else {
+                                return "{\"success\": false, \"message\": \"没有保存的故事播放记录\"}";
+                            }
+                        } else {
+                            // iii. 用户说某一故事的名字，或者大类+故事名
+                            int index = -1;
+                            if (cat.empty()) {
+                                index = music->FindStoryIndexFuzzy(story_name);
+                            } else {
+                                index = music->FindStoryIndexInCategory(cat, story_name);
+                            }
+                            if (index == -1) return "{\"success\": false, \"message\": \"未找到该故事\"}";
+                            size_t count = 0;
+                            auto storys = music->GetStoryLibrary(count);
+                            music->SetCurrentStoryIndex(index);
+                            music->SetCurrentStoryName(storys[index].story_name);
+                            music->SetCurrentCategoryName(storys[index].category);
+                            music->SetCurrentChapterIndex(std::max(0, chapter_idx - 1));
+                            now_playing = std::string(storys[index].category) + " 故事：" + storys[index].story_name + " 第" + std::to_string(chapter_idx) + "章";
+                            return BuildNowPlayingPayload("{\"call_tool\":\"actually.3\"}", "读出来：将为你播放", now_playing);
+                        }
+                    } else {
                         // ==================== MUSIC 分支 ====================
                         std::string song_name = name;
                         ESP_LOGE(TAG,"===================音乐=======================");
 
+                        auto check_light_mode_allowed = [](const char* cat, const char* m_idx = nullptr) {
+                            if (m_idx && (strcmp(m_idx, "M0") == 0 || strcmp(m_idx, "m0") == 0)) return true;
+                            if (!cat) return false;
+                            auto my_strcasestr = [](const char* h, const char* n) -> bool {
+                                if (!n || !*n) return true;
+                                for (; *h; ++h) {
+                                    if (tolower((unsigned char)*h) == tolower((unsigned char)*n)) {
+                                        const char* h2 = h;
+                                        const char* n2 = n;
+                                        while (*h2 && *n2 && tolower((unsigned char)*h2) == tolower((unsigned char)*n2)) { ++h2; ++n2; }
+                                        if (!*n2) return true;
+                                    }
+                                }
+                                return false;
+                            };
+                            return my_strcasestr(cat, "sooth") || my_strcasestr(cat, "natural") || 
+                                   strstr(cat, "舒缓") != nullptr || strstr(cat, "自然") != nullptr;
+                        };
+
+                        if (app->GetDeviceFunction() == Function_Light) {
+                            ESP_LOGE(TAG, "index_id='%s'",music_index_id.c_str());
+
+                            if (!music_index_id.empty()) {
+                                // 允许直接播放包含该索引的音乐
+                            } else if (!style.empty()) {
+                                if (!check_light_mode_allowed(style.c_str())) {
+                                    return "{\"success\": false, \"message\": \"夜灯模式下，只能播放舒缓音乐(Soothing Light Music)或自然声音(Natural Sounds)\"}";
+                                }
+                            } else if (song_name.empty() && music_index_id.empty()) {
+                                style = esp_random() % 2 == 0 ? "Soothing Light Music" : "Natural Sounds";
+                            }
+                        }
+
                         if (!music_index_id.empty()) {
                             // 统一处理 index_id 标准化: M001 -> M1 等
                             std::string search_idx = music_index_id;
+                            std::string num_part;
                             if (search_idx[0] == 'M' || search_idx[0] == 'm') {
-                                std::string num_part = search_idx.substr(1);
+                                num_part = search_idx.substr(1);
                                 try {
                                     int num = std::stoi(num_part);
                                     search_idx = "M" + std::to_string(num);
@@ -485,6 +556,13 @@ void McpServer::AddCommonTools() {
                                 }
                             }
                             if (found_idx >= 0) {
+                                if (app->GetDeviceFunction() == Function_Light) {
+                                    if(search_idx == "M0") {
+                                        // M0 是特殊的全局默认音乐，允许在夜灯模式下播放
+                                    } else if (!check_light_mode_allowed(all_music[found_idx].category)) {
+                                         return "{\"success\": false, \"message\": \"夜灯模式下，只能播放舒缓音乐(Soothing Light Music)或自然声音(Natural Sounds)\"}";
+                                    }
+                                }
                                 auto playlist_name = music->GetDefaultList();
                                 music->SetPlayIndex(playlist_name, found_idx);
                                 music->SetCurrentPlayList(playlist_name);
@@ -494,6 +572,10 @@ void McpServer::AddCommonTools() {
                                 std::string title_disp = meta.title.empty() ? search_idx : meta.title;
                                 return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报）将为你播放", title_disp);
                             } else {
+                                uint8_t num = std::stoi(num_part);
+                                if(num>0 && num<41 && app->GetDeviceFunction() == Function_Light) {
+                                    return "{\"success\": false, \"message\": \"夜灯模式下，只能播放舒缓音乐(Soothing Light Music)或自然声音(Natural Sounds)，请尝试播放M0或者指定类别的音乐\"}";
+                                }
                                 return "{\"success\": false, \"message\": \"未找到对应编号的歌曲\"}";
                             }
 
@@ -565,12 +647,22 @@ void McpServer::AddCommonTools() {
                             if (music->is_paused()) music->StopStreaming();
                             auto index = music->SearchMusicIndexFromlist(song_name);
                             if (index >= 0) {
+                                size_t lib_count = 0;
+                                auto all_music = music->GetMusicLibrary(lib_count);
+                                if (app->GetDeviceFunction() == Function_Light && index < lib_count) {
+                                    if (!check_light_mode_allowed(all_music[index].category)) {
+                                        return "{\"success\": false, \"message\": \"夜灯模式下，只能播放舒缓音乐(Soothing Light Music)或自然声音(Natural Sounds)\"}";
+                                    }
+                                }
                                 auto playlist_name = music->GetDefaultList();
                                 music->SetPlayIndex(playlist_name, index);
                                 music->SetCurrentPlayList(playlist_name);
                                 music->EnableRecord(true, MUSIC);
                                 return BuildNowPlayingPayload("{\"call_tool\":\"actually.1\"}", "（简短播报）将为你播放", song_name);
                             } else {
+                                if(app->GetDeviceFunction() == Function_Light) {
+                                    return "{\"success\": false, \"message\": \"夜灯模式下，只能播放舒缓音乐(Soothing Light Music)或自然声音(Natural Sounds)，请尝试指定类别的音乐\"}";
+                                }
                                 return "{\"success\": false, \"message\": \"未找到匹配的歌曲: \" + song_name}";
                             }
                         }

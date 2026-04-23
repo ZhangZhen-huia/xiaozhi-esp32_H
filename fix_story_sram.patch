@@ -1,0 +1,13 @@
+--- main/boards/common/music.h
++++ main/boards/common/music.h
+@@ -37,8 +37,8 @@ struct PSStoryEntry {
+     char *index_id = nullptr;
+     char **chapters = nullptr;   // PSRAM 分配的 char* 数组（每个元素也是 PSRAM 分配的字符串）
+     size_t chapter_count = 0;
+-    std::string norm_category;   // 保留规范化用于快速比较（DRAM，轻量）
+-    std::string norm_story;      // 保留规范化用于快速比较（DRAM，轻量）
++    char *norm_category = nullptr;   // 保留规范化用于快速比较（PSRAM）
++    char *norm_story = nullptr;      // 保留规范化用于快速比较（PSRAM）
+     char *token_norm = nullptr;  // 保留空格的小写 token-normalized 字符串（存放于 SPIRAM）
+     uint32_t idx = 0;              // 故事索引编号
+ };

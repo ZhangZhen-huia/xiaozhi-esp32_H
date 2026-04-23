@@ -1,54 +1,24 @@
 import re
 
-with open('main/audio/codecs/box_audio_codec.h', 'r') as f:
-    text = f.read()
+with open('main/mcp_server.cc', 'r') as f:
+    code = f.read()
 
-text = text.replace('const audio_codec_data_if_t* data_if_ = nullptr;', 'const audio_codec_data_if_t* in_data_if_ = nullptr;\n    const audio_codec_data_if_t* out_data_if_ = nullptr;')
-with open('main/audio/codecs/box_audio_codec.h', 'w') as f:
-    f.write(text)
+# 1. Update the description and properties to support index_id instead of music_index_id
+code = re.sub(
+    r'`music_index_id`: 歌曲编号，如M001、M1等（可选）。Music Number\\n",\s*PropertyList\(\{.*?\n\s*Property\("music_index_id", kPropertyTypeString, ""\)\s*\}\),',
+    '`index_id`: 歌曲或者故事的编号，如M001、M1、s1等（可选）。\\n",\n                PropertyList({\n                    Property("name", kPropertyTypeString, ""),\n                    Property("target", kPropertyTypeString, ""),\n                    Property("mode", kPropertyTypeString, ""),\n                    Property("GoOn", kPropertyTypeBoolean, false),\n                    Property("duration", kPropertyTypeInteger, 0, 0, 86400),\n                    Property("style", kPropertyTypeString, ""),\n                    Property("Chapter_Index", kPropertyTypeInteger, 1, 1, 1000),\n                    Property("index_id", kPropertyTypeString, "")\n                }),',
+    code,
+    flags=re.DOTALL
+)
 
-with open('main/audio/codecs/box_audio_codec.cc', 'r') as f:
-    text = f.read()
+# 2. Update parsing to use index_id
+code = code.replace(
+    'auto music_index_id = properties["music_index_id"].value<std::string>();',
+    'auto index_id = properties["index_id"].value<std::string>();'
+)
 
-rep = """    // Do initialize of related interface: data_if, ctrl_if and gpio_if
-    audio_codec_i2s_cfg_t i2s_cfg_out = {
-        .port = I2S_NUM_0,
-        .rx_handle = NULL,
-        .tx_handle = tx_handle_,
-    };
-    out_data_if_ = audio_codec_new_i2s_data(&i2s_cfg_out);
-    assert(out_data_if_ != NULL);
+# 3. Fix the hardcoded force_music = 1; force_story = 0; inside general.play and uncomment smart detection using the new variables, and uncomment the story block.
+# We'll just do a large string replacement for the logic part.
 
-    audio_codec_i2s_cfg_t i2s_cfg_in = {
-        .port = I2S_NUM_0,
-        .rx_handle = rx_handle_,
-        .tx_handle = NULL,
-    };
-    in_data_if_ = audio_codec_new_i2s_data(&i2s_cfg_in);
-    assert(in_data_if_ != NULL);"""
-
-old = """    // Do initialize of related interface: data_if, ctrl_if and gpio_if
-    audio_codec_i2s_cfg_t i2s_cfg = {
-        .port = I2S_NUM_0,
-        .rx_handle = rx_handle_,
-        .tx_handle = tx_handle_,
-    };
-    data_if_ = audio_codec_new_i2s_data(&i2s_cfg);
-    assert(data_if_ != NULL);"""
-
-text = text.replace(old, rep)
-text = text.replace('.data_if = data_if_,', '.data_if = out_data_if_,', 1)
-
-old_dev = """    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
-    dev_cfg.codec_if = in_codec_if_;
-    input_dev_ = esp_codec_dev_new(&dev_cfg);"""
-new_dev = """    dev_cfg.dev_type = ESP_CODEC_DEV_TYPE_IN;
-    dev_cfg.codec_if = in_codec_if_;
-    dev_cfg.data_if = in_data_if_;
-    input_dev_ = esp_codec_dev_new(&dev_cfg);"""
-text = text.replace(old_dev, new_dev)
-text = text.replace('audio_codec_delete_data_if(data_if_);', 'audio_codec_delete_data_if(in_data_if_);\n    audio_codec_delete_data_if(out_data_if_);')
-
-with open('main/audio/codecs/box_audio_codec.cc', 'w') as f:
-    f.write(text)
-
+with open('main/mcp_server.cc', 'w') as f:
+    f.write(code)

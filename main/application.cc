@@ -804,7 +804,7 @@ void Application::Start() {
     }
 
     auto music = board.GetMusic();
-    if(music) {
+    if(music && device_function_ != Function_Light) {
         // 先跳过主动去扫描，让 music_http_get_task 拉取完排除名单后再统一进行构建
         // music->ScanAndLoadMusic();
         music->ScanAndLoadStory();
@@ -1036,7 +1036,7 @@ void Application:: music_http_get_task()
                                 music->SetExcludedSongs(excluded_songs);
                             }
                             // 拿到屏蔽名单以后，统一去扫描构建播放列表以过滤掉这些歌
-                            music->ScanAndLoadMusic();
+                            music->ScanAndLoadMusic(device_function_ == Function_Light); // 灯光模式下只加载故事
                             music->RebuildUnifiedMediaLibrary();
                         }
                     }
@@ -1046,7 +1046,7 @@ void Application:: music_http_get_task()
                 ESP_LOGE(TAG, "No body");
                 auto music = Board::GetInstance().GetMusic();
                 if (music) {
-                    music->ScanAndLoadMusic();
+                    music->ScanAndLoadMusic(device_function_ == Function_Light);
                     music->RebuildUnifiedMediaLibrary();
                 }
             }
@@ -1055,7 +1055,7 @@ void Application:: music_http_get_task()
             ESP_LOGE(TAG, "Open failed");
             auto music = Board::GetInstance().GetMusic();
             if (music) {
-                music->ScanAndLoadMusic();
+                music->ScanAndLoadMusic(device_function_ == Function_Light);
                 music->RebuildUnifiedMediaLibrary();
             }
         }

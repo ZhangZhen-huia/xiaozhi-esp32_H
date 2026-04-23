@@ -225,7 +225,7 @@ private:
     void ReadFromSDCard(const std::string& file_path);
     bool StartSDCardStreaming(const std::string& file_path);
 
-    void ScanDirectoryRecursive(const std::string& path);
+    void ScanDirectoryRecursive(const std::string& path,bool LightModeScan);
     bool IsMusicFile(const std::string& file_path) const;
     MusicFileInfo ExtractMusicInfo(const std::string& file_path) const;
     bool ps_add_music_info_locked(const MusicFileInfo &info);
@@ -320,7 +320,7 @@ public:
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name, size_t start_offset);
 
-    virtual bool ScanMusicLibrary(const std::string& music_folder)override;
+    virtual bool ScanMusicLibrary(const std::string& music_folder,bool LightModeScan)override;
     virtual size_t GetMusicCount() const override{ return ps_music_count_; };
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
     virtual const PSMusicInfo* GetMusicLibrary(size_t &out_count) const override;
@@ -341,7 +341,7 @@ public:
     virtual std::string GetCurrentPlayList(void)override;
     virtual PlaybackMode GetPlaybackMode() override;
     virtual void SetCurrentPlayList(const std::string& playlist_name)override;
-    virtual void ScanAndLoadMusic()override;
+    virtual void ScanAndLoadMusic(bool LightModeScan)override;
     virtual void LoadPlaybackPosition()override;
     virtual void SavePlaybackPosition()override;
     virtual bool ResumeSavedPlayback()override;
