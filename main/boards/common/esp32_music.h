@@ -43,7 +43,8 @@ struct AudioChunk {
 struct Music_Record_Info {
     int index;
     const char* song_name;   // 指向 ps_music_library_ 中的 char*（不复制）
-    const char* artist;      // 指向 ps_music_library_ 中的 char*（不复制）
+    // const char* artist;      // 指向 ps_music_library_ 中的 char*（不复制）
+    const char* M_Index; // 歌曲索引编号（例如 M001）
     Music_Record_Info *next;
     Music_Record_Info *last;
 };
@@ -69,9 +70,10 @@ struct Playlist {
 
 // 新增：描述歌曲元数据（歌手 + 歌名）及规范化字段
 struct SongMeta {
-    std::string artist;             // 原始解析到的歌手（可能包含空格/特殊字符）
+    // std::string artist;             // 原始解析到的歌手（可能包含空格/特殊字符）
     std::string title;              // 原始解析到的曲名
-    std::string norm_artist;        // 规范化后用于匹配（小写、去掉非字母数字）
+    
+    // std::string norm_artist;        // 规范化后用于匹配（小写、去掉非字母数字）
     std::string norm_title;         // 规范化后用于匹配（小写、去掉非字母数字）
 };
 
@@ -246,6 +248,7 @@ private:
     bool IsActualPaused() const { return actual_pause_; };
     void SetEventNextPlay(void);
     bool is_paused(void){return is_paused_;};
+    
     int FindValidMp3SyncWord(uint8_t* data, int data_len);
     bool IsValidMp3FrameHeader(uint8_t* header);
 
@@ -286,6 +289,7 @@ private:
     int64_t saved_play_ms_ = 0;
     size_t saved_file_offset_ = 0;
     std::string saved_file_path_;
+    std::string saved_music_number_;
     bool has_saved_MusicPosition_ = false;
     bool SaveMusicRecord_ = true;
     bool SaveStoryRecord_ = true;
@@ -327,11 +331,15 @@ public:
     virtual bool CreatePlaylist(const std::string& playlist_name, const std::vector<std::string>& file_paths) override;
     virtual bool PlayPlaylist(const std::string& playlist_name) override;
     virtual int SearchMusicIndexFromlist(std::string name) const override;
-    virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const override;
-    virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const override;
+    // virtual int SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const override;
+    // virtual std::vector<int> SearchMusicIndexBySingerRand5(std::string singer) const override;
+    virtual const PSMusicInfo* FindMusicByIndexId(const std::string& index_id, size_t* out_index) const override;
+    std::vector<const PSMusicInfo*> SearchMusicByCategory(const std::string& category) const;
+    const PSMusicInfo* FindMusicBySongName(const std::string& song_name, size_t* out_index) const;
     virtual const std::string GetDefaultList() const override { return default_musiclist_; }
     virtual std::string GetCurrentSongName()override;
     virtual void SetPlayIndex(const std::string& playlist_name, int index)override;
+    virtual void SetManualNextPlay(bool val){ ManualNextPlay_ = val;};
     virtual void NextPlayIndexOrder(std::string& playlist_name)override;
     virtual void NextPlayIndexRandom(std::string& playlist_name)override;
     virtual bool ReturnMode(void)override{return  mode;}

@@ -1278,12 +1278,12 @@ void Application::post_switch_agent_task()
                         }
                         else if(Role_Id == 2)
                         {
-                            cJSON_AddStringToObject(root, "agentName", "播放助手");
+                            cJSON_AddStringToObject(root, "agentName", "闲聊助手");
                             device_function_ = Function_MusicStory;
                         }
                         else if(Role_Id == 0)
                         {
-                            cJSON_AddStringToObject(root, "agentName", "闲聊助手");
+                            cJSON_AddStringToObject(root, "agentName", "播放助手");
                             device_function_ = Function_AIAssistant;
                         }
 
@@ -1613,7 +1613,9 @@ void Application::RFID_TASK()
                     if(type == "000") {
                         ESP_LOGD(TAG,"卡片");
                         if(role == "000") {
+                            
                             Role_Id = 0;
+                            
                             // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
                             if (switch_agent_sem != NULL) {
                                 xSemaphoreGive(switch_agent_sem);

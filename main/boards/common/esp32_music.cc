@@ -24,6 +24,8 @@
 #include <freertos/task.h>
 #include "settings.h"
 #include <queue>
+#include <unordered_map>
+#include <mutex>
 
 #define TAG "Esp32Music"
 
@@ -2154,8 +2156,8 @@ bool Esp32Music::ScanMusicLibrary(const std::string& music_folder,bool LightMode
         /* 1. 申请两套视图 */
         size_t n = ps_music_count_;
         music_view_        = (MusicView *)heap_caps_malloc(n * sizeof(MusicView), MALLOC_CAP_SPIRAM);
-        music_view_art_song_ = (MusicView *)heap_caps_malloc(n * sizeof(MusicView), MALLOC_CAP_SPIRAM);
-        music_view_singer_ = (MusicView *)heap_caps_malloc(n * sizeof(MusicView), MALLOC_CAP_SPIRAM);
+        // music_view_art_song_ = (MusicView *)heap_caps_malloc(n * sizeof(MusicView), MALLOC_CAP_SPIRAM);
+        // music_view_singer_ = (MusicView *)heap_caps_malloc(n * sizeof(MusicView), MALLOC_CAP_SPIRAM);
         
         /* 2. 填指针（零拷贝）*/
         for (size_t i = 0; i < n; ++i) {
@@ -2163,8 +2165,8 @@ bool Esp32Music::ScanMusicLibrary(const std::string& music_folder,bool LightMode
             music_view_[i].artist_norm = ps_music_library_[i].artist_norm;
             music_view_[i].idx         = i;
 
-            music_view_art_song_[i]    = music_view_[i];   // 先复拷一份
-            music_view_singer_[i]      = music_view_[i];   // 先复拷一份
+            // music_view_art_song_[i]    = music_view_[i];   // 先复拷一份
+            // music_view_singer_[i]      = music_view_[i];   // 先复拷一份
         }
 
         /* 3. 歌名视图排序 */
@@ -2174,25 +2176,25 @@ bool Esp32Music::ScanMusicLibrary(const std::string& music_folder,bool LightMode
         };
         qsort(music_view_, n, sizeof(MusicView), cmpSong);
 
-        /* 4. artist-song 视图排序 */
-        auto cmpArtSong = [](const void *a, const void *b){
-            const MusicView *v1 = (const MusicView*)a;
-            const MusicView *v2 = (const MusicView*)b;
-            char k1[256], k2[256];
-            snprintf(k1, sizeof(k1), "%s-%s", v1->artist_norm, v1->song_name);
-            snprintf(k2, sizeof(k2), "%s-%s", v2->artist_norm, v2->song_name);
-            return strcmp(k1, k2);
-        };
-        qsort(music_view_art_song_, n, sizeof(MusicView), cmpArtSong);
+        // /* 4. artist-song 视图排序 */
+        // auto cmpArtSong = [](const void *a, const void *b){
+        //     const MusicView *v1 = (const MusicView*)a;
+        //     const MusicView *v2 = (const MusicView*)b;
+        //     char k1[256], k2[256];
+        //     snprintf(k1, sizeof(k1), "%s-%s", v1->artist_norm, v1->song_name);
+        //     snprintf(k2, sizeof(k2), "%s-%s", v2->artist_norm, v2->song_name);
+        //     return strcmp(k1, k2);
+        // };
+        // qsort(music_view_art_song_, n, sizeof(MusicView), cmpArtSong);
 
 
 
-        /* 5. 歌手视图排序 */
-        auto cmpSinger = [](const void *a, const void *b){
-            return strcmp(((const MusicView*)a)->artist_norm,
-                        ((const MusicView*)b)->artist_norm);
-        };
-        qsort(music_view_singer_, n, sizeof(MusicView), cmpSinger);
+        // /* 5. 歌手视图排序 */
+        // auto cmpSinger = [](const void *a, const void *b){
+        //     return strcmp(((const MusicView*)a)->artist_norm,
+        //                 ((const MusicView*)b)->artist_norm);
+        // };
+        // qsort(music_view_singer_, n, sizeof(MusicView), cmpSinger);
     }
     ESP_LOGI(TAG, "Music library scan completed, found %u music files", (unsigned)ps_music_count_);
     return ps_music_count_ > 0;
@@ -2209,12 +2211,87 @@ void Esp32Music::ScanAndLoadMusic(bool LightModeScan) {
     LoadPlaybackPosition();
 }
 
+
 const PSMusicInfo* Esp32Music::GetMusicLibrary(size_t &out_count) const {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
     out_count = ps_music_count_;
     return ps_music_library_;
 }
 
+const PSMusicInfo* Esp32Music::FindMusicByIndexId(const std::string& index_id, size_t* out_index = nullptr) const {
+    if (index_id.empty()) return nullptr;
+
+    // 缓存：index_id -> (索引, 指针)
+    static std::unordered_map<std::string, std::pair<size_t, PSMusicInfo*>> index_cache = [this]() {
+        std::unordered_map<std::string, std::pair<size_t, PSMusicInfo*>> cache;
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            PSMusicInfo* info = &ps_music_library_[i];
+            if (info && info->index_id && info->index_id[0] != '\0') {
+                cache[info->index_id] = {i, info};
+            }
+        }
+        ESP_LOGD(TAG, "Index cache built, %zu entries", cache.size());
+        return cache;
+    }();
+
+    auto it = index_cache.find(index_id);
+    if (it != index_cache.end()) {
+        if (out_index) *out_index = it->second.first;   // 返回索引
+        return it->second.second;                       // 返回指针
+    }
+    return nullptr;
+}
+std::vector<const PSMusicInfo*> Esp32Music::SearchMusicByCategory(const std::string& category) const {
+    if (category.empty()) return {};
+
+    // 静态缓存：category -> 音乐指针列表
+    static std::unordered_map<std::string, std::vector<const PSMusicInfo*>> category_cache = [this]() {
+        std::unordered_map<std::string, std::vector<const PSMusicInfo*>> cache;
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            PSMusicInfo* info = &ps_music_library_[i];
+            if (info && info->category && info->category[0] != '\0') {
+                cache[info->category].push_back(info);
+            }
+        }
+        ESP_LOGD(TAG, "Category cache built, %zu categories", cache.size());
+        return cache;
+    }();
+
+    auto it = category_cache.find(category);
+    if (it != category_cache.end()) {
+        return it->second;   // 返回指针列表的副本（浅拷贝，高效）
+    }
+    return {};
+}
+
+
+const PSMusicInfo* Esp32Music::FindMusicBySongName(const std::string& song_name, size_t* out_index) const  {
+    if (song_name.empty()) return nullptr;
+
+    // 静态缓存：song_name -> (索引, 指针)
+    static std::unordered_map<std::string, std::pair<size_t, PSMusicInfo*>> song_cache = [this]() {
+        std::unordered_map<std::string, std::pair<size_t, PSMusicInfo*>> cache;
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
+        for (size_t i = 0; i < ps_music_count_; ++i) {
+            PSMusicInfo* info = &ps_music_library_[i];
+            if (info && info->song_name && info->song_name[0] != '\0') {
+                // 假设歌曲名唯一，若有重复则后覆盖前
+                cache[info->song_name] = {i, info};
+            }
+        }
+        ESP_LOGD(TAG, "Song name cache built, %zu entries", cache.size());
+        return cache;
+    }();
+
+    auto it = song_cache.find(song_name);
+    if (it != song_cache.end()) {
+        if (out_index) *out_index = it->second.first;
+        return it->second.second;
+    }
+    return nullptr;
+}
 
 MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
     std::lock_guard<std::mutex> lock(music_library_mutex_);
@@ -2234,6 +2311,9 @@ MusicFileInfo Esp32Music::GetMusicInfo(const std::string& file_path) const {
     }
     return MusicFileInfo();
 }
+
+
+
 
 
 bool Esp32Music::IsMusicFile(const std::string& file_path) const {
@@ -2320,12 +2400,8 @@ MusicFileInfo Esp32Music::ExtractMusicInfo(const std::string& file_path) const {
     // 统一处理 index_id 标准化: M001 -> M1
     if (!info.index_id.empty() && (info.index_id[0] == 'M' || info.index_id[0] == 'm')) {
         std::string num_part = info.index_id.substr(1);
-        try {
-            int num = std::stoi(num_part);
-            info.index_id = "M" + std::to_string(num);
-        } catch (...) {
-            // 解析数字失败，保持不变
-        }
+        int num = std::stoi(num_part);
+        info.index_id = "M" + std::to_string(num);
     }
 
     ESP_LOGI(TAG, "Extracted music info - File: %s, category: %s, Song: %s, Number: %s", 
@@ -2545,13 +2621,14 @@ bool Esp32Music::PlayPlaylist(const std::string& playlist_name) {
 
     if (playlist_name == default_musiclist_) {
         ESP_LOGW(TAG, "Playing default music library");
-        bool result = PlayFromSD(ps_music_library_[play_index_].file_path);
+        bool result = PlayFromSD(ps_music_library_[play_index_].file_path, ps_music_library_[play_index_].song_name);
         return result;
     }
     else
     {
         ESP_LOGW(TAG, "Playing playlist: %s", playlist_name.c_str());
-        bool result = PlayFromSD(playlist_.file_paths[playlist_.play_index]);
+        auto file = GetMusicInfo(playlist_.file_paths[playlist_.play_index]);
+        bool result = PlayFromSD(file.file_path, file.song_name);
         return result;
     }
 }
@@ -2691,207 +2768,207 @@ int Esp32Music::SearchMusicIndexFromlist(std::string name) const
     return best_idx;
 }
 
-int Esp32Music::SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const
-{
-    if (!music_view_art_song_) {
-        ESP_LOGI(TAG, "music_view_art_song_ is null");
-        return -1;
-    }
+// int Esp32Music::SearchMusicIndexFromlistByArtSong(std::string songname,std::string artist) const
+// {
+//     if (!music_view_art_song_) {
+//         ESP_LOGI(TAG, "music_view_art_song_ is null");
+//         return -1;
+//     }
 
-    songname = NormalizeForSearch(songname);
-    artist   = NormalizeForSearch(artist);
+//     songname = NormalizeForSearch(songname);
+//     artist   = NormalizeForSearch(artist);
 
-    char query[256];
-    snprintf(query, sizeof(query), "%s-%s", artist.c_str(), songname.c_str());
-    auto cmp = [](const void *k, const void *e){
-        const char *key = (const char*)k;
-        const MusicView *v = (const MusicView*)e;
-        char tmp[256];
-        snprintf(tmp, sizeof(tmp), "%s-%s", v->artist_norm ? v->artist_norm : "", v->song_name ? v->song_name : "");
-        return strcmp(key, tmp);
-    };
-    void *f = bsearch(query, music_view_art_song_, ps_music_count_, sizeof(MusicView), cmp);
-    if (f) return ((MusicView*)f)->idx;
+//     char query[256];
+//     snprintf(query, sizeof(query), "%s-%s", artist.c_str(), songname.c_str());
+//     auto cmp = [](const void *k, const void *e){
+//         const char *key = (const char*)k;
+//         const MusicView *v = (const MusicView*)e;
+//         char tmp[256];
+//         snprintf(tmp, sizeof(tmp), "%s-%s", v->artist_norm ? v->artist_norm : "", v->song_name ? v->song_name : "");
+//         return strcmp(key, tmp);
+//     };
+//     void *f = bsearch(query, music_view_art_song_, ps_music_count_, sizeof(MusicView), cmp);
+//     if (f) return ((MusicView*)f)->idx;
 
-    // 预处理组合查询与 token
-    std::string compact_q = artist + songname;
-    const char* q_compact = compact_q.c_str();
-    std::string orig_query = (artist.empty() ? songname : (artist + " " + songname));
-    std::string q_token_norm = NormalizeForToken(orig_query);
-    auto q_tokens = SplitTokensNoAlloc(q_token_norm);
+//     // 预处理组合查询与 token
+//     std::string compact_q = artist + songname;
+//     const char* q_compact = compact_q.c_str();
+//     std::string orig_query = (artist.empty() ? songname : (artist + " " + songname));
+//     std::string q_token_norm = NormalizeForToken(orig_query);
+//     auto q_tokens = SplitTokensNoAlloc(q_token_norm);
 
-    std::vector<int> freq_q(256, 0);
-    {
-        const unsigned char* pq = (const unsigned char*)q_compact;
-        for (size_t k = 0; pq[k]; ++k) ++freq_q[pq[k]];
-    }
+//     std::vector<int> freq_q(256, 0);
+//     {
+//         const unsigned char* pq = (const unsigned char*)q_compact;
+//         for (size_t k = 0; pq[k]; ++k) ++freq_q[pq[k]];
+//     }
 
-    int best_idx = -1;
-    int best_score = INT_MIN;
-    int best_len_diff = INT_MAX;
-    std::vector<int> freq_t(256);
+//     int best_idx = -1;
+//     int best_score = INT_MIN;
+//     int best_len_diff = INT_MAX;
+//     std::vector<int> freq_t(256);
 
     
-    for (size_t i = 0; i < ps_music_count_; ++i) {
-        const auto& m = ps_music_library_[i];
-        if (!m.song_name) continue;
+//     for (size_t i = 0; i < ps_music_count_; ++i) {
+//         const auto& m = ps_music_library_[i];
+//         if (!m.song_name) continue;
 
-        int score = 0;
+//         int score = 0;
 
-        if (!artist.empty() && m.artist_norm) {
-            if (strstr(m.artist_norm, artist.c_str())) score += 150;
-            if (IsSubsequence(artist.c_str(), m.artist_norm)) score += 80;
-        }
+//         if (!artist.empty() && m.artist_norm) {
+//             if (strstr(m.artist_norm, artist.c_str())) score += 150;
+//             if (IsSubsequence(artist.c_str(), m.artist_norm)) score += 80;
+//         }
 
-        if (!songname.empty()) {
-            if (strstr(m.song_name, songname.c_str())) score += 300;
-            if (IsSubsequence(songname.c_str(), m.song_name)) score += 200;
-        }
+//         if (!songname.empty()) {
+//             if (strstr(m.song_name, songname.c_str())) score += 300;
+//             if (IsSubsequence(songname.c_str(), m.song_name)) score += 200;
+//         }
 
-        const char* targ_token = m.token_norm ? m.token_norm : (m.file_name ? m.file_name : m.song_name);
-        if (!q_tokens.empty() && targ_token && TokenSeqMatchUsingTokenNormNoAlloc(targ_token, q_tokens)) {
-            score += 250;
-        }
+//         const char* targ_token = m.token_norm ? m.token_norm : (m.file_name ? m.file_name : m.song_name);
+//         if (!q_tokens.empty() && targ_token && TokenSeqMatchUsingTokenNormNoAlloc(targ_token, q_tokens)) {
+//             score += 250;
+//         }
 
-        const char* tgt_compact = m.song_name;
-        if (tgt_compact && q_compact[0]) {
-            if (strstr(tgt_compact, q_compact) != nullptr) score += 200;
-        }
+//         const char* tgt_compact = m.song_name;
+//         if (tgt_compact && q_compact[0]) {
+//             if (strstr(tgt_compact, q_compact) != nullptr) score += 200;
+//         }
 
-        // 字符重合度：组合 song_name + artist_norm
-        std::fill(freq_t.begin(), freq_t.end(), 0);
-        if (m.song_name) {
-            const unsigned char* ps = (const unsigned char*)m.song_name;
-            for (size_t k = 0; ps[k]; ++k) ++freq_t[ps[k]];
-        }
-        if (m.artist_norm) {
-            const unsigned char* pa = (const unsigned char*)m.artist_norm;
-            for (size_t k = 0; pa[k]; ++k) ++freq_t[pa[k]];
-        }
-        int qlen = (int)strlen(q_compact);
-        int tgtlen = 0;
-        if (m.song_name) tgtlen += strlen(m.song_name);
-        if (m.artist_norm) tgtlen += strlen(m.artist_norm);
-        score += OverlapScoreFromFreq(freq_q, freq_t, qlen);
+//         // 字符重合度：组合 song_name + artist_norm
+//         std::fill(freq_t.begin(), freq_t.end(), 0);
+//         if (m.song_name) {
+//             const unsigned char* ps = (const unsigned char*)m.song_name;
+//             for (size_t k = 0; ps[k]; ++k) ++freq_t[ps[k]];
+//         }
+//         if (m.artist_norm) {
+//             const unsigned char* pa = (const unsigned char*)m.artist_norm;
+//             for (size_t k = 0; pa[k]; ++k) ++freq_t[pa[k]];
+//         }
+//         int qlen = (int)strlen(q_compact);
+//         int tgtlen = 0;
+//         if (m.song_name) tgtlen += strlen(m.song_name);
+//         if (m.artist_norm) tgtlen += strlen(m.artist_norm);
+//         score += OverlapScoreFromFreq(freq_q, freq_t, qlen);
 
-        int len_diff = std::abs(qlen - tgtlen);
-        score += std::max(0, 30 - len_diff);
+//         int len_diff = std::abs(qlen - tgtlen);
+//         score += std::max(0, 30 - len_diff);
 
-        bool replace = false;
-        if (score > best_score) replace = true;
-        else if (score == best_score && len_diff < best_len_diff) replace = true;
+//         bool replace = false;
+//         if (score > best_score) replace = true;
+//         else if (score == best_score && len_diff < best_len_diff) replace = true;
 
-        if (replace) {
-            best_score = score;
-            best_idx = static_cast<int>(i);
-            best_len_diff = len_diff;
-            if (best_score >= 900) break;
-        }
-    }
+//         if (replace) {
+//             best_score = score;
+//             best_idx = static_cast<int>(i);
+//             best_len_diff = len_diff;
+//             if (best_score >= 900) break;
+//         }
+//     }
 
-    if (best_idx >= 0) {
-        ESP_LOGI(TAG, "best hit: %s - %s  score=%d",
-                 ps_music_library_[best_idx].artist_norm ? ps_music_library_[best_idx].artist_norm : "<nil>",
-                 ps_music_library_[best_idx].song_name ? ps_music_library_[best_idx].song_name : "<nil>",
-                 best_score);
-    } else {
-        ESP_LOGW(TAG, "best hit not found for: %s - %s", artist.c_str(), songname.c_str());
-    }
-    return best_idx;
-}
-
-
+//     if (best_idx >= 0) {
+//         ESP_LOGI(TAG, "best hit: %s - %s  score=%d",
+//                  ps_music_library_[best_idx].artist_norm ? ps_music_library_[best_idx].artist_norm : "<nil>",
+//                  ps_music_library_[best_idx].song_name ? ps_music_library_[best_idx].song_name : "<nil>",
+//                  best_score);
+//     } else {
+//         ESP_LOGW(TAG, "best hit not found for: %s - %s", artist.c_str(), songname.c_str());
+//     }
+//     return best_idx;
+// }
 
 
 
 
-// 替换后的：按歌手随机/打分取 top5，使用模块化 helper
-std::vector<int> Esp32Music::SearchMusicIndexBySingerRand5(std::string singer) const
-{
-    std::vector<int> res;
-    if (!music_view_singer_ || ps_music_count_ == 0) return res;
 
-    singer = NormalizeForSearch(singer);
-    ESP_LOGI(TAG, "Searching for singer: %s", singer.c_str());
 
-    auto cmp = [](const void *k, const void *e){
-        return strcmp(((const MusicView*)k)->artist_norm,
-                      ((const MusicView*)e)->artist_norm);
-    };
-    MusicView key{};
-    key.artist_norm = singer.c_str();
-    void *f = bsearch(&key, music_view_singer_, ps_music_count_,
-                      sizeof(MusicView), cmp);
+// // 替换后的：按歌手随机/打分取 top5，使用模块化 helper
+// std::vector<int> Esp32Music::SearchMusicIndexBySingerRand5(std::string singer) const
+// {
+//     std::vector<int> res;
+//     if (!music_view_singer_ || ps_music_count_ == 0) return res;
 
-    if (f) {
-        size_t left = (MusicView*)f - music_view_singer_;
-        while (left > 0 &&
-               strcmp(music_view_singer_[left - 1].artist_norm, singer.c_str()) == 0)
-            --left;
-        size_t right = left;
-        while (right < ps_music_count_ &&
-               strcmp(music_view_singer_[right].artist_norm, singer.c_str()) == 0)
-            ++right;
+//     singer = NormalizeForSearch(singer);
+//     ESP_LOGI(TAG, "Searching for singer: %s", singer.c_str());
 
-        size_t cnt = right - left;
-        if (cnt == 0) return res;
+//     auto cmp = [](const void *k, const void *e){
+//         return strcmp(((const MusicView*)k)->artist_norm,
+//                       ((const MusicView*)e)->artist_norm);
+//     };
+//     MusicView key{};
+//     key.artist_norm = singer.c_str();
+//     void *f = bsearch(&key, music_view_singer_, ps_music_count_,
+//                       sizeof(MusicView), cmp);
 
-        std::vector<uint16_t> pool;
-        pool.reserve(cnt);
-        for (size_t i = left; i < right; ++i) pool.push_back(music_view_singer_[i].idx);
+//     if (f) {
+//         size_t left = (MusicView*)f - music_view_singer_;
+//         while (left > 0 &&
+//                strcmp(music_view_singer_[left - 1].artist_norm, singer.c_str()) == 0)
+//             --left;
+//         size_t right = left;
+//         while (right < ps_music_count_ &&
+//                strcmp(music_view_singer_[right].artist_norm, singer.c_str()) == 0)
+//             ++right;
 
-        static bool rand_init = false;
-        if (!rand_init) { srand((unsigned)time(NULL)); rand_init = true; }
-        if (cnt <= 5) res.assign(pool.begin(), pool.end());
-        else {
-            for (size_t i = cnt - 1; i > 0; --i) {
-                size_t j = rand() % (i + 1);
-                std::swap(pool[i], pool[j]);
-            }
-            res.assign(pool.begin(), pool.begin() + 5);
-        }
-        return res;
-    }
+//         size_t cnt = right - left;
+//         if (cnt == 0) return res;
 
-    using Item = std::pair<int,int>;
-    auto pq_cmp = [](const Item& a, const Item& b){ return a.first > b.first; };
-    std::priority_queue<Item, std::vector<Item>, decltype(pq_cmp)> pq(pq_cmp);
+//         std::vector<uint16_t> pool;
+//         pool.reserve(cnt);
+//         for (size_t i = left; i < right; ++i) pool.push_back(music_view_singer_[i].idx);
 
-    const char* q = singer.c_str();
+//         static bool rand_init = false;
+//         if (!rand_init) { srand((unsigned)time(NULL)); rand_init = true; }
+//         if (cnt <= 5) res.assign(pool.begin(), pool.end());
+//         else {
+//             for (size_t i = cnt - 1; i > 0; --i) {
+//                 size_t j = rand() % (i + 1);
+//                 std::swap(pool[i], pool[j]);
+//             }
+//             res.assign(pool.begin(), pool.begin() + 5);
+//         }
+//         return res;
+//     }
 
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
-    for (size_t i = 0; i < ps_music_count_; ++i) {
-        const auto& mv = music_view_singer_[i];
-        const char* artist_norm = mv.artist_norm;
-        if (!artist_norm) continue;
+//     using Item = std::pair<int,int>;
+//     auto pq_cmp = [](const Item& a, const Item& b){ return a.first > b.first; };
+//     std::priority_queue<Item, std::vector<Item>, decltype(pq_cmp)> pq(pq_cmp);
 
-        int score = 0;
-        if (strstr(artist_norm, q) != nullptr) score += 200;
-        if (IsSubsequence(q, artist_norm)) score += 150;
+//     const char* q = singer.c_str();
 
-        const PSMusicInfo &mi = ps_music_library_[mv.idx];
-        const char* token_src = mi.token_norm ? mi.token_norm : (mi.file_name ? mi.file_name : mi.artist);
-        if (token_src && q && *q) {
-            if (TokenSeqMatchUsingTokenNormNoAlloc(token_src, SplitTokensNoAlloc(std::string(q)))) score += 180;
-        }
+//     std::lock_guard<std::mutex> lock(music_library_mutex_);
+//     for (size_t i = 0; i < ps_music_count_; ++i) {
+//         const auto& mv = music_view_singer_[i];
+//         const char* artist_norm = mv.artist_norm;
+//         if (!artist_norm) continue;
 
-        int d = levenshtein_threshold(q, artist_norm, 4);
-        if (d >= 0 && d <= 2) score += 80 - d * 20;
+//         int score = 0;
+//         if (strstr(artist_norm, q) != nullptr) score += 200;
+//         if (IsSubsequence(q, artist_norm)) score += 150;
 
-        if (score <= 0) continue;
-        int lib_idx = static_cast<int>(mv.idx);
-        pq.emplace(score, lib_idx);
-        if (pq.size() > 5) pq.pop();
-    }
+//         const PSMusicInfo &mi = ps_music_library_[mv.idx];
+//         const char* token_src = mi.token_norm ? mi.token_norm : (mi.file_name ? mi.file_name : mi.artist);
+//         if (token_src && q && *q) {
+//             if (TokenSeqMatchUsingTokenNormNoAlloc(token_src, SplitTokensNoAlloc(std::string(q)))) score += 180;
+//         }
 
-    res.reserve(pq.size());
-    while (!pq.empty()) {
-        res.push_back(pq.top().second);
-        pq.pop();
-    }
-    std::reverse(res.begin(), res.end());
-    return res;
-}
+//         int d = levenshtein_threshold(q, artist_norm, 4);
+//         if (d >= 0 && d <= 2) score += 80 - d * 20;
+
+//         if (score <= 0) continue;
+//         int lib_idx = static_cast<int>(mv.idx);
+//         pq.emplace(score, lib_idx);
+//         if (pq.size() > 5) pq.pop();
+//     }
+
+//     res.reserve(pq.size());
+//     while (!pq.empty()) {
+//         res.push_back(pq.top().second);
+//         pq.pop();
+//     }
+//     std::reverse(res.begin(), res.end());
+//     return res;
+// }
 
 
 std::string Esp32Music::GetCurrentSongName()
@@ -2901,15 +2978,16 @@ std::string Esp32Music::GetCurrentSongName()
 
 void Esp32Music::LoadPlaybackPosition() {
     Settings settings("music", false);
-    int idx = settings.GetInt("last_play_index", -1);
-    int32_t ms = settings.GetInt("last_play_ms", 0);
+    saved_play_index_ = settings.GetInt("last_play_index", -1);
+    saved_play_ms_ = settings.GetInt("last_play_ms", 0);
     int64_t offset_i64 = settings.GetInt64("lastfileoffset", 0);
     auto music_name = settings.GetString("last_music_name", "");
-    size_t offset = offset_i64 > 0 ? static_cast<size_t>(offset_i64) : 0;
+    saved_music_number_ = settings.GetString("music_Index", "");
+    saved_file_offset_= offset_i64 > 0 ? static_cast<size_t>(offset_i64) : 0;
 
-    saved_play_index_ = idx;
-    saved_play_ms_ = ms;
-    saved_file_offset_ = offset;
+    // saved_play_index_ = idx;
+    // saved_play_ms_ = ms;
+    // saved_file_offset_ = offset;
     has_saved_MusicPosition_ = true;
     current_playlist_name_ = default_musiclist_;
     
@@ -2920,31 +2998,18 @@ void Esp32Music::LoadPlaybackPosition() {
         current_song_name_ = music_name.substr(pos + 1);
 
     play_index_ = saved_play_index_;
-        ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' name='%s' index=%d ms=%d offset=%d",
-             current_playlist_name_.c_str(), current_song_name_.c_str(), saved_play_index_, saved_play_ms_, saved_file_offset_
-             );
+        ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' name='%s' index=%d music_number=%s",
+             current_playlist_name_.c_str(), current_song_name_.c_str(), saved_play_index_, saved_music_number_.c_str());
 
 }
 
 
 void Esp32Music::SavePlaybackPosition() {
     
-    size_t pos = current_song_name_.find_last_of("/\\");
-    if (pos != std::string::npos) 
-        current_song_name_ = current_song_name_.substr(pos + 1);
-    pos = current_song_name_.find_last_of('.');
-    if (pos != std::string::npos)
-        current_song_name_ = current_song_name_.substr(0, pos);
-
-    pos = current_song_name_.find_last_of("-");
-    if(pos != std::string::npos)
-    {
-        saved_play_index_ = SearchMusicIndexFromlistByArtSong(current_song_name_.substr(pos+1),current_song_name_.substr(0,pos));
-    }
-    else
-    {
-        saved_play_index_ = SearchMusicIndexFromlist(current_song_name_);
-    }
+    size_t index;
+    auto info = FindMusicBySongName(current_song_name_,&index);
+    if(info != nullptr)
+        saved_play_index_ = static_cast<int>(index);
 
     // 读取 current_play_file_offset_
     size_t file_offset = 0;
@@ -2961,11 +3026,11 @@ void Esp32Music::SavePlaybackPosition() {
     settings.SetInt("last_play_ms", static_cast<int32_t>(play_ms));
     settings.SetInt64("lastfileoffset", (int64_t)aligned_offset);
     settings.SetString("last_music_name", current_song_name_);
-
+    settings.SetString("music_Index", info ? info->index_id : "");
     settings.Commit();
 
-    ESP_LOGI(TAG, "Saved playback pos: name=%s index=%d ms=%d offset=%d ",
-              current_song_name_.c_str(), saved_play_index_, play_ms, aligned_offset);
+    ESP_LOGI(TAG, "Saved playback pos: name=%s index=%d  music_number=%s",
+              current_song_name_.c_str(), saved_play_index_, info->index_id);
 }
 
 bool Esp32Music::ResumeSavedPlayback() {
@@ -2974,32 +3039,36 @@ bool Esp32Music::ResumeSavedPlayback() {
         return false;
     }
 
-    std::string file_path;
-    
+
     if (saved_play_index_ < 0 || saved_play_index_ >= ps_music_count_) {
         ESP_LOGW(TAG, "Saved play index out of range: %d", saved_play_index_);
         return false;
     }
-    file_path = ps_music_library_[saved_play_index_].file_path;
-    
+    size_t index;
+    auto info = FindMusicByIndexId(saved_music_number_,&index);
+    if(info != nullptr)
+    {
+        ESP_LOGI(TAG, "Found music by index_id: %s -> %s", saved_music_number_.c_str(), info->song_name);
+        saved_play_index_ = static_cast<int>(index);
+    }
 
     if(current_play_file_offset_ == 0)
     {    
         // 优先按字节偏移恢复
         if (saved_file_offset_ > 0) {
-            ESP_LOGI(TAG, "Resuming '%s' at offset %d", file_path.c_str(), saved_file_offset_);
-            return PlayFromSD(file_path,"", saved_file_offset_);
+            ESP_LOGI(TAG, "Resuming '%s' at offset %d", ps_music_library_[saved_play_index_].file_path, saved_file_offset_);
+            return PlayFromSD(ps_music_library_[saved_play_index_].file_path, ps_music_library_[saved_play_index_].song_name, saved_file_offset_);
         }
     }
     else
     {
-        ESP_LOGI(TAG, "Resuming '%s' at current offset %d", file_path.c_str(), current_play_file_offset_);
-        return PlayFromSD(file_path,"", current_play_file_offset_);
+        ESP_LOGI(TAG, "Resuming '%s' at current offset %d", ps_music_library_[saved_play_index_].file_path, current_play_file_offset_);
+        return PlayFromSD(ps_music_library_[saved_play_index_].file_path, ps_music_library_[saved_play_index_].song_name, current_play_file_offset_);
     }
     // 否则从头开始播放
-    ESP_LOGI(TAG, "Resume fallback: start from beginning of %s", file_path.c_str());
+    ESP_LOGI(TAG, "Resume fallback: start from beginning of %s", ps_music_library_[saved_play_index_].file_path);
 
-    return PlayFromSD(file_path, "", 0);
+    return PlayFromSD(ps_music_library_[saved_play_index_].file_path, ps_music_library_[saved_play_index_].song_name, 0);
 }
 
 // 新增：带 start_offset 参数的 PlayFromSD（设置 start_play_offset_ 后调用现有 StartSDCardStreaming）
@@ -3108,13 +3177,19 @@ void Esp32Music::UpdateStoryRecordList(const std::string& category, const std::s
 }
 
 
-void Esp32Music::UpdateMusicRecordList(const std::string& artist, const std::string& song_name)
+void Esp32Music::UpdateMusicRecordList(const std::string& Index, const std::string& song_name)
 {
     // 决定索引（仍使用 play_index_ 优先）
     int idx = play_index_;
     if (current_playlist_name_ != default_musiclist_) {
-        if (!artist.empty()) {
-            idx = SearchMusicIndexFromlistByArtSong(song_name, artist);
+        if (!Index.empty()) {
+            const PSMusicInfo* info = FindMusicByIndexId(Index);
+            if (info) {
+                idx = static_cast<int>(info - ps_music_library_);
+            } else {
+                ESP_LOGW(TAG, "No music found with index_id: %s", Index.c_str());
+            }
+            // idx = SearchMusicIndexFromlistByArtSong(song_name, artist);
         } else {
             idx = SearchMusicIndexFromlist(song_name);
         }
@@ -3128,10 +3203,12 @@ void Esp32Music::UpdateMusicRecordList(const std::string& artist, const std::str
 
     if (idx >= 0 && ps_music_library_ && static_cast<size_t>(idx) < ps_music_count_) {
         node->song_name = ps_music_library_[idx].song_name;   // 指向 PSRAM 内的 char*
-        node->artist = ps_music_library_[idx].artist;
+        node->M_Index = ps_music_library_[idx].index_id;
+        // node->artist = ps_music_library_[idx].artist;
     } else {
         node->song_name = nullptr;
-        node->artist = nullptr;
+        node->M_Index = nullptr;
+        // node->artist = nullptr;
     }
 
     if (!music_record_) {
