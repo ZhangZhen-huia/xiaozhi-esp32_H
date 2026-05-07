@@ -242,6 +242,7 @@ void Application::CheckNewVersion(Ota& ota) {
         display->SetStatus(Lang::Strings::ACTIVATION);
         // Activation code is shown to the user and waiting for the user to input
         if (ota.HasActivationCode()) {
+            ESP_LOGE(TAG, "11111111111111111111111111111");
             ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
         }
 
@@ -307,31 +308,29 @@ void Application::ShowBatteryLevel(int percent) {
 
     // 对于 20..100 范围，优先使用整十位音频（你已支持 20..100）
     if (percent >= 0 && percent <= 100) {
-        int tens = (percent / 10) * 10; // 20,30,...,100
-        int ones = percent % 10;
 
         // 播放十位语音（如果存在对应素材）
-        if(tens <=20)
+        if(percent <=20)
         {
             audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY20);
         }
-        else if(tens>20 && tens <=40)
+        else if(percent > 20 && percent <= 40)
         {
             audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY20);
         }
-        else if(tens>40 && tens <=60)
+        else if(percent>40 && percent <=60)
         {
             audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY40);
         }
-        else if(tens>60 && tens <=80)
+        else if(percent>60 && percent <=80)
         {
             audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY60);
         }
-        else if(tens>80 && tens <=90)
+        else if(percent>80 && percent <=90)
         {
             audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY80);
         }
-        else if(tens>90 && tens <=100)
+        else if(percent>90 && percent <=100)
         {
             audio_service_.PlaySound(Lang::Sounds::OGG_BATTERY100);
         }
@@ -614,12 +613,15 @@ void Application::Start() {
         ((Application*)arg)->MainEventLoop();
         vTaskDelete(NULL);
     }, "main_event_loop", 2048 * 4, this, 5, &main_event_loop_task_handle_);
-
+    
+    #if !my
     xTaskCreate([](void* arg) { 
         ((Application*)arg)->RFID_TASK();
         vTaskDelete(NULL);
     }, "rfid_task", 2048 * 4, this, 5, &rfid_task_handle_);
-
+    #else
+    device_function_ = Function_MusicStory;
+    #endif
     /* Start the clock timer to update the status bar */
     //该定时器任务会在定时结束对应的event_group_设置MAIN_EVENT_CLOCK_TICK位
     //然后触发main_event_loop函数中的对应处理
@@ -889,6 +891,7 @@ void Application::Start() {
     }
     All_Finish = true;
     ESP_LOGI(TAG, "Application started successfully");
+    SendMessage(introduce_message_);
 }
 
 // Add a async task to MainLoop
@@ -1279,12 +1282,12 @@ void Application::post_switch_agent_task()
                         else if(Role_Id == 2)
                         {
                             cJSON_AddStringToObject(root, "agentName", "闲聊助手");
-                            device_function_ = Function_MusicStory;
+                            device_function_ = Function_AIAssistant;
                         }
                         else if(Role_Id == 0)
                         {
                             cJSON_AddStringToObject(root, "agentName", "播放助手");
-                            device_function_ = Function_AIAssistant;
+                            device_function_ = Function_MusicStory;
                         }
 
                     }
@@ -1470,6 +1473,7 @@ void Application::post_switch_agent_task()
             } // end of retry loop
 
             if (success) {
+                SendMessage(introduce_message_);
                 ESP_LOGI(TAG, "Task completed successfully. Waiting for next semaphore...");
             } else {
                 ESP_LOGE(TAG, "Task permanently failed after %d attempts. Waiting for next semaphore...", MAX_RETRIES);
@@ -1504,8 +1508,11 @@ void Application::RFID_TASK()
         if (PcdRequest(0x52, atqa) != MI_OK) {
             ESP_LOGD(TAG,"PcdRequest Fail");
             no_card_count++;
-            if (no_card_count >= 4) { // 2 * 500ms = 1s
-                // 标志位置位：连续2s都没有寻到卡
+            
+            // 为了保证切换公仔的迅速响应，我们可以降低寻卡失败的延迟，让重试频率变快。
+            // 现在的设置是无卡重试时延迟50ms，连续报错10次(也就是检测不到卡大约 0.5s~1s) 就会重置角色状态。
+            if (no_card_count >= 10) { 
+                // 标志位置位：连续多次都没有寻到卡
                 UID.clear();
                 LastUID.clear();
                 Role_Id = 255;
@@ -1513,6 +1520,7 @@ void Application::RFID_TASK()
                 
                 if (music && music->IsPlaying()) {
                     play_music = false;
+                    ESP_LOGE(TAG, "1520");
                     music->PausePlayback();
                 }
                 SetDeviceState(kDeviceStateIdle);
@@ -1523,13 +1531,13 @@ void Application::RFID_TASK()
                 vTaskDelay(pdMS_TO_TICKS(2000));
                 stopWake = 1;
                 toggle = 1;
-                ESP_LOGD(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
+                ESP_LOGE(TAG, "未检测到公仔，请放置后再进行对话或者播放。");
                 // 这里可以播放相应的提示音
                 have_rfid_ = false;
                 // 重置计数，这样如果一直检测不到卡，每隔2秒就会重新提示执行一次
                 no_card_count = 0;
             }
-            vTaskDelay(pdMS_TO_TICKS(500));
+            vTaskDelay(pdMS_TO_TICKS(50));
             continue;
         }
 
@@ -1624,6 +1632,14 @@ void Application::RFID_TASK()
 
                         } else if(role == "001") {
                             Role_Id = 2;
+                            // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
+                            if (switch_agent_sem != NULL) {
+                                xSemaphoreGive(switch_agent_sem);
+                                ESP_LOGD(TAG, "Semaphore given! Triggering HTTP POST task...");
+                            }
+                        }
+                        else if(role == "002") {
+                            Role_Id = 1;
                             // +++ 添加这一行：发送信号量触发 post_switch_agent_task 运行 +++
                             if (switch_agent_sem != NULL) {
                                 xSemaphoreGive(switch_agent_sem);
@@ -1818,6 +1834,7 @@ void Application::MainEventLoop() {
             }
             // Print the debug info every 10 seconds
             if (clock_ticks_ % 10 == 0) {
+
                 // SystemInfo::PrintTaskCpuUsage(pdMS_TO_TICKS(1000));
                 SystemInfo::PrintHeapStats();
             }   
@@ -1893,6 +1910,7 @@ void Application::MainEventLoop() {
                 }
 
             }
+
         }
     }
 }
@@ -2072,7 +2090,6 @@ void Application::Reboot() {
 bool Application::UpgradeFirmware(Ota& ota, const std::string& url) {
     auto& board = Board::GetInstance();
     auto display = board.GetDisplay();
-    
     // Use provided URL or get from OTA object
     std::string upgrade_url = url.empty() ? ota.GetFirmwareUrl() : url;
     std::string version_info = url.empty() ? ota.GetFirmwareVersion() : "(Manual upgrade)";
@@ -2084,8 +2101,10 @@ bool Application::UpgradeFirmware(Ota& ota, const std::string& url) {
     }
     ESP_LOGI(TAG, "Starting firmware upgrade from URL: %s", upgrade_url.c_str());
     
+    // 原有的 OGG_UPGRADE 可以在这里播放一下
     Alert(Lang::Strings::OTA_UPGRADE, Lang::Strings::UPGRADING, "download", Lang::Sounds::OGG_UPGRADE);
-    vTaskDelay(pdMS_TO_TICKS(3000));
+    // 等一段稍长的时间让这段稍长的提示音播出来
+    vTaskDelay(pdMS_TO_TICKS(5000));
 
     SetDeviceState(kDeviceStateUpgrading);
     
@@ -2093,7 +2112,7 @@ bool Application::UpgradeFirmware(Ota& ota, const std::string& url) {
     display->SetChatMessage("system", message.c_str());
 
     board.SetPowerSaveMode(false);
-    audio_service_.Stop();
+    // audio_service_.Stop();
     vTaskDelay(pdMS_TO_TICKS(1000));
 
     bool upgrade_success = ota.StartUpgradeFromUrl(upgrade_url, [display](int progress, size_t speed) {

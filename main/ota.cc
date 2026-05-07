@@ -2,7 +2,7 @@
 #include "system_info.h"
 #include "settings.h"
 #include "assets/lang_config.h"
-
+#include "application.h"
 #include <cJSON.h>
 #include <esp_log.h>
 #include <esp_partition.h>
@@ -302,6 +302,8 @@ bool Ota::Upgrade(const std::string& firmware_url) {
     char buffer[512];
     size_t total_read = 0, recent_read = 0;
     auto last_calc_time = esp_timer_get_time();
+    auto last_audio_time = esp_timer_get_time();
+    auto& app = Application::GetInstance();
     while (true) {
         //一次性读完所有数据
         int ret = http->Read(buffer, sizeof(buffer));
@@ -309,6 +311,18 @@ bool Ota::Upgrade(const std::string& firmware_url) {
             ESP_LOGE(TAG, "Failed to read HTTP data: %s", esp_err_to_name(ret));
             return false;
         }
+
+        // 定时播报升级提示
+        if (esp_timer_get_time() - last_audio_time >= 10000000) { // 10秒
+            ESP_LOGI(TAG, "Playing upgrade audio prompt");
+            
+            app.PlaySound(Lang::Sounds::OGG_UPGRADE);
+            // 阻塞当前 OTA 线程直到音频播放完毕或超时
+            vTaskDelay(pdMS_TO_TICKS(2000));
+            last_audio_time = esp_timer_get_time();
+        }
+
+
 
         // Calculate speed and progress every second
         recent_read += ret;

@@ -32,11 +32,11 @@
 
 
 #define my 0
-#define battery_check 0
+#define battery_check   0
 // 超过此秒数在 idle 状态下自动进入深度睡眠（默认 1 分钟）
 #ifndef IDLE_DEEP_SLEEP_SECONDS
-#define IDLE_DEEP_SLEEP_SECONDS (3 * 60)
-#define IDLE_DEEP_SLEEP_MUSIC_SECONDS (10 * 60)
+#define IDLE_DEEP_SLEEP_SECONDS (5 * 60)
+#define IDLE_DEEP_SLEEP_MUSIC_SECONDS (30 * 60)
 #endif
 
 #define MAIN_EVENT_SCHEDULE (1 << 0)
@@ -121,7 +121,7 @@ public:
     bool wake_word_detected_ = false;
     std::string UID;
     std::string LastUID;
-    
+    void ShowActivationCode(const std::string& code, const std::string& message);
     void GetSwitchState();
     int64_t GetAndClearWakeElapsedMs();
     DeviceFunction GetDeviceFunction() const { return device_function_; }
@@ -146,6 +146,7 @@ private:
     ~Application();
 
     DeviceFunction device_function_ = Function_AIAssistant;
+    DeviceFunction last_device_function_ = device_function_;
     std::mutex mutex_;
     std::deque<std::function<void()>> main_tasks_;
     std::unique_ptr<Protocol> protocol_;
@@ -155,7 +156,7 @@ private:
     int Offline_ticks_ = 0;
     volatile DeviceState device_state_ = kDeviceStateUnknown;
     volatile DeviceState device_state_last_ = kDeviceStateUnknown;
-
+    std::string introduce_message_ = "介绍自己";
     ListeningMode listening_mode_ = kListeningModeAutoStop;
     AecMode aec_mode_ = kAecOff;
     std::string last_error_message_;
@@ -180,7 +181,7 @@ private:
     void OnWakeWordDetected();
     void CheckNewVersion(Ota& ota);
     void CheckAssetsVersion();
-    void ShowActivationCode(const std::string& code, const std::string& message);
+    // void ShowActivationCode(const std::string& code, const std::string& message);
     void SetListeningMode(ListeningMode mode);
     void ShowBatteryLevel(int percent);
 

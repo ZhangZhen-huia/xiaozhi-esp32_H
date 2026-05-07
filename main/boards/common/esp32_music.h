@@ -272,6 +272,7 @@ private:
     std::string saved_story_category_;
     std::string saved_story_name_;
     int saved_chapter_index_ = -1;
+    std::string saved_story_number_;
     uint64_t saved_chapter_file_offset_ = 0; // 字节偏移
     int saved_chapter_ms_ = 0; // 可选的时间位置（ms）
     bool has_saved_story_position_ = false;
@@ -324,6 +325,7 @@ public:
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name = "")override;
     virtual bool PlayFromSD(const std::string& file_path, const std::string& song_name, size_t start_offset);
 
+    virtual bool TestiftResume() const override;
     virtual bool ScanMusicLibrary(const std::string& music_folder,bool LightModeScan)override;
     virtual size_t GetMusicCount() const override{ return ps_music_count_; };
     virtual MusicFileInfo GetMusicInfo(const std::string& file_path) const override;
@@ -354,6 +356,10 @@ public:
     virtual void SavePlaybackPosition()override;
     virtual bool ResumeSavedPlayback()override;
     virtual std::string SearchMusicFromlistByIndex(std::string list) const override;
+    virtual const PSStoryEntry* FindStoryByIndexId(const std::string& index_id, size_t* out_index) const override;
+
+    virtual const PSStoryEntry* FindStoryByStoryName(const std::string& story_name, size_t* out_index = nullptr) const override;
+    virtual std::string GetSavedStoryNumber() const override { return saved_story_number_; };
     virtual bool IfSavedMusicPosition() override{ return has_saved_MusicPosition_; };
     virtual void UpdateMusicRecordList(const std::string& artist, const std::string& song_name)override;
     virtual void EnableRecord(bool x,bool MusicOrStory) override{
@@ -453,6 +459,7 @@ public:
     virtual std::string GetCurrentStoryName() override{ return current_story_name_; };
     virtual std::string GetCurrentCategoryName() override{ return current_category_name_; };
     virtual int GetCurrentChapterIndex() override{ return current_chapter_index_; };
+    virtual int GetCurrentStoryIndex() override{ return current_storyplay_idx_; };
     virtual std::string GetCurrentChapterName() override{ return current_chapter_name_; };
     virtual void SetCurrentCategoryName(const std::string& category)override;
     virtual void SetCurrentStoryName(const std::string& story)override;

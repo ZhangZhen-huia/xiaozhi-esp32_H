@@ -673,6 +673,7 @@ void Esp32Music::PlayAudioStream() {
 
         if (previous_state == kDeviceStateIdle && current_state != kDeviceStateIdle) {
             ESP_LOGI(TAG, "Device state changed from IDLE to %d, pausing playback", current_state);
+            ESP_LOGE(TAG, "676");
             PausePlayback();
             manual_pause_ = false; // 非手动暂停
             vTaskDelay(pdMS_TO_TICKS(200));
@@ -1634,8 +1635,8 @@ bool Esp32Music::PlayFromSD(const std::string& file_path, const std::string& son
     }
 
     
-    // // 停止之前的播放
-    // StopStreaming();
+    // 停止之前的播放
+    StopStreaming();
     
     ESP_LOGW(TAG, "Start Play");
     return StartSDCardStreaming(file_path);
@@ -1675,6 +1676,7 @@ void Esp32Music::PausePlayback() {
     is_paused_ = true;
     manual_pause_ = true;
     ESP_LOGI(TAG, "PausePlayback: paused");
+
 }
 
 /**
@@ -1734,7 +1736,7 @@ bool Esp32Music::StartSDCardStreaming(const std::string& file_path) {
     
     // 配置线程栈大小
     esp_pthread_cfg_t cfg = esp_pthread_get_default_config();
-    cfg.stack_size = 1024*14;  // 14KB
+    cfg.stack_size = 1024*8;  // 14KB
     cfg.prio = 2;
     cfg.thread_name = "sd_card_stream";
     esp_pthread_set_cfg(&cfg);
@@ -2204,7 +2206,7 @@ void Esp32Music::ScanAndLoadMusic(bool LightModeScan) {
     ESP_LOGI(TAG, "Initializing default playlists from SD card music library");
     {
         // 清理并扫描
-        if (!ScanMusicLibrary("/sdcard/音乐",LightModeScan)) {
+        if (!ScanMusicLibrary("/sdcard/music",LightModeScan)) {
             ESP_LOGW(TAG, "ScanMusicLibrary failed or SD not ready");
         }
     }
@@ -2267,9 +2269,10 @@ std::vector<const PSMusicInfo*> Esp32Music::SearchMusicByCategory(const std::str
 }
 
 
-const PSMusicInfo* Esp32Music::FindMusicBySongName(const std::string& song_name, size_t* out_index) const  {
+const PSMusicInfo* Esp32Music::FindMusicBySongName(const std::string& song_name, size_t* out_index = nullptr) const  {
     if (song_name.empty()) return nullptr;
 
+    NormalizeForSearch(song_name); // 搜索前规范化输入
     // 静态缓存：song_name -> (索引, 指针)
     static std::unordered_map<std::string, std::pair<size_t, PSMusicInfo*>> song_cache = [this]() {
         std::unordered_map<std::string, std::pair<size_t, PSMusicInfo*>> cache;
@@ -2617,10 +2620,11 @@ void Esp32Music::SetCurrentPlayList(const std::string& playlist_name) {
 }
 
 bool Esp32Music::PlayPlaylist(const std::string& playlist_name) {
-    std::lock_guard<std::mutex> lock(music_library_mutex_);
+    
 
     if (playlist_name == default_musiclist_) {
         ESP_LOGW(TAG, "Playing default music library");
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
         bool result = PlayFromSD(ps_music_library_[play_index_].file_path, ps_music_library_[play_index_].song_name);
         return result;
     }
@@ -2628,6 +2632,7 @@ bool Esp32Music::PlayPlaylist(const std::string& playlist_name) {
     {
         ESP_LOGW(TAG, "Playing playlist: %s", playlist_name.c_str());
         auto file = GetMusicInfo(playlist_.file_paths[playlist_.play_index]);
+        std::lock_guard<std::mutex> lock(music_library_mutex_);
         bool result = PlayFromSD(file.file_path, file.song_name);
         return result;
     }
@@ -2982,7 +2987,7 @@ void Esp32Music::LoadPlaybackPosition() {
     saved_play_ms_ = settings.GetInt("last_play_ms", 0);
     int64_t offset_i64 = settings.GetInt64("lastfileoffset", 0);
     auto music_name = settings.GetString("last_music_name", "");
-    saved_music_number_ = settings.GetString("music_Index", "");
+    saved_music_number_ = settings.GetString("music_number", "");
     saved_file_offset_= offset_i64 > 0 ? static_cast<size_t>(offset_i64) : 0;
 
     // saved_play_index_ = idx;
@@ -2998,7 +3003,7 @@ void Esp32Music::LoadPlaybackPosition() {
         current_song_name_ = music_name.substr(pos + 1);
 
     play_index_ = saved_play_index_;
-        ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' name='%s' index=%d music_number=%s",
+    ESP_LOGI(TAG, "Loaded saved playback pos: playlist='%s' name='%s' index=%d music_number=%s",
              current_playlist_name_.c_str(), current_song_name_.c_str(), saved_play_index_, saved_music_number_.c_str());
 
 }
@@ -3007,10 +3012,11 @@ void Esp32Music::LoadPlaybackPosition() {
 void Esp32Music::SavePlaybackPosition() {
     
     size_t index;
+    has_saved_MusicPosition_ = true;
     auto info = FindMusicBySongName(current_song_name_,&index);
     if(info != nullptr)
         saved_play_index_ = static_cast<int>(index);
-
+    
     // 读取 current_play_file_offset_
     size_t file_offset = 0;
     {
@@ -3026,24 +3032,29 @@ void Esp32Music::SavePlaybackPosition() {
     settings.SetInt("last_play_ms", static_cast<int32_t>(play_ms));
     settings.SetInt64("lastfileoffset", (int64_t)aligned_offset);
     settings.SetString("last_music_name", current_song_name_);
-    settings.SetString("music_Index", info ? info->index_id : "");
+    settings.SetString("music_number", info ? info->index_id : "");
     settings.Commit();
-
+    saved_music_number_ = info ? info->index_id : "";
     ESP_LOGI(TAG, "Saved playback pos: name=%s index=%d  music_number=%s",
               current_song_name_.c_str(), saved_play_index_, info->index_id);
 }
 
-bool Esp32Music::ResumeSavedPlayback() {
+
+bool Esp32Music::TestiftResume() const {
     if (!has_saved_MusicPosition_) {
         ESP_LOGI(TAG, "No saved playback position to resume");
         return false;
     }
-
-
     if (saved_play_index_ < 0 || saved_play_index_ >= ps_music_count_) {
         ESP_LOGW(TAG, "Saved play index out of range: %d", saved_play_index_);
         return false;
     }
+
+    ESP_LOGW(TAG, "Saved playback position is valid: index=%d", saved_play_index_);
+    return true;
+}
+bool Esp32Music::ResumeSavedPlayback() {
+
     size_t index;
     auto info = FindMusicByIndexId(saved_music_number_,&index);
     if(info != nullptr)
@@ -3251,7 +3262,7 @@ void Esp32Music::ScanAndLoadStory() {
     ESP_LOGI(TAG, "Initializing default playlists from SD card story library");
     {
         // 清理并扫描
-        if (!ScanStoryLibrary("/sdcard/故事")) {
+        if (!ScanStoryLibrary("/sdcard/story")) {
             ESP_LOGW(TAG, "ScanStoryLibrary failed or SD not ready");
         }
     }
@@ -3351,10 +3362,11 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
 
     dst.norm_category = ps_strdup(NormalizeForSearch_local(std::string(dst.category ? dst.category : "")));
     dst.norm_story = ps_strdup(NormalizeForSearch_local(std::string(dst.story_name ? dst.story_name : "")));
-    // ESP_LOGI(TAG, "Added story: category='%s' story='%s' chapters=%u",
-    //          dst.category ? dst.category : "<nil>",
-    //          dst.story_name ? dst.story_name : "<nil>",
-    //          (unsigned)dst.chapter_count);
+    ESP_LOGI(TAG, "Added story: category='%s' story='%s' chapters=%u , StoryNumber=%s",
+             dst.category ? dst.category : "<nil>",
+             dst.story_name ? dst.story_name : "<nil>",
+             (unsigned)dst.chapter_count,
+             dst.index_id ? dst.index_id : "<nil>");
     // 生成并保存 token_norm（放到 PSRAM，供模糊搜索时无分配访问）
     std::string token_src;
     token_src.reserve(256);
@@ -3395,6 +3407,28 @@ bool Esp32Music::ps_add_story_locked(const StoryEntry &e) {
 }
 
 
+std::string CleanCategoryName(const std::string& raw) {
+    const std::string right_bracket = "】";  // UTF-8: E3 80 91
+    size_t bracket = raw.find(right_bracket);
+    if (bracket != std::string::npos) {
+        // 跳过整个 "】"（3字节）
+        std::string result = raw.substr(bracket + right_bracket.size());
+        // 去除前导空白/控制字符
+        size_t start = 0;
+        while (start < result.size() && (unsigned char)result[start] <= 0x20) start++;
+        if (start > 0) result.erase(0, start);
+        // 去除尾部空白
+        while (!result.empty() && (unsigned char)result.back() <= 0x20) result.pop_back();
+        return result;
+    }
+    // 没有找到 "】" 时，直接去除首尾空白
+    std::string s = raw;
+    size_t start = 0;
+    while (start < s.size() && (unsigned char)s[start] <= 0x20) start++;
+    if (start > 0) s.erase(0, start);
+    while (!s.empty() && (unsigned char)s.back() <= 0x20) s.pop_back();
+    return s;
+}
 
 bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
     ESP_LOGI(TAG, "Scanning story library from: %s", story_folder.c_str());
@@ -3422,6 +3456,8 @@ bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
     while ((ent_cat = readdir(d_cat)) != nullptr) {
         const char* cname = ent_cat->d_name;
         if (strcmp(cname, ".") == 0 || strcmp(cname, "..") == 0) continue;
+
+        std::string category_name = CleanCategoryName(cname);
 
         std::string cat_path = story_folder + "/" + cname;
         struct stat st_cat;
@@ -3496,9 +3532,9 @@ bool Esp32Music::ScanStoryLibrary(const std::string& story_folder) {
                 } catch (...) {}
             }
 
-            // 构造临时 StoryEntry 并追加到 PSRAM（短时间持锁）
+            // 构造临时 StoryEntry 并追加到 PSRAM（使用清洗后的分类名）
             StoryEntry se;
-            se.category = cname;
+            se.category = category_name;          // 修改：使用清洗后的分类名
             se.story = final_story_name;
             se.index_id = index_id;
             se.chapters = std::move(chapters);
@@ -3906,6 +3942,8 @@ void Esp32Music::SaveStoryPlaybackPosition() {
         std::lock_guard<std::mutex> lock(current_play_file_mutex_);
         offset = current_play_file_offset_;
     }
+    has_saved_story_position_ = true;
+
     int ms = static_cast<int>(current_play_time_ms_);
     Settings settings("stories", true);
     settings.SetString("last_category", current_category_name_.c_str());
@@ -3914,36 +3952,34 @@ void Esp32Music::SaveStoryPlaybackPosition() {
     settings.SetInt64("last_chptoffset", offset);
     settings.SetInt("last_chpt_ms", ms);
     settings.SetInt("last_story_idx",current_storyplay_idx_);
+    settings.SetString("storynumber",ps_story_index_[current_storyplay_idx_].index_id);
     settings.Commit();
-
-    ESP_LOGI(TAG, "Saved story playback pos: category=%s story=%s(index=%d) chapter=%d offset=%d ms=%d",
-             current_category_name_.c_str(),current_story_name_.c_str(),current_storyplay_idx_,current_chapter_index_+1,offset,ms);
+    saved_story_number_ = ps_story_index_[current_storyplay_idx_].index_id;
+    
+    ESP_LOGI(TAG, "Saved story playback pos: category=%s story=%s(index=%d) chapter=%d storynumber=%s",
+             current_category_name_.c_str(),current_story_name_.c_str(),current_storyplay_idx_,current_chapter_index_+1,ps_story_index_[current_storyplay_idx_].index_id);
 }
 
 void Esp32Music::LoadStoryPlaybackPosition() {
     Settings settings("stories", false);
-    std::string cat = settings.GetString("last_category", "");
-    std::string name = settings.GetString("last_story", "");
-    int idx = settings.GetInt("last_chapter", -1);
+    saved_story_category_ = settings.GetString("last_category", "");
+    saved_story_name_ = settings.GetString("last_story", "");
+    saved_chapter_index_ = settings.GetInt("last_chapter", -1);
     int64_t offset_i64 = settings.GetInt64("last_chptoffset", 0);
-    int ms = settings.GetInt("last_chpt_ms", 0);
+    saved_chapter_ms_ = settings.GetInt("last_chpt_ms", 0);
     current_storyplay_idx_ = settings.GetInt("last_story_idx",0);
+    saved_story_number_ = settings.GetString("storynumber", "");
 
 
-    saved_story_category_ = cat;
-    saved_story_name_ = name;
-    saved_chapter_index_ = idx;
     saved_chapter_file_offset_ = offset_i64 > 0 ? static_cast<uint64_t>(offset_i64) : 0;
-    saved_chapter_ms_ = ms;
     has_saved_story_position_ = (!saved_story_category_.empty() && !saved_story_name_.empty());
 
     current_category_name_ = saved_story_category_;
     current_chapter_index_ = saved_chapter_index_;
     current_story_name_ = saved_story_name_;
     current_play_time_ms_ = static_cast<uint32_t>(saved_chapter_ms_);
-    ESP_LOGI(TAG, "Loaded saved story pos: category='%s' story='%s' chapter=%d offset=%llu ms=%d",
-             current_category_name_.c_str(), current_story_name_.c_str(), current_chapter_index_+1,
-             (unsigned long long)saved_chapter_file_offset_, saved_chapter_ms_);
+    ESP_LOGI(TAG, "Loaded saved story pos: category='%s' story='%s' chapter=%d storynumber=%s",
+             current_category_name_.c_str(), current_story_name_.c_str(), current_chapter_index_+1, saved_story_number_.c_str());
 }
 
 bool Esp32Music::ResumeSavedStoryPlayback() {
@@ -3951,23 +3987,11 @@ bool Esp32Music::ResumeSavedStoryPlayback() {
         ESP_LOGI(TAG, "No saved story playback position to resume");
         return false;
     }
-
-    // 找到故事索引并定位章节
-    std::string ncat = NormalizeForSearch_local(current_category_name_);
-    std::string nst = NormalizeForSearch_local(current_story_name_);
     size_t found_index = SIZE_MAX;
-    {
+
+    auto info = FindStoryByIndexId(saved_story_number_,&found_index);
+    if(info) {
         std::lock_guard<std::mutex> lock(story_index_mutex_);
-        for (size_t i = 0; i < ps_story_count_; ++i) {
-            if (ps_story_index_[i].norm_category == ncat && ps_story_index_[i].norm_story == nst) {
-                found_index = i;
-                break;
-            }
-        }
-        if (found_index == SIZE_MAX) {
-            ESP_LOGW(TAG, "Saved story not found in index: %s / %s", current_category_name_.c_str(), current_story_name_.c_str());
-            return false;
-        }
         // 校验章节索引
         int chapter_idx = current_chapter_index_;
         if (chapter_idx < 0 || static_cast<size_t>(chapter_idx) >= ps_story_index_[found_index].chapter_count) {
@@ -3980,32 +4004,51 @@ bool Esp32Music::ResumeSavedStoryPlayback() {
             ESP_LOGW(TAG, "Saved chapter path null");
             return false;
         }
-
-        // 开始播放，优先按字节偏移恢复
-        if (saved_chapter_file_offset_ > 0) {
+        if(current_play_file_offset_ == 0)
+        {
+            // 开始播放，优先按字节偏移恢复
+            if (saved_chapter_file_offset_ > 0) {
+                ESP_LOGI(TAG, "Resuming story '%s'/%s chapter %d at offset %llu",
+                        saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx+1, (unsigned long long)saved_chapter_file_offset_);
+                // 设置当前story信息，便于显示/保存
+                current_story_name_ = ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : saved_story_name_;
+                MusicOrStory_ = STORY;
+                current_chapter_index_ = chapter_idx;
+                current_category_name_ = saved_story_category_;
+                current_story_name_ = saved_story_name_;
+                return PlayFromSD(std::string(chapter_path), current_story_name_, (size_t)saved_chapter_file_offset_);
+            }
+        }
+        else
+        {
             ESP_LOGI(TAG, "Resuming story '%s'/%s chapter %d at offset %llu",
-                     saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx+1, (unsigned long long)saved_chapter_file_offset_);
+            saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx+1, (unsigned long long)current_play_file_offset_);
             // 设置当前story信息，便于显示/保存
             current_story_name_ = ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : saved_story_name_;
             MusicOrStory_ = STORY;
             current_chapter_index_ = chapter_idx;
             current_category_name_ = saved_story_category_;
             current_story_name_ = saved_story_name_;
-            return PlayFromSD(std::string(chapter_path), current_story_name_, (size_t)saved_chapter_file_offset_);
+            return PlayFromSD(std::string(chapter_path), current_story_name_, (size_t)current_play_file_offset_);
         }
 
+            // 否则从头开始播放
+            ESP_LOGI(TAG, "Resuming story from beginning: %s / %s chapter %d", saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx);
+            current_story_name_ = ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : saved_story_name_;
+            MusicOrStory_ = STORY;
+            current_chapter_index_ = chapter_idx;
+            current_category_name_ = saved_story_category_;
+            current_story_name_ = current_story_name_;
+            return PlayFromSD(std::string(chapter_path), current_story_name_, 0);
+        }
+        else 
+        {
+            ESP_LOGW(TAG, "Saved story %s not found in index: %s / %s",saved_story_number_.c_str(), current_category_name_.c_str(), current_story_name_.c_str());
+            return false;
+        }
+        
 
-        // 否则从头开始播放
-        ESP_LOGI(TAG, "Resuming story from beginning: %s / %s chapter %d", saved_story_category_.c_str(), saved_story_name_.c_str(), chapter_idx);
-        current_story_name_ = ps_story_index_[found_index].story_name ? std::string(ps_story_index_[found_index].story_name) : saved_story_name_;
-        MusicOrStory_ = STORY;
-        current_chapter_index_ = chapter_idx;
-        current_category_name_ = saved_story_category_;
-        current_story_name_ = current_story_name_;
-        return PlayFromSD(std::string(chapter_path), current_story_name_, 0);
-    }
 }
-
 
 bool Esp32Music::NextChapterInStory(const std::string& category, const std::string& story_name) {
     // 查找 story 在 PSRAM 索引中的位置
@@ -4255,7 +4298,7 @@ void Esp32Music::BuildUnifiedMediaLibrary() {
         media_view_.swap(view);
     }
 
-    ESP_LOGI(TAG, "Unified media library built, total=%zu", media_library_.size());
+    ESP_LOGI(TAG, "Unified media library built, total=%d", media_library_.size());
 }
 
 std::vector<const PSMediaInfo*> Esp32Music::FuzzySearchMedia(const std::string& query, size_t limit) const {
@@ -4310,3 +4353,60 @@ std::vector<const PSMediaInfo*> Esp32Music::FuzzySearchMedia(const std::string& 
     return results;
 }
 void Esp32Music::SetExcludedSongs(const std::vector<std::string>& songs) { excluded_songs_ = songs; }
+
+
+const PSStoryEntry* Esp32Music::FindStoryByIndexId(const std::string& index_id, size_t* out_index = nullptr) const {
+    if (index_id.empty()) return nullptr;
+
+    // 静态局部缓存：index_id -> (索引, 指针)
+    // 使用 mutable mutex 以确保在 const 函数中加锁（假设 story_index_mutex_ 声明为 mutable）
+    static std::unordered_map<std::string, std::pair<size_t, PSStoryEntry*>> story_cache = [this]() {
+        std::unordered_map<std::string, std::pair<size_t, PSStoryEntry*>> cache;
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        for (size_t i = 0; i < ps_story_count_; ++i) {
+            PSStoryEntry* entry = &ps_story_index_[i];
+            if (entry && entry->index_id && entry->index_id[0] != '\0') {
+                cache[entry->index_id] = {i, entry};
+            }
+        }
+        ESP_LOGI(TAG, "Story index cache built, %d entries", cache.size());
+        return cache;
+    }();
+
+    auto it = story_cache.find(index_id);
+    if (it != story_cache.end()) {
+        if (out_index) *out_index = it->second.first;   // 返回索引
+        return it->second.second;                       // 返回指针
+    }
+    return nullptr;
+}
+
+
+
+
+
+const PSStoryEntry* Esp32Music::FindStoryByStoryName(const std::string& story_name, size_t* out_index) const {
+    if (story_name.empty()) return nullptr;
+
+    // 静态局部缓存：story_name -> (索引, 指针)
+    static std::unordered_map<std::string, std::pair<size_t, PSStoryEntry*>> story_name_cache = [this]() {
+        std::unordered_map<std::string, std::pair<size_t, PSStoryEntry*>> cache;
+        std::lock_guard<std::mutex> lock(story_index_mutex_);
+        for (size_t i = 0; i < ps_story_count_; ++i) {
+            PSStoryEntry* entry = &ps_story_index_[i];
+            if (entry && entry->story_name && entry->story_name[0] != '\0') {
+                // 若故事名重复，后存储的覆盖之前的（根据需求可改为保留第一个或输出警告）
+                cache[entry->story_name] = {i, entry};
+            }
+        }
+        ESP_LOGI(TAG, "Story name cache built, %zu unique names", cache.size());
+        return cache;
+    }();
+
+    auto it = story_name_cache.find(story_name);
+    if (it != story_name_cache.end()) {
+        if (out_index) *out_index = it->second.first;
+        return it->second.second;
+    }
+    return nullptr;
+}

@@ -211,6 +211,7 @@ private:
         bool is_ai_mode = (role == Function_AIAssistant);
         bool is_music_mode = (role == Function_MusicStory);
         bool is_light_mode = (role == Function_Light);
+        #if !my
         //无公仔
         if(!has_rfid)
         {
@@ -255,33 +256,35 @@ private:
                     app.PlaySound(Lang::Sounds::OGG_WIFICONFIG); // 无网+有公仔:配网
                 else 
                 {
-                    sleep_mode++;
-                    if(sleep_mode > 3) sleep_mode = 0;
+                    if (music && app.All_Finish) 
+                        music->SetEventNextPlay();//切换音乐
+                    // sleep_mode++;
+                    // if(sleep_mode > 3) sleep_mode = 0;
                     
-                    if (sleep_mode == 0) {
-                        ESP_LOGI(TAG, "Boot按键 双击：30分钟");
-                        app.Night_light_sleep_time = 30 * 60;
-                        app.PlaySound(Lang::Sounds::OGG_30MIN);
-                    } else if (sleep_mode == 1) {
-                        ESP_LOGI(TAG, "Boot按键 双击：60分钟");
-                        app.Night_light_sleep_time = 60 * 60;
-                        app.PlaySound(Lang::Sounds::OGG_ONEHOUR);
-                    } else if (sleep_mode == 2) {
-                        ESP_LOGI(TAG, "Boot按键 双击：120分钟");
-                        app.Night_light_sleep_time = 120 * 60;
-                        app.PlaySound(Lang::Sounds::OGG_TWOHOUR);
-                    } else {
-                        ESP_LOGI(TAG, "Boot按键 双击：不睡眠");
-                        app.Night_light_sleep_time = 0xFFFFFFFF;
-                        app.PlaySound(Lang::Sounds::OGG_NEVERPOWEROFF); 
-                    }
+                    // if (sleep_mode == 0) {
+                    //     ESP_LOGI(TAG, "Boot按键 双击：30分钟");
+                    //     app.Night_light_sleep_time = 30 * 60;
+                    //     app.PlaySound(Lang::Sounds::OGG_30MIN);
+                    // } else if (sleep_mode == 1) {
+                    //     ESP_LOGI(TAG, "Boot按键 双击：60分钟");
+                    //     app.Night_light_sleep_time = 60 * 60;
+                    //     app.PlaySound(Lang::Sounds::OGG_ONEHOUR);
+                    // } else if (sleep_mode == 2) {
+                    //     ESP_LOGI(TAG, "Boot按键 双击：120分钟");
+                    //     app.Night_light_sleep_time = 120 * 60;
+                    //     app.PlaySound(Lang::Sounds::OGG_TWOHOUR);
+                    // } else {
+                    //     ESP_LOGI(TAG, "Boot按键 双击：不睡眠");
+                    //     app.Night_light_sleep_time = 0xFFFFFFFF;
+                    //     app.PlaySound(Lang::Sounds::OGG_NEVERPOWEROFF); 
+                    // }
 
-                    if(sleep_mode < 3) {
-                        uint64_t us = static_cast<uint64_t>(app.Night_light_sleep_time) * 1000000ULL;
-                        app.CreateAndStartPlayTimer(us);
-                    } else {
-                        app.StopPlayDurationTimer();
-                    }
+                    // if(sleep_mode < 3) {
+                    //     uint64_t us = static_cast<uint64_t>(app.Night_light_sleep_time) * 1000000ULL;
+                    //     app.CreateAndStartPlayTimer(us);
+                    // } else {
+                    //     app.StopPlayDurationTimer();
+                    // }
 
                 }
             } else {
@@ -290,6 +293,10 @@ private:
                         music->SetEventNextPlay();//切换音乐
   
             }
+            #else
+                if (music && app.All_Finish) 
+                    music->SetEventNextPlay();//切换音乐
+            #endif
             
         }
 
@@ -387,6 +394,38 @@ private:
                 if (click_timer_) esp_timer_stop(click_timer_);
                 ResetWifiConfiguration();
             }
+
+
+            if(app.GetDeviceFunction() == Function_Light) {
+                sleep_mode++;
+                if(sleep_mode > 3) sleep_mode = 0;
+                
+                if (sleep_mode == 0) {
+                    ESP_LOGI(TAG, "Boot按键 双击：30分钟");
+                    app.Night_light_sleep_time = 30 * 60;
+                    app.PlaySound(Lang::Sounds::OGG_30MIN);
+                } else if (sleep_mode == 1) {
+                    ESP_LOGI(TAG, "Boot按键 双击：60分钟");
+                    app.Night_light_sleep_time = 60 * 60;
+                    app.PlaySound(Lang::Sounds::OGG_ONEHOUR);
+                } else if (sleep_mode == 2) {
+                    ESP_LOGI(TAG, "Boot按键 双击：120分钟");
+                    app.Night_light_sleep_time = 120 * 60;
+                    app.PlaySound(Lang::Sounds::OGG_TWOHOUR);
+                } else {
+                    ESP_LOGI(TAG, "Boot按键 双击：不睡眠");
+                    app.Night_light_sleep_time = 0xFFFFFFFF;
+                    app.PlaySound(Lang::Sounds::OGG_NEVERPOWEROFF); 
+                }
+
+                if(sleep_mode < 3) {
+                    uint64_t us = static_cast<uint64_t>(app.Night_light_sleep_time) * 1000000ULL;
+                    app.CreateAndStartPlayTimer(us);
+                } else {
+                    app.StopPlayDurationTimer();
+                }
+            }
+
         }, 3);
 
         // 长按处理
@@ -395,6 +434,7 @@ private:
             bool has_rfid = app.have_rfid_;
             bool is_ai_mode = (app.GetDeviceFunction() == Function_AIAssistant);
             bool is_light_mode = (app.GetDeviceFunction() == Function_Light);
+            #if !my
             if (!has_rfid) {
                 if(!is_light_mode)
                     app.PlaySound(Lang::Sounds::OGG_PLACERFID);
@@ -421,6 +461,14 @@ private:
                     ESP_LOGI(TAG, "Boot长按触发: 开始聆听");
                 }
             } 
+            #else
+                    app.StartListening();
+                    longpress_flag_ = true;
+                    app.Resetsleep_music_ticks_();
+                    ESP_LOGI(TAG, "Boot长按触发: 开始聆听");
+                
+
+            #endif
         });
 
         boot_button_Boot_IO0.OnPressUp([this, &app]() {
@@ -534,7 +582,7 @@ private:
                                         music->StopStreaming(); // 停止当前播放
                                     vTaskDelay(pdMS_TO_TICKS(1000));
                                     app.AbortSpeaking(AbortReason::kAbortReasonNone);
-                                    app.PlaySound(Lang::Sounds::OGG_LOWBATTERY);
+                                    app.PlaySound(Lang::Sounds::OGG_LOW_BATTERY);
                                     #endif
                                 }
                                 else 
@@ -542,7 +590,8 @@ private:
                                     if(music->ReturnMode()) {
                                         if(music->IsPlaying())
                                         {
-                                        music->PausePlayback();
+                                            ESP_LOGE(TAG, "545");
+                                            music->PausePlayback();
                                             vTaskDelay(pdMS_TO_TICKS(1000));
                                             if(music->IsActualPaused()) 
                                                 {

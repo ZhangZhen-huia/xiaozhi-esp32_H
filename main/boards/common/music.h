@@ -99,6 +99,7 @@ public:
     virtual void SavePlaybackPosition() = 0;
     virtual bool ResumeSavedPlayback() = 0;
     virtual bool IfSavedMusicPosition()  = 0;
+    virtual bool TestiftResume() const =0;
     virtual std::string GetCurrentSongName() = 0;
     virtual void UpdateMusicRecordList(const std::string& artist, const std::string& song_name) = 0;
     virtual void EnableRecord(bool x,bool MusicOrStory)=0;
@@ -125,6 +126,8 @@ public:
     virtual int GetMusicOrStory_() const=0;
     virtual bool NextChapterInStory(const std::string& category, const std::string& story_name) = 0;
     virtual void SetStopSignal(bool a)=0;
+    virtual int GetCurrentStoryIndex()  = 0;
+
     virtual void SetCurrentCategoryName(const std::string& category) = 0;
     virtual void SetCurrentStoryName(const std::string& story) =0;
     virtual void SetCurrentChapterIndex(int index) = 0;
@@ -134,6 +137,10 @@ public:
     virtual void UpdateStoryRecordList(const std::string& category, const std::string& story, const std::string& chapter) = 0;
     virtual void SetCurrentStoryIndex(int index) =0;
     virtual void RebuildUnifiedMediaLibrary()=0;
+    virtual const PSStoryEntry* FindStoryByIndexId(const std::string& index_id, size_t* out_index = nullptr) const = 0;
+    // 根据故事名查找（假设故事名唯一），out_index 可选
+    virtual const PSStoryEntry* FindStoryByStoryName(const std::string& story_name, size_t* out_index = nullptr) const = 0;
+    virtual std::string GetSavedStoryNumber() const = 0;
     // virtual const std::vector<PSMediaInfo>& GetUnifiedMediaLibrary() const =0;
     // virtual const std::vector<const PSMediaInfo*>& GetUnifiedMediaView() const =0;
 };

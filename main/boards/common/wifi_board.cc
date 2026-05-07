@@ -33,7 +33,6 @@ WifiBoard::WifiBoard() {
     esp_timer_create_args_t clock_timer_args = {
     .callback = [](void* arg) {
         auto &app = Application::GetInstance();
-        // app.PlaySound(Lang::Sounds::OGG_WIFICONFIG);
     },
     .dispatch_method = ESP_TIMER_TASK,
     .name = "wifi_config_alert_timer",
@@ -73,7 +72,7 @@ void WifiBoard::EnterWifiConfigMode() {
     ESP_LOGI(TAG, "Entering WiFi config mode via BLUFI");
     application.SetDeviceState(kDeviceStateWifiConfiguring);
     
-    // application.Alert(Lang::Strings::WIFI_CONFIG_MODE, "请使用赛博星球小程序配网", "", Lang::Sounds::OGG_WIFICONFIG);
+    application.Alert(Lang::Strings::WIFI_CONFIG_MODE, "请使用赛博星球小程序配网", "", Lang::Sounds::OGG_WIFICONFIG);
     
     vTaskDelay(pdMS_TO_TICKS(2000));
     bool is_got_ip = false;
@@ -265,13 +264,13 @@ void WifiBoard::EnterWifiConfigMode() {
         ESP_LOGI(TAG, "OTA check success");
         ota_check_completed = true;
         
-        // Copy out the activation code to avoid referencing a potentially empty/invalid C-string
+        // // Copy out the activation code to avoid referencing a potentially empty/invalid C-string
         std::string code = ota.GetActivationCode();
-        // Avoid printing string content to keep logging safe even if data is malformed
+        // // Avoid printing string content to keep logging safe even if data is malformed
         ESP_LOGI(TAG, "Activation code len=%u, empty=%s",
                  static_cast<unsigned>(code.length()),
                  code.empty() ? "true" : "false");
-
+        // application.ShowActivationCode(ota.GetActivationCode(), ota.GetActivationMessage());
         // 如果获取到版本号信息，则视为联网成功，忽略激活码
         const std::string firmware_version = ota.GetFirmwareVersion();
         if (!firmware_version.empty()) {
